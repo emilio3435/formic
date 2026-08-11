@@ -10576,16 +10576,23 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
   test("(2) the drawer is a definite sticky viewport instrument", () => {
     const dock = requiredSlice(styles, /@media \(min-width: 1025px\) \{[\s\S]*?\n\}\n/, "≥1025 dock block");
     const app = requiredSlice(dock, /body\.inspector-open \.app-body \{[^}]*\}/, "docked .app-body");
+    const stage = requiredSlice(dock, /body\.inspector-open \.ops-stage \{[^}]*\}/, "docked .ops-stage");
     const insp = requiredSlice(dock, /body\.inspector-open \.pane-inspector \{[^}]*\}/, "docked .pane-inspector");
     expect(app).toContain("grid-template-columns: clamp(380px, 40%, 760px) minmax(0, 1fr)");
+    expect(app).toContain("align-items: stretch");
+    expect(stage).toContain("align-self: stretch");
     expect(insp).toContain("position: sticky");
     expect(insp).toContain("align-self: flex-start");
     expect(insp).toContain("height: calc(100dvh - 2.5rem)");
+    expect(styles).toMatch(/@media \(min-width: 1025px\) and \(min-height: 800px\) \{[\s\S]*?body\.inspector-open \.app-body\s*\{[^}]*padding-bottom:\s*1\.25rem/);
+    expect(styles).toMatch(/@media \(min-width: 1025px\) and \(min-height: 800px\) \{[\s\S]*?height:\s*calc\(100dvh - var\(--inspector-flow-top, 1\.25rem\) - 1\.25rem\)/);
     expect(insp).not.toContain("position: absolute");
     expect(styles).toMatch(/\.pane-inspector\.dw-agent > \.drawer-grid \{[^}]*min-height: 0/);
+    /* Closed quiet board stays content-sized; only the open desktop grid stretches. */
+    expect(requiredSlice(styles, /\n\.app-body \{[^}]*\}/, ".app-body")).toContain("align-items: flex-start");
   });
 
-  test("RHSP-C: sticky placement has no content-measurement feedback", () => {
+  test("RHSP-C: sticky placement measures flow start without content-height feedback", () => {
     const dock = requiredSlice(styles, /@media \(min-width: 1025px\) \{[\s\S]*?\n\}\n/, "≥1025 dock block");
     const insp = requiredSlice(dock, /body\.inspector-open \.pane-inspector \{[^}]*\}/, "docked .pane-inspector");
     expect(insp).toContain("position: sticky");
@@ -10595,6 +10602,9 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
     expect(source).not.toContain("drawerFloatTopPx");
     expect(source).not.toContain("syncDrawerFloat");
     expect(source).not.toContain("ResizeObserver");
+    expect(source).toContain("function syncInspectorViewportHeight");
+    expect(source).toContain('document.querySelector(".app-body")');
+    expect(source).not.toMatch(/syncInspectorViewportHeight[\s\S]{0,1200}(scrollHeight|offsetHeight|clientHeight)/);
   });
 
   test("(2) the feed opens at the newest turn, then resumes where the operator left it", () => {
@@ -10986,8 +10996,10 @@ describe("the agent RHSP has one explicit header-content-footer contract", () =>
 
   test("CSS names one scroll owner per region and no dynamic height feedback", () => {
     const css = styles.replace(/\/\*[\s\S]*?\*\//g, "");
-    expect(css).toMatch(/body\.inspector-open \.app-body\s*\{[^}]*grid-template-columns:\s*clamp\(380px, 40%, 760px\) minmax\(0, 1fr\)/);
+    expect(css).toMatch(/body\.inspector-open \.app-body\s*\{[^}]*grid-template-columns:\s*clamp\(380px, 40%, 760px\) minmax\(0, 1fr\)[^}]*align-items:\s*stretch/);
+    expect(css).toMatch(/body\.inspector-open \.ops-stage\s*\{[^}]*align-self:\s*stretch/);
     expect(css).toMatch(/body\.inspector-open \.pane-inspector\s*\{[^}]*position:\s*sticky[^}]*height:\s*calc\(100dvh - 2\.5rem\)/);
+    expect(css).toMatch(/@media \(min-width: 1025px\) and \(min-height: 800px\) \{[\s\S]*?height:\s*calc\(100dvh - var\(--inspector-flow-top, 1\.25rem\) - 1\.25rem\)/);
     expect(css).toMatch(/\.pane-inspector\.dw-agent\s*\{[^}]*display:\s*grid[^}]*grid-template-rows:\s*auto minmax\(0, 1fr\) auto[^}]*overflow:\s*hidden/);
     expect(css).toMatch(/\.pane-inspector\.dw-agent\s*\{[^}]*container:\s*agent-drawer \/ inline-size/);
     expect(css).toMatch(/\.drawer-grid\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*hidden/);

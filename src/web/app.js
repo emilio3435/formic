@@ -2428,6 +2428,7 @@ function render() {
   renderSettingsPanel();
   renderPrograms();
   renderInspector();
+  syncInspectorViewportHeight(inspector);
   renderSkeleton();
   renderEmpty();
 
@@ -2486,6 +2487,31 @@ function render() {
       (lead || $("notify-toggle"))?.focus({ preventScroll: true });
     }
   }
+}
+
+/* On a full-height desktop viewport, the drawer begins below the masthead and
+   health rail. A plain `100dvh` height therefore puts its footer below the
+   fold until the operator scrolls the page far enough for sticky positioning
+   to engage. Measure only the stable document-flow start of the workspace —
+   never drawer content — and let CSS subtract it from the viewport.
+
+   The 800px height floor preserves the compact-height layout's existing feed
+   budget. Browser zoom changes the CSS viewport and fires resize, so this also
+   stays correct at 100% on a 1080p display without hard-coding masthead pixels. */
+function syncInspectorViewportHeight(pane = $("inspector")) {
+  if (!pane || !pane.style) return;
+  const desktopTall = typeof window !== "undefined"
+    && typeof window.matchMedia === "function"
+    && window.matchMedia("(min-width: 1025px) and (min-height: 800px)").matches;
+  const appBody = typeof document !== "undefined" ? document.querySelector(".app-body") : null;
+  if (pane.hidden || !document.body.classList.contains("inspector-open") || !desktopTall
+      || !appBody || typeof appBody.getBoundingClientRect !== "function") {
+    pane.style.removeProperty("--inspector-flow-top");
+    return;
+  }
+  const flowTop = appBody.getBoundingClientRect().top + window.scrollY;
+  if (!Number.isFinite(flowTop)) return;
+  pane.style.setProperty("--inspector-flow-top", Math.max(0, flowTop) + "px");
 }
 
 /* Highest live context-window usage across reporting sessions — answers
@@ -12484,6 +12510,9 @@ function boot() {
   state.notify.baseTitle = document.title;
   loadNotifyPreference();
   state.uiReady = true;
+  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+    window.addEventListener("resize", () => syncInspectorViewportHeight());
+  }
   renderNotificationCenter();
   void fetchSettings();
 
@@ -12680,6 +12709,7 @@ Object.assign(globalThis.TheAntHill, {
   // Request/confirmation logic. Each one is driven in tests with a fake fetch.
   apiFetch, sendControl, recollectSnapshot, fetchSnapshot,
   applySnapshot, applySnapshotDelta, handleEventPayload, handleDeltaPayload, tickFreshnessSurfaces,
+  syncInspectorViewportHeight,
   triageIssue, removeTriageItem, fetchTriageQueue,
   fetchLabels, submitRename, startRename,
   loadTranscript, loadActions, applyAttention,

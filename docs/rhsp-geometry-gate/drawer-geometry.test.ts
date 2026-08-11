@@ -6,6 +6,11 @@
  * starts this checkout on an ephemeral port and asks Chromium for the boxes.
  * It deliberately fails when the browser is unavailable; a zero-geometry pass
  * would recreate the blind spot this gate exists to close.
+ *
+ * Height ownership: when the desktop RHSP is open, its available viewport
+ * height establishes the expanded band's baseline. A quiet left workboard must
+ * stretch to that baseline with negative space inside its border; a tall left
+ * list may grow the document while the sticky RHSP keeps its height.
  */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
@@ -25,8 +30,12 @@ const VIEWPORTS = [
   { width: 1_100, height: 862, kind: "desktop" },
   { width: 1_357, height: 738, kind: "desktop" },
   { width: 1_530, height: 862, kind: "desktop" },
+  { width: 1_920, height: 1_080, kind: "desktop" },
   { width: 390, height: 844, kind: "mobile" },
 ] as const;
+
+const DESKTOP_VIEWPORTS = VIEWPORTS.filter(({ kind }) => kind === "desktop");
+const TALL_AGENT_COUNT = 24;
 
 const REQUIRED_SELECTORS = [
   ".drawer-chat",
@@ -47,8 +56,19 @@ interface Rect {
 interface Geometry {
   width: number;
   height: number;
+  scrollHeight: number;
+  viewportHeight: number;
   paneDisplay: string;
   panePosition: string;
+  paneHeightCss: string;
+  paneAlignSelf: string;
+  appBodyAlignItems: string;
+  opsStageAlignSelf: string;
+  appBody: Rect;
+  opsStage: Rect;
+  paneList: Rect;
+  programs: Rect;
+  leftContentBottom: number;
   pane: Rect;
   head: Rect;
   grid: Rect;
@@ -60,7 +80,7 @@ interface Geometry {
   evidenceBodyDisplay: string;
   chatFeedFootPresent: boolean;
   rects: Record<(typeof REQUIRED_SELECTORS)[number], Rect>;
-  overflowY: Record<"pane" | "grid" | "doc" | "chat" | "feed" | "desk", string>;
+  overflowY: Record<"pane" | "grid" | "doc" | "chat" | "feed" | "desk" | "paneList" | "opsStage", string>;
   declaredVerticalOwners: string[];
   bodyOpenOverflowY: string;
   bodyClosedOverflowY: string;
@@ -70,10 +90,35 @@ interface Geometry {
   docClientWidth: number;
 }
 
+interface SiblingGeometry {
+  width: number;
+  height: number;
+  scrollHeight: number;
+  viewportHeight: number;
+  bodyOpen: boolean;
+  appBodyAlignItems: string;
+  opsStageAlignSelf: string;
+  panePosition: string;
+  paneHeightCss: string;
+  paneAlignSelf: string;
+  appBody: Rect;
+  opsStage: Rect;
+  paneList: Rect;
+  programs: Rect;
+  leftContentBottom: number;
+  pane: Rect | null;
+  overflowY: Record<"paneList" | "opsStage", string>;
+  docScrollWidth: number;
+  docClientWidth: number;
+}
+
 let server: ReturnType<typeof Bun.spawn> | null = null;
 let base = "";
 const measured = new Map<string, Geometry>();
 const evidenceOpened = new Map<string, Geometry>();
+const quietOpen = new Map<string, SiblingGeometry>();
+const quietClosed = new Map<string, SiblingGeometry>();
+const tallOpen = new Map<string, SiblingGeometry>();
 
 function key(width: number, height: number): string {
   return `${width}x${height}`;
@@ -117,20 +162,26 @@ async function freePort(): Promise<number> {
   return port;
 }
 
-const INJECT_FIXTURE = `(() => {
+function withinPx(a: number, b: number, tol = 1): void {
+  expect(Math.abs(a - b)).toBeLessThanOrEqual(tol);
+}
+
+const INJECT_POPULATION = `(agentCount, openFirst) => {
   const M = globalThis.TheAntHill;
   if (!M) throw new Error("TheAntHill test seam did not load");
   M.stopBoot();
   const now = new Date().toISOString();
-  const agent = {
-    id: "cursor:rhsp-geometry-quarantine",
+  const makeAgent = (index) => ({
+    id: "cursor:rhsp-geometry-" + index,
     provider: "cursor",
-    sourceSessionId: "rhsp-geometry-quarantine",
-    displayName: "Quarantined geometry fixture",
+    sourceSessionId: "rhsp-geometry-" + index,
+    displayName: index === 0
+      ? "Quarantined geometry fixture"
+      : ("Geometry row " + index),
     programId: "rhsp-geometry",
     cwd: "/Users/example/shared-folder",
     model: "cursor-agent",
-    task: "Prove that transcript and unavailable controls keep separate vertical space inside the RHSP.",
+    task: "Prove left/right height ownership beside the RHSP.",
     status: "running",
     statusReason: "Streaming output.",
     lifecycle: "working",
@@ -154,46 +205,76 @@ const INJECT_FIXTURE = `(() => {
       { action: "instruct", enabled: false, reason: "Shared cwd is not identity." },
       { action: "interrupt", enabled: false, reason: "Shared cwd is not identity." },
     ],
-  };
-  const program = { id: "rhsp-geometry", name: "RHSP Geometry", agents: [agent] };
+  });
+  const agents = Array.from({ length: agentCount }, (_, index) => makeAgent(index));
+  const program = { id: "rhsp-geometry", name: "RHSP Geometry", agents };
+  const first = agents[0];
   M.state.conn = "live";
-  M.state.snap = {
-    schemaVersion: 1,
-    generatedAt: now,
-    controlHealth: { cmuxReachable: true, lastCheckedAt: now, errors: [], staleSources: [] },
-    totals: { live: 1, tracked: 1, attention: 0, working: 1, idle: 0, history: 0 },
-    programs: [program],
-  };
+  M.state.view = "board";
   M.state.actions = { loading: false, error: "", available: true, items: [] };
   M.state.pending = new Set();
   M.state.drafts = new Map();
   M.state.feedback = new Map();
   M.state.confirming = null;
-  M.state.transcript = {
-    agentId: agent.id,
-    loading: false,
-    error: "",
-    limit: 200,
-    data: {
-      source: "/tmp/rhsp-geometry.jsonl",
-      truncated: false,
-      lines: [
-        { at: now, role: "user", text: "Why are the controls unavailable?" },
-        { at: now, role: "assistant", text: "This session shares a folder with four active sources, so cwd alone cannot authorize a route." },
-        { at: now, role: "user", text: "Keep the explanation and controls visible while preserving the transcript." },
-        { at: now, role: "assistant", text: "The pane reserves distinct rows for header, content, and controls footer." },
-      ],
+  M.state.evidenceOpen = false;
+  if (openFirst) {
+    M.state.selected = { kind: "agent", id: first.id };
+    M.state.selectedId = first.id;
+    M.state.transcript = {
+      agentId: first.id,
+      loading: false,
+      error: "",
+      limit: 200,
+      data: {
+        source: "/tmp/rhsp-geometry.jsonl",
+        truncated: false,
+        lines: [
+          { at: now, role: "user", text: "Why are the controls unavailable?" },
+          { at: now, role: "assistant", text: "This session shares a folder with four active sources, so cwd alone cannot authorize a route." },
+          { at: now, role: "user", text: "Keep the explanation and controls visible while preserving the transcript." },
+          { at: now, role: "assistant", text: "The pane reserves distinct rows for header, content, and controls footer." },
+        ],
+      },
+    };
+  } else {
+    M.state.selected = null;
+    M.state.selectedId = null;
+    M.state.transcript = { agentId: "", loading: false, error: "", limit: 200, data: null };
+  }
+  M.applySnapshot({
+    schemaVersion: 1,
+    generatedAt: now,
+    controlHealth: { cmuxReachable: true, lastCheckedAt: now, errors: [], staleSources: [] },
+    totals: {
+      live: agentCount,
+      tracked: agentCount,
+      attention: 0,
+      working: agentCount,
+      idle: 0,
+      history: 0,
     },
-  };
-  const pane = document.getElementById("inspector");
-  if (!pane) throw new Error("#inspector is missing");
-  pane.hidden = false;
-  pane.textContent = "";
-  pane.className = "pane-inspector";
-  document.body.classList.add("inspector-open");
-  M.renderAgentDrawer(pane, { kind: "agent", agent, program });
-  document.querySelector(".app-body")?.scrollIntoView({ block: "start" });
-  return JSON.stringify(true);
+    programs: [program],
+  });
+  /* Preserve the established compact-height fixture, but measure 1080p-class
+     viewports at the actual top of the document. Scrolling every fixture here
+     masked the footer-below-fold bug this gate now owns. */
+  if (innerHeight < 800) document.querySelector(".app-body")?.scrollIntoView({ block: "start" });
+  return true;
+}`;
+
+const INJECT_QUIET_OPEN = `(() => {
+  const inject = ${INJECT_POPULATION};
+  return JSON.stringify(inject(1, true));
+})()`;
+
+const INJECT_QUIET_CLOSED = `(() => {
+  const inject = ${INJECT_POPULATION};
+  return JSON.stringify(inject(1, false));
+})()`;
+
+const INJECT_TALL_OPEN = `(() => {
+  const inject = ${INJECT_POPULATION};
+  return JSON.stringify(inject(${TALL_AGENT_COUNT}, true));
 })()`;
 
 const MEASURE = `(() => {
@@ -206,6 +287,7 @@ const MEASURE = `(() => {
     const r = node.getBoundingClientRect();
     return { top: r.top, bottom: r.bottom, left: r.left, right: r.right, width: r.width, height: r.height };
   };
+  const rect = (box) => ({ top: box.top, bottom: box.bottom, left: box.left, right: box.right, width: box.width, height: box.height });
   const rects = Object.fromEntries(required.map((selector) => [selector, pick(selector)]));
   const nodes = {
     pane,
@@ -219,7 +301,23 @@ const MEASURE = `(() => {
   const evidenceSummary = pane.querySelector(".drawer-evidence-summary");
   const evidenceBody = pane.querySelector(".drawer-evidence-body");
   if (!evidenceSummary || !evidenceBody) throw new Error("evidence disclosure is missing");
-  const overflowY = Object.fromEntries(Object.entries(nodes).map(([name, node]) => [name, getComputedStyle(node).overflowY]));
+  const appBody = document.querySelector(".app-body");
+  const opsStage = document.querySelector(".ops-stage");
+  const paneList = document.querySelector(".pane-list");
+  const programs = document.getElementById("programs");
+  if (!appBody || !opsStage || !paneList || !programs) throw new Error("left workspace selectors missing");
+  /* Natural closing edge = bottom of pane-list's own content children. When the
+     stage is content-sized this sits at the stage bottom; when the open grid
+     stretches the stage, unused height appears between this edge and the border. */
+  const leftContentBottom = Math.max(
+    ...[...paneList.children].map((node) => node.getBoundingClientRect().bottom),
+    programs.getBoundingClientRect().bottom,
+  );
+  const overflowY = Object.fromEntries([
+    ...Object.entries(nodes).map(([name, node]) => [name, getComputedStyle(node).overflowY]),
+    ["paneList", getComputedStyle(paneList).overflowY],
+    ["opsStage", getComputedStyle(opsStage).overflowY],
+  ]);
   const declaredVerticalOwners = Object.entries(nodes)
     .filter(([, node]) => ["auto", "scroll"].includes(getComputedStyle(node).overflowY))
     .map(([name]) => name);
@@ -237,12 +335,23 @@ const MEASURE = `(() => {
   const r = pane.getBoundingClientRect();
   const h = pane.querySelector(":scope > .drawer-shell-head").getBoundingClientRect();
   const g = nodes.grid.getBoundingClientRect();
-  const rect = (box) => ({ top: box.top, bottom: box.bottom, left: box.left, right: box.right, width: box.width, height: box.height });
+  const paneStyle = getComputedStyle(pane);
   return JSON.stringify({
     width: window.innerWidth,
     height: window.innerHeight,
-    paneDisplay: getComputedStyle(pane).display,
-    panePosition: getComputedStyle(pane).position,
+    scrollHeight: document.documentElement.scrollHeight,
+    viewportHeight: window.innerHeight,
+    paneDisplay: paneStyle.display,
+    panePosition: paneStyle.position,
+    paneHeightCss: paneStyle.height,
+    paneAlignSelf: paneStyle.alignSelf,
+    appBodyAlignItems: getComputedStyle(appBody).alignItems,
+    opsStageAlignSelf: getComputedStyle(opsStage).alignSelf,
+    appBody: rect(appBody.getBoundingClientRect()),
+    opsStage: rect(opsStage.getBoundingClientRect()),
+    paneList: rect(paneList.getBoundingClientRect()),
+    programs: rect(programs.getBoundingClientRect()),
+    leftContentBottom,
     pane: rect(r),
     head: rect(h),
     grid: rect(g),
@@ -270,6 +379,46 @@ const MEASURE = `(() => {
   });
 })()`;
 
+const MEASURE_SIBLINGS = `(() => {
+  const rect = (box) => ({ top: box.top, bottom: box.bottom, left: box.left, right: box.right, width: box.width, height: box.height });
+  const appBody = document.querySelector(".app-body");
+  const opsStage = document.querySelector(".ops-stage");
+  const paneList = document.querySelector(".pane-list");
+  const programs = document.getElementById("programs");
+  if (!appBody || !opsStage || !paneList || !programs) throw new Error("left workspace selectors missing");
+  const pane = document.querySelector(".pane-inspector.dw-agent");
+  const paneOpen = Boolean(pane && !pane.hidden);
+  const leftContentBottom = Math.max(
+    ...[...paneList.children].map((node) => node.getBoundingClientRect().bottom),
+    programs.getBoundingClientRect().bottom,
+  );
+  const paneStyle = paneOpen ? getComputedStyle(pane) : null;
+  return JSON.stringify({
+    width: window.innerWidth,
+    height: window.innerHeight,
+    scrollHeight: document.documentElement.scrollHeight,
+    viewportHeight: window.innerHeight,
+    bodyOpen: document.body.classList.contains("inspector-open"),
+    appBodyAlignItems: getComputedStyle(appBody).alignItems,
+    opsStageAlignSelf: getComputedStyle(opsStage).alignSelf,
+    panePosition: paneStyle ? paneStyle.position : "",
+    paneHeightCss: paneStyle ? paneStyle.height : "",
+    paneAlignSelf: paneStyle ? paneStyle.alignSelf : "",
+    appBody: rect(appBody.getBoundingClientRect()),
+    opsStage: rect(opsStage.getBoundingClientRect()),
+    paneList: rect(paneList.getBoundingClientRect()),
+    programs: rect(programs.getBoundingClientRect()),
+    leftContentBottom,
+    pane: paneOpen ? rect(pane.getBoundingClientRect()) : null,
+    overflowY: {
+      paneList: getComputedStyle(paneList).overflowY,
+      opsStage: getComputedStyle(opsStage).overflowY,
+    },
+    docScrollWidth: document.documentElement.scrollWidth,
+    docClientWidth: document.documentElement.clientWidth,
+  });
+})()`;
+
 function expectNonZeroAndContained(rect: Rect, pane: Rect, width: number, height: number): void {
   expect(rect.width).toBeGreaterThan(0);
   expect(rect.height).toBeGreaterThan(0);
@@ -281,6 +430,46 @@ function expectNonZeroAndContained(rect: Rect, pane: Rect, width: number, height
   expect(rect.bottom).toBeLessThanOrEqual(height + 0.5);
   expect(rect.left).toBeGreaterThanOrEqual(-0.5);
   expect(rect.right).toBeLessThanOrEqual(width + 0.5);
+}
+
+function toSibling(geometry: Geometry): SiblingGeometry {
+  return {
+    width: geometry.width,
+    height: geometry.height,
+    scrollHeight: geometry.scrollHeight,
+    viewportHeight: geometry.viewportHeight,
+    bodyOpen: geometry.bodyOpen,
+    appBodyAlignItems: geometry.appBodyAlignItems,
+    opsStageAlignSelf: geometry.opsStageAlignSelf,
+    panePosition: geometry.panePosition,
+    paneHeightCss: geometry.paneHeightCss,
+    paneAlignSelf: geometry.paneAlignSelf,
+    appBody: geometry.appBody,
+    opsStage: geometry.opsStage,
+    paneList: geometry.paneList,
+    programs: geometry.programs,
+    leftContentBottom: geometry.leftContentBottom,
+    pane: geometry.pane,
+    overflowY: {
+      paneList: geometry.overflowY.paneList,
+      opsStage: geometry.overflowY.opsStage,
+    },
+    docScrollWidth: geometry.docScrollWidth,
+    docClientWidth: geometry.docClientWidth,
+  };
+}
+
+async function waitForAppReady(): Promise<void> {
+  browse(["wait", "body"]);
+  const appDeadline = Date.now() + 60_000;
+  while (!browseJson<boolean>(
+    "JSON.stringify(Boolean(globalThis.TheAntHill?.renderAgentDrawer && globalThis.TheAntHill?.applySnapshot && globalThis.TheAntHill?.state?.snap))",
+  )) {
+    if (Date.now() > appDeadline) {
+      throw new Error("TheAntHill test seam and initial snapshot did not load in Chromium");
+    }
+    await Bun.sleep(100);
+  }
 }
 
 beforeAll(async () => {
@@ -330,17 +519,8 @@ beforeAll(async () => {
        than merely attached. Let boot's initial snapshot settle too: stopBoot()
        closes timers and the stream, but an already-started fetch could otherwise
        repaint over the fixture after it opens the pane. */
-    browse(["wait", "body"]);
-    const appDeadline = Date.now() + 60_000;
-    while (!browseJson<boolean>(
-      "JSON.stringify(Boolean(globalThis.TheAntHill?.renderAgentDrawer && globalThis.TheAntHill?.state?.snap))",
-    )) {
-      if (Date.now() > appDeadline) {
-        throw new Error("TheAntHill test seam and initial snapshot did not load in Chromium");
-      }
-      await Bun.sleep(100);
-    }
-    browseJson<boolean>(INJECT_FIXTURE);
+    await waitForAppReady();
+    browseJson<boolean>(INJECT_QUIET_OPEN);
     /* Measure the settled sheet, not the translateY(18px) entry frame. The
        longest drawer animation is 260ms at the mobile breakpoint. */
     await Bun.sleep(350);
@@ -360,7 +540,31 @@ beforeAll(async () => {
     measured.set(key(viewport.width, viewport.height), geometry);
     console.log(`[RHSP geometry ${viewport.width}x${viewport.height}] ${JSON.stringify(geometry)}`);
     browse(["screenshot", `/tmp/anthill-rhsp-${viewport.width}x${viewport.height}.png`, "--viewport"]);
+
+    if (viewport.kind === "desktop") {
+      quietOpen.set(key(viewport.width, viewport.height), toSibling(geometry));
+      browseJson<boolean>(INJECT_QUIET_CLOSED);
+      await Bun.sleep(200);
+      const closed = browseJson<SiblingGeometry>(MEASURE_SIBLINGS);
+      quietClosed.set(key(viewport.width, viewport.height), closed);
+      console.log(`[RHSP siblings quiet-closed ${viewport.width}x${viewport.height}] ${JSON.stringify(closed)}`);
+    }
+
+    if (viewport.width === 1_357 && viewport.height === 738) {
+      browseJson<boolean>(INJECT_TALL_OPEN);
+      await Bun.sleep(350);
+      const tall = browseJson<SiblingGeometry>(MEASURE_SIBLINGS);
+      tallOpen.set(key(viewport.width, viewport.height), tall);
+      console.log(`[RHSP siblings tall-open ${viewport.width}x${viewport.height}] ${JSON.stringify(tall)}`);
+      /* Restore quiet-open for the evidence-disclosure measurement path. */
+      browseJson<boolean>(INJECT_QUIET_OPEN);
+      await Bun.sleep(350);
+    }
+
     if (viewport.width === 1_100) {
+      /* quiet-closed above hid the pane; reopen before Evidence disclosure. */
+      browseJson<boolean>(INJECT_QUIET_OPEN);
+      await Bun.sleep(350);
       browseJson<boolean>(`(() => {
         const toggle = document.querySelector(".drawer-evidence-summary");
         if (!(toggle instanceof HTMLButtonElement)) throw new Error("evidence toggle is not a button");
@@ -372,7 +576,7 @@ beforeAll(async () => {
       browse(["screenshot", "/tmp/anthill-rhsp-1100x862-evidence-open.png", "--viewport"]);
     }
   }
-}, 120_000);
+}, 180_000);
 
 afterAll(async () => {
   if (server?.exitCode === null) {
@@ -383,7 +587,7 @@ afterAll(async () => {
 });
 
 describe("the desktop RHSP reserves visible space for transcript and controls", () => {
-  for (const viewport of VIEWPORTS.filter(({ kind }) => kind === "desktop")) {
+  for (const viewport of DESKTOP_VIEWPORTS) {
     test(`${viewport.width}x${viewport.height}: all required boxes are visible and contained`, () => {
       const geometry = measured.get(key(viewport.width, viewport.height));
       expect(geometry).toBeDefined();
@@ -422,6 +626,13 @@ describe("the desktop RHSP reserves visible space for transcript and controls", 
     expect(g.rects[".drawer-chat-scroll"].height).toBeGreaterThanOrEqual(160);
   });
 
+  test("1920x1080 shows the entire pane and composer before page scroll", () => {
+    const g = measured.get("1920x1080") as Geometry;
+    expect(g.pane.top).toBeGreaterThan(0);
+    expect(g.pane.bottom).toBeLessThanOrEqual(g.viewportHeight + 0.5);
+    expect(g.rects[".command-composer"].bottom).toBeLessThanOrEqual(g.viewportHeight + 0.5);
+  });
+
   test("Evidence follows inspector width: disclosed at 1100 and beside chat at 1357", () => {
     const narrow = measured.get("1100x862") as Geometry;
     expect(narrow.pane.width).toBeLessThan(736);
@@ -458,6 +669,62 @@ describe("the desktop RHSP reserves visible space for transcript and controls", 
     for (const viewport of VIEWPORTS) {
       expect((measured.get(key(viewport.width, viewport.height)) as Geometry).chatFeedFootPresent).toBe(false);
     }
+  });
+});
+
+describe("desktop open RHSP owns the expanded band height", () => {
+  for (const viewport of DESKTOP_VIEWPORTS) {
+    test(`${viewport.width}x${viewport.height}: quiet open stretches left board to RHSP bottom`, () => {
+      const g = quietOpen.get(key(viewport.width, viewport.height));
+      expect(g).toBeDefined();
+      const s = g as SiblingGeometry;
+      expect(s.bodyOpen).toBe(true);
+      expect(s.pane).not.toBeNull();
+      const pane = s.pane as Rect;
+      const viewportGutter = viewport.height >= 800 ? 20 : 0;
+      withinPx(s.appBody.height, pane.height + viewportGutter);
+      withinPx(s.opsStage.height, pane.height);
+      withinPx(s.opsStage.top, pane.top);
+      withinPx(s.opsStage.bottom, pane.bottom);
+      /* Baseline content-sized stage only has ~80px of list padding below
+         #programs; stretched ownership must leave a clear empty band inside
+         the border (acceptance: >=80px; threshold 150 defeats padding-only). */
+      expect(s.opsStage.bottom - s.leftContentBottom).toBeGreaterThanOrEqual(150);
+      expect(s.scrollHeight).toBeGreaterThanOrEqual(s.appBody.height);
+      expect(["clip", "hidden"]).toContain(s.overflowY.opsStage);
+      expect(["auto", "scroll"]).not.toContain(s.overflowY.paneList);
+      expect(s.docScrollWidth).toBeLessThanOrEqual(s.docClientWidth);
+    });
+
+    test(`${viewport.width}x${viewport.height}: quiet closed returns content-sized board`, () => {
+      const open = quietOpen.get(key(viewport.width, viewport.height)) as SiblingGeometry;
+      const closed = quietClosed.get(key(viewport.width, viewport.height));
+      expect(closed).toBeDefined();
+      const c = closed as SiblingGeometry;
+      expect(c.bodyOpen).toBe(false);
+      expect(c.pane).toBeNull();
+      expect(c.opsStage.height).toBeLessThan(open.pane!.height - 40);
+      /* Closed stage wraps the workboard; borders account for ~2px. */
+      withinPx(c.opsStage.height, c.paneList.height, 2);
+      expect(c.opsStage.height).toBeLessThanOrEqual(c.leftContentBottom - c.opsStage.top + 100);
+      expect(c.appBodyAlignItems).toBe("flex-start");
+    });
+  }
+
+  test("1357x738 tall open grows the document while RHSP keeps viewport height", () => {
+    const g = tallOpen.get("1357x738");
+    expect(g).toBeDefined();
+    const s = g as SiblingGeometry;
+    expect(s.bodyOpen).toBe(true);
+    expect(s.pane).not.toBeNull();
+    const pane = s.pane as Rect;
+    expect(s.opsStage.height).toBeGreaterThan(pane.height);
+    withinPx(s.appBody.height, s.opsStage.height);
+    withinPx(pane.height, s.viewportHeight - 40);
+    expect(s.panePosition).toBe("sticky");
+    expect(s.scrollHeight).toBeGreaterThan(s.viewportHeight);
+    expect(["auto", "scroll"]).not.toContain(s.overflowY.paneList);
+    expect(["auto", "scroll"]).not.toContain(s.overflowY.opsStage);
   });
 });
 

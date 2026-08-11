@@ -970,7 +970,8 @@ body.feed-frozen .programs { opacity: 0.62; }
 /* The stage owns only the workboard. The inspector is its sibling so this
    rounded-corner clip can never become an ancestor that clips drawer controls. */
 .ops-stage {
-  /* Sized to content — NOT stretched to fill the space, and NOT capped by it.
+  /* Closed / RHSP-absent default: sized to content — NOT stretched to fill the
+     band, and NOT capped by it.
 
      Every pixel of this cockpit was measured against 380-441 agents, where the
      stage is always taller than the screen and `flex: 1` is invisible. The first
@@ -979,11 +980,16 @@ body.feed-frozen .programs { opacity: 0.62; }
      it, and a large empty bordered container is the single strongest "this
      failed to load" signal an interface can send.
 
-     `flex: 0 1 auto` keeps both readings correct: a quiet board draws a small
-     card that ends where its content ends, and a full fleet grows the page,
-     which now scrolls as a document (see body). The old viewport cap sized the
-     stage to whatever the masthead left over — the frozen-height defect the
-     scrolling document removes. */
+     When the desktop RHSP is open, the ≥1025px inspector-open rules below
+     reverse ownership: the RHSP's fixed height establishes the grid row, and
+     the stage stretches to that baseline so quiet-board negative space stays
+     inside this border. Closed stays content-sized via .app-body's flex-start.
+
+     `flex: 0 1 auto` keeps both readings correct: a quiet closed board draws a
+     small card that ends where its content ends, and a full fleet grows the
+     page, which now scrolls as a document (see body). The old viewport cap
+     sized the stage to whatever the masthead left over — the frozen-height
+     defect the scrolling document removes. */
   min-height: 0;
   width: 100%;
   display: flex;
@@ -2448,9 +2454,17 @@ body.feed-frozen .programs { opacity: 0.62; }
    Folding at the same breakpoint the layout changes at makes "the row already
    shows it" true wherever it is claimed. */
 @media (min-width: 1025px) {
+  /* Open desktop workspace: the RHSP's fixed height owns the grid row.
+     Stretch the left workboard to that baseline; keep the RHSP itself at
+     flex-start so a taller left list grows the document without stretching
+     the sticky pane past calc(100dvh - 2.5rem). */
   body.inspector-open .app-body {
     grid-template-columns: clamp(380px, 40%, 760px) minmax(0, 1fr);
+    align-items: stretch;
     gap: 1rem;
+  }
+  body.inspector-open .ops-stage {
+    align-self: stretch;
   }
   /* Definite viewport instrument. Its three internal rows reserve head,
      content, and footer space; content height never feeds back into `top`. */
@@ -2508,6 +2522,20 @@ body.feed-frozen .programs { opacity: 0.62; }
      Only the selected row's copy is a duplicate — the other 200 are the board. */
   body.inspector-open .agent-row.is-selected .row-description,
   body.inspector-open .agent-column-header > :nth-child(n + 3) { display: none; }
+}
+
+/* A 1080p-class viewport has room to keep the masthead and the complete RHSP
+   visible together. app.js supplies the workspace's document-flow start; the
+   bottom inset matches sticky `top`, leaving the pane wholly inside the
+   viewport before any page scroll. Compact-height desktops keep the established
+   viewport instrument above so their transcript does not collapse. */
+@media (min-width: 1025px) and (min-height: 800px) {
+  body.inspector-open .app-body {
+    padding-bottom: 1.25rem;
+  }
+  body.inspector-open .pane-inspector {
+    height: calc(100dvh - var(--inspector-flow-top, 1.25rem) - 1.25rem);
+  }
 }
 
 /* ---------- horizontal bookshelf: Operate | Chat | Evidence rail/column ----------
