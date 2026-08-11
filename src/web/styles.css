@@ -2525,16 +2525,16 @@ body.feed-frozen .programs { opacity: 0.62; }
 }
 
 /* A 1080p-class viewport has room to keep the masthead and the complete RHSP
-   visible together. app.js supplies the workspace's document-flow start; the
-   bottom inset matches sticky `top`, leaving the pane wholly inside the
-   viewport before any page scroll. Compact-height desktops keep the established
-   viewport instrument above so their transcript does not collapse. */
+   visible together. app.js supplies the pane's current visible top: while the
+   masthead scrolls away, the sticky pane grows by the same amount and keeps its
+   bottom inset fixed. Compact-height desktops keep the established viewport
+   instrument above so their transcript does not collapse. */
 @media (min-width: 1025px) and (min-height: 800px) {
   body.inspector-open .app-body {
     padding-bottom: 1.25rem;
   }
   body.inspector-open .pane-inspector {
-    height: calc(100dvh - var(--inspector-flow-top, 1.25rem) - 1.25rem);
+    height: calc(100dvh - var(--inspector-visible-top, 1.25rem) - 1.25rem);
   }
 }
 

@@ -2490,10 +2490,9 @@ function render() {
 }
 
 /* On a full-height desktop viewport, the drawer begins below the masthead and
-   health rail. A plain `100dvh` height therefore puts its footer below the
-   fold until the operator scrolls the page far enough for sticky positioning
-   to engage. Measure only the stable document-flow start of the workspace —
-   never drawer content — and let CSS subtract it from the viewport.
+   health rail. As the document scrolls, sticky positioning moves that top edge
+   toward its 20px inset. Measure the pane's visible top so the freed header
+   space becomes usable drawer height while its footer stays anchored.
 
    The 800px height floor preserves the compact-height layout's existing feed
    budget. Browser zoom changes the CSS viewport and fires resize, so this also
@@ -2503,15 +2502,27 @@ function syncInspectorViewportHeight(pane = $("inspector")) {
   const desktopTall = typeof window !== "undefined"
     && typeof window.matchMedia === "function"
     && window.matchMedia("(min-width: 1025px) and (min-height: 800px)").matches;
-  const appBody = typeof document !== "undefined" ? document.querySelector(".app-body") : null;
   if (pane.hidden || !document.body.classList.contains("inspector-open") || !desktopTall
-      || !appBody || typeof appBody.getBoundingClientRect !== "function") {
-    pane.style.removeProperty("--inspector-flow-top");
+      || typeof pane.getBoundingClientRect !== "function") {
+    pane.style.removeProperty("--inspector-visible-top");
     return;
   }
-  const flowTop = appBody.getBoundingClientRect().top + window.scrollY;
-  if (!Number.isFinite(flowTop)) return;
-  pane.style.setProperty("--inspector-flow-top", Math.max(0, flowTop) + "px");
+  const visibleTop = pane.getBoundingClientRect().top;
+  if (!Number.isFinite(visibleTop)) return;
+  pane.style.setProperty("--inspector-visible-top", Math.max(0, visibleTop) + "px");
+}
+
+let inspectorViewportHeightFrame = null;
+function scheduleInspectorViewportHeight() {
+  if (inspectorViewportHeightFrame !== null) return;
+  if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") {
+    syncInspectorViewportHeight();
+    return;
+  }
+  inspectorViewportHeightFrame = window.requestAnimationFrame(() => {
+    inspectorViewportHeightFrame = null;
+    syncInspectorViewportHeight();
+  });
 }
 
 /* Highest live context-window usage across reporting sessions — answers
@@ -12511,7 +12522,8 @@ function boot() {
   loadNotifyPreference();
   state.uiReady = true;
   if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
-    window.addEventListener("resize", () => syncInspectorViewportHeight());
+    window.addEventListener("resize", scheduleInspectorViewportHeight);
+    window.addEventListener("scroll", scheduleInspectorViewportHeight, { passive: true });
   }
   renderNotificationCenter();
   void fetchSettings();

@@ -56,6 +56,7 @@ interface Rect {
 interface Geometry {
   width: number;
   height: number;
+  scrollY: number;
   scrollHeight: number;
   viewportHeight: number;
   paneDisplay: string;
@@ -93,6 +94,7 @@ interface Geometry {
 interface SiblingGeometry {
   width: number;
   height: number;
+  scrollY: number;
   scrollHeight: number;
   viewportHeight: number;
   bodyOpen: boolean;
@@ -107,6 +109,7 @@ interface SiblingGeometry {
   programs: Rect;
   leftContentBottom: number;
   pane: Rect | null;
+  composer: Rect | null;
   overflowY: Record<"paneList" | "opsStage", string>;
   docScrollWidth: number;
   docClientWidth: number;
@@ -119,6 +122,7 @@ const evidenceOpened = new Map<string, Geometry>();
 const quietOpen = new Map<string, SiblingGeometry>();
 const quietClosed = new Map<string, SiblingGeometry>();
 const tallOpen = new Map<string, SiblingGeometry>();
+const tallScrolled = new Map<number, SiblingGeometry>();
 
 function key(width: number, height: number): string {
   return `${width}x${height}`;
@@ -339,6 +343,7 @@ const MEASURE = `(() => {
   return JSON.stringify({
     width: window.innerWidth,
     height: window.innerHeight,
+    scrollY: window.scrollY,
     scrollHeight: document.documentElement.scrollHeight,
     viewportHeight: window.innerHeight,
     paneDisplay: paneStyle.display,
@@ -388,6 +393,7 @@ const MEASURE_SIBLINGS = `(() => {
   if (!appBody || !opsStage || !paneList || !programs) throw new Error("left workspace selectors missing");
   const pane = document.querySelector(".pane-inspector.dw-agent");
   const paneOpen = Boolean(pane && !pane.hidden);
+  const composer = paneOpen ? pane.querySelector(".command-composer") : null;
   const leftContentBottom = Math.max(
     ...[...paneList.children].map((node) => node.getBoundingClientRect().bottom),
     programs.getBoundingClientRect().bottom,
@@ -396,6 +402,7 @@ const MEASURE_SIBLINGS = `(() => {
   return JSON.stringify({
     width: window.innerWidth,
     height: window.innerHeight,
+    scrollY: window.scrollY,
     scrollHeight: document.documentElement.scrollHeight,
     viewportHeight: window.innerHeight,
     bodyOpen: document.body.classList.contains("inspector-open"),
@@ -410,6 +417,7 @@ const MEASURE_SIBLINGS = `(() => {
     programs: rect(programs.getBoundingClientRect()),
     leftContentBottom,
     pane: paneOpen ? rect(pane.getBoundingClientRect()) : null,
+    composer: composer ? rect(composer.getBoundingClientRect()) : null,
     overflowY: {
       paneList: getComputedStyle(paneList).overflowY,
       opsStage: getComputedStyle(opsStage).overflowY,
@@ -436,6 +444,7 @@ function toSibling(geometry: Geometry): SiblingGeometry {
   return {
     width: geometry.width,
     height: geometry.height,
+    scrollY: geometry.scrollY,
     scrollHeight: geometry.scrollHeight,
     viewportHeight: geometry.viewportHeight,
     bodyOpen: geometry.bodyOpen,
@@ -450,6 +459,7 @@ function toSibling(geometry: Geometry): SiblingGeometry {
     programs: geometry.programs,
     leftContentBottom: geometry.leftContentBottom,
     pane: geometry.pane,
+    composer: geometry.rects[".command-composer"],
     overflowY: {
       paneList: geometry.overflowY.paneList,
       opsStage: geometry.overflowY.opsStage,
@@ -559,6 +569,18 @@ beforeAll(async () => {
       /* Restore quiet-open for the evidence-disclosure measurement path. */
       browseJson<boolean>(INJECT_QUIET_OPEN);
       await Bun.sleep(350);
+    }
+
+    if (viewport.width === 1_920 && viewport.height === 1_080) {
+      browseJson<boolean>(INJECT_TALL_OPEN);
+      await Bun.sleep(350);
+      for (const scrollY of [0, 100, 225, 600]) {
+        browseJson<number>(`JSON.stringify((window.scrollTo(0, ${scrollY}), window.scrollY))`);
+        await Bun.sleep(50);
+        const tall = browseJson<SiblingGeometry>(MEASURE_SIBLINGS);
+        tallScrolled.set(scrollY, tall);
+        console.log(`[RHSP siblings tall-scrolled 1920x1080 @ ${scrollY}] ${JSON.stringify(tall)}`);
+      }
     }
 
     if (viewport.width === 1_100) {
@@ -725,6 +747,22 @@ describe("desktop open RHSP owns the expanded band height", () => {
     expect(s.scrollHeight).toBeGreaterThan(s.viewportHeight);
     expect(["auto", "scroll"]).not.toContain(s.overflowY.paneList);
     expect(["auto", "scroll"]).not.toContain(s.overflowY.opsStage);
+  });
+
+  test("1920x1080 tall open keeps the RHSP bottom anchored while the LHS scrolls", () => {
+    const first = tallScrolled.get(0);
+    expect(first).toBeDefined();
+    expect(first!.composer).not.toBeNull();
+    for (const scrollY of [0, 100, 225, 600]) {
+      const s = tallScrolled.get(scrollY);
+      expect(s).toBeDefined();
+      expect(s!.scrollY).toBe(scrollY);
+      expect(s!.pane).not.toBeNull();
+      expect(s!.composer).not.toBeNull();
+      withinPx(s!.pane!.bottom, s!.viewportHeight - 20);
+      withinPx(s!.composer!.bottom, first!.composer!.bottom);
+      expect(s!.composer!.bottom).toBeLessThanOrEqual(s!.viewportHeight - 20);
+    }
   });
 });
 
