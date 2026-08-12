@@ -3786,10 +3786,9 @@ describe("single lock narrative in the agent drawer", () => {
     const dockEnd = source.indexOf("\nfunction renderDockTool(", dockStart);
     const dock = source.slice(dockStart, dockEnd);
     expect(dock).not.toContain("Send disabled");
-    expect(dock).toContain('"Ready · linked"');
+    expect(dock).not.toContain("Ready · linked");
+    expect(dock).not.toContain("Enter to send");
     expect(dock).toContain("command-dock--linked");
-    // The keyboard hint renders only when Send can actually send.
-    expect(dock).toContain("instructCap && instructCap.enabled");
     // Control feedback lives inside the dock, above the composer.
     expect(dock).toContain("control-feedback");
     // Archive is demoted under More when Send/Focus are locked.
@@ -3914,7 +3913,7 @@ describe("the command dock is grouped by what each control is for", () => {
     const cluster: any = clusterOf(dock);
     const more = byClass(cluster, "command-dock-more");
     expect(more).not.toBeNull();
-    expect(textOf(more)).toContain("Archive");
+    expect(byFkey(more, "act:codex:a1:archive")?.attributes?.["aria-label"]).toBe("Archive");
 
     // Exactly one Archive in the dock, and it is behind the disclosure — never
     // a peer of the Focus the server has already refused.
@@ -3968,12 +3967,13 @@ describe("the command dock is grouped by what each control is for", () => {
 
   test("the dock stays two visual rows with mobile-safe controls", () => {
     expect(styles).toMatch(/\.command-dock > \.dock-group > \.dock-group-label\s*\{[^}]*position:\s*absolute/);
-    expect(styles).toMatch(/\.command-composer\s*\{[^}]*border-radius:\s*1\.5rem/);
-    expect(styles).toMatch(/\.command-dock-secondary\s*\{[^}]*border-top:\s*1px solid var\(--line\)/);
+    expect(styles).toMatch(/\.command-composer\s*\{[^}]*border-radius:\s*var\(--radius-md\)/);
+    expect(styles).toMatch(/\.command-send\s*\{[^}]*width:\s*44px/);
     expect(styles).toMatch(/\.command-dock-cluster \.dock-tool\s*\{[^}]*min-height:\s*44px/);
     expect(styles).toMatch(/\.command-dock-more > summary\s*\{[^}]*width:\s*44px[^}]*min-height:\s*44px/);
     expect(styles).toMatch(/\.drawer-chat > \.drawer-controls-strip\s*\{[^}]*env\(safe-area-inset-bottom\)/);
-    expect(styles).toMatch(/@media \(max-width: 639px\)\s*\{\s*\.command-dock-hint\s*\{[^}]*display:\s*none/);
+    expect(styles).not.toContain(".command-dock-hint");
+    expect(styles).not.toContain(".command-dock-ready");
   });
 });
 
@@ -4375,10 +4375,13 @@ describe("RHSP command header consolidation", () => {
     const cluster = byClass(drawer, "command-dock-cluster");
     const directTools = (cluster?.children || []).filter((child: any) =>
       String(child.className || "").split(/\s+/).includes("dock-tool"));
-    expect(directTools.map((tool: any) => textOf(tool))).toEqual(["Focus", "Interrupt"]);
+    expect(directTools.map((tool: any) => textOf(tool))).toEqual(["", ""]);
+    expect(directTools.map((tool: any) => tool.attributes?.["aria-label"])).toEqual(["Focus", "Interrupt"]);
     const more = byClass(cluster, "command-dock-more");
     expect(more).not.toBeNull();
-    expect(textOf(more)).toContain("Archive");
+    const archive = byFkey(cluster, "act:codex:a1:archive");
+    expect(archive?.attributes?.["aria-label"]).toBe("Archive");
+    expect(textOf(archive)).toBe("");
   });
 });
 
@@ -10202,6 +10205,33 @@ describe("FE-C: a frozen feed is announced, not merely available on inspection",
 
     expect(send.hasAttribute("disabled")).toBe(false);
     expect(String(send.className)).toContain("primary");
+  });
+
+  test("Send is a paper plane, Focus is a magnifying glass, and the helper copy is gone", async () => {
+    const live = agent({
+      controls: [
+        { action: "focus", enabled: true },
+        { action: "instruct", enabled: true },
+        { action: "interrupt", enabled: true },
+      ],
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const dock: any = await withState({ drafts: new Map([[live.id, "Ship it"]]) }, () =>
+      withDom(() => M.renderCommandDock(live, "linked", null, [])));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const send: any = buttonsOf(dock).find((b: any) => String(b.className).includes("command-send"));
+    expect(send.attributes["aria-label"]).toBe("Send");
+    expect(textOf(send)).toBe("");
+    expect(send.children[0]?.tagName).toBe("svg");
+    expect(String(send.children[0]?.attributes?.class || "")).toContain("ico");
+    expect(source).toContain('icon("send")');
+    expect(source).toContain("M22 2 15 22 11 13 2 9z");
+    expect(source).toContain("cx: 11, cy: 11, r: 6.5");
+    expect(textOf(dock)).not.toContain("Ready · linked");
+    expect(textOf(dock)).not.toContain("Enter to send");
+    const focus = byFkey(dock, "act:" + live.id + ":focus");
+    expect(focus?.attributes?.["aria-label"]).toBe("Focus");
+    expect(textOf(focus)).toBe("");
   });
 
   test("(1) Send follows the trimmed draft immediately without repainting the composer", async () => {

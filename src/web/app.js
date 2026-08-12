@@ -245,7 +245,6 @@ const CONTROL_HINTS = {
    focus). Learn-style one-liners stay contextual — only fields that render. */
 const LATEST_CALL_HINT = "Tokens for the latest model call only — not the cumulative session total.";
 const SESSION_TOTAL_HINT = "Cumulative tokens for this whole session. Differs from “latest call,” which is only the most recent invocation.";
-const READY_LINKED_HINT = "Ready · linked means Focus and Send have a safe cmux route to this session.";
 const GLOSSARY = {
   // Operate
   "running for": "Wall-clock time since this agent started running.",
@@ -263,7 +262,6 @@ const GLOSSARY = {
   "control link": "Which cmux terminal this session is wired to for Focus and Send, and how confidently it was matched.",
   "latest call": LATEST_CALL_HINT,
   "session total": SESSION_TOTAL_HINT,
-  "Ready · linked": READY_LINKED_HINT,
 };
 
 const CONTROL_STATE_TEXT = {
@@ -10851,23 +10849,19 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
   let cluster = null;
   if (focusCap || interruptCap || archiveCap || unarchivable) {
     cluster = el("div", { class: "command-dock-cluster", role: "group", "aria-label": "Session actions" });
-    if (focusCap) cluster.append(renderDockTool(agent, focusCap, "focus", { held }));
-    if (interruptCap) cluster.append(renderDockTool(agent, interruptCap, "interrupt", { held }));
+    if (focusCap) cluster.append(renderDockTool(agent, focusCap, "focus", { held, iconOnly: true }));
+    if (interruptCap) cluster.append(renderDockTool(agent, interruptCap, "interrupt", { held, iconOnly: true }));
     // When Send/Focus are locked, Archive is the wrong lever — tuck it behind
     // the disclosure so the dock does not offer a destructive peer next to
     // dead controls. The summary names the one thing behind it.
     if (archiveCap) {
       cluster.append(el("details", { class: "command-dock-more" },
         el("summary", { title: "More session actions", "aria-label": "More session actions" }, icon("more")),
-        renderDockTool(agent, archiveCap, "archive", { held })));
+        renderDockTool(agent, archiveCap, "archive", { held, iconOnly: true })));
     }
     // The undo is not destructive and does not hide behind the lock.
-    if (unarchivable) cluster.append(renderDockTool(agent, unarchiveCap, "unarchive", { held }));
+    if (unarchivable) cluster.append(renderDockTool(agent, unarchiveCap, "unarchive", { held, iconOnly: true }));
   }
-
-  // One lock narrative: the control banner owns the reason. The secondary
-  // toolbar speaks only when the link is live or it has an action to offer.
-  const showHint = Boolean(instructCap && instructCap.enabled) && !held;
 
   const fb = state.feedback.get(agent.id);
   if (fb) {
@@ -10942,11 +10936,13 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
     });
     sendButton = el("button", {
       type: "submit",
-      class: "btn command-send" + (composerCanSend(routeReady, !held, initialDraft, busy) ? " primary" : ""),
+      class: "command-send" + (composerCanSend(routeReady, !held, initialDraft, busy) ? " primary" : ""),
       disabled: composerCanSend(routeReady, !held, initialDraft, busy) ? null : "",
+      "aria-label": busy ? "Sending" : "Send",
+      title: busy ? "Sending" : "Send",
       "aria-busy": busy ? "true" : null,
       dataset: { fkey: "act:" + key },
-    }, busy ? "Sending…" : "Send");
+    }, icon("send"));
     const communicate = dockGroup("Communicate");
     const composer = el("form", {
       class: "command-composer",
@@ -10972,17 +10968,13 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
     }
   }
 
-  if (linkedReady || showHint || cluster) {
+  if (cluster) {
     const secondary = el("div", {
       class: "command-dock-secondary",
       role: "group",
       "aria-label": "Secondary session actions",
     });
-    const context = el("span", { class: "command-dock-context" });
-    if (linkedReady) context.append(el("span", { class: "command-dock-ready", text: "Ready · linked" }));
-    if (showHint) context.append(el("span", { class: "command-dock-hint", text: "Enter to send · pasted line breaks become spaces" }));
-    secondary.append(context);
-    if (cluster) secondary.append(cluster);
+    secondary.append(cluster);
     dock.append(secondary);
   }
 
@@ -11003,6 +10995,11 @@ function renderDockTool(agent, cap, action, opts = {}) {
   // never both surfaces at once. Busy/sendControl state stays shared via key.
   const fkey = (opts.fkeyPrefix || "") + "act:" + key;
   const confirmKey = (opts.fkeyPrefix || "") + "confirm:" + key;
+  const accessibleName = busy
+    ? label + "…"
+    : action === "focus"
+      ? focusButtonLabel(agent, deriveControlState(agent))
+      : label;
 
   if (state.confirming === fkey) {
     return el("span", { class: "confirm-strip command-confirm", role: "group",
@@ -11037,7 +11034,7 @@ function renderDockTool(agent, cap, action, opts = {}) {
        the DESCRIPTION, not the name, and plenty of operators never hear it.
        Naming it at the call site that has the ambiguity beats forking this
        function, which exists to be the one capability gate. */
-    "aria-label": opts.ariaLabel || null,
+    "aria-label": opts.ariaLabel || (opts.iconOnly ? accessibleName : null),
     dataset: { fkey },
     onclick: () => {
       if (held) return;
@@ -11052,13 +11049,12 @@ function renderDockTool(agent, cap, action, opts = {}) {
     },
   },
     icon(action === "focus" ? "focus" : action === "interrupt" ? "interrupt" : "archive"),
-    /* Focus names where it is about to take you, on the rows where that is not
-       provable. Everything else keeps its plain label. */
-    busy
-      ? label + "…"
-      : action === "focus"
-        ? focusButtonLabel(agent, deriveControlState(agent))
-        : label);
+    /* Icon-only dock tiles name themselves via aria-label. Everywhere else the
+       visible label remains the accessible name, so notification Focus stays
+       "Focus <agent>" rather than a mute glyph. */
+    opts.iconOnly
+      ? null
+      : accessibleName);
 }
 
 function sourceWorkspaceLabel(target) {

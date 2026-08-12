@@ -245,7 +245,7 @@ describe("A11Y-4: no two controls in the panel answer to the same name", () => {
        and null when absent, so every dock tool keeps its visible label as its
        name — and `ariaLabel` is the option name this file already uses for the
        same job on the rename forms, rather than a new spelling. */
-    expect(appjs).toContain('"aria-label": opts.ariaLabel || null,');
+    expect(appjs).toContain('"aria-label": opts.ariaLabel || (opts.iconOnly ? accessibleName : null),');
 
     /* Exactly one call site overrides the name: the notification row, which is
        the only place several agents' tools share a list. If a second appears,
