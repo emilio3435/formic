@@ -194,6 +194,12 @@ export const NEEDS_YOU_DISPLAY_KEY = "mtn3-needs-you-display";
    like the spread above — a display preference, not a fact about the fleet. */
 export const TLDR_VIEW_KEY = "mtn3-tldr-view";
 
+/* Whether the masthead's summary disclosure is collapsed to its compact face.
+   Per-browser like the spread above — a display preference, not a fact about
+   the fleet. Only the literal string "true" means collapsed; anything else,
+   including absence, resolves to the expanded default. */
+export const HEADER_COLLAPSED_STORAGE_KEY = "mtn3-header-collapsed";
+
 export const WIDGET_STORAGE_KEY = "mtn3-summary-widgets";
 export const DEFAULT_WIDGET_IDS = Object.freeze([
   "momentum", "burn", "tokens", "context-peak", "health",

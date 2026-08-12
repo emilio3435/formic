@@ -203,6 +203,7 @@ import {
   WIDGET_IDS,
   WIDGET_STORAGE_KEY,
   TLDR_VIEW_KEY,
+  HEADER_COLLAPSED_STORAGE_KEY,
 } from "./client-catalogs.js";
 
 "use strict";
@@ -1514,6 +1515,10 @@ globalThis.TheAntHill = {
   CONTROL_STATE_TEXT,
   WIDGET_STORAGE_KEY, DEFAULT_WIDGET_IDS, WIDGET_CATALOG,
   normalizeWidgetIds, parseWidgetPreference, reorderWidgetIds,
+  // The header disclosure: strict parser, fail-soft storage, the one toggle
+  // writer, and the mode-sync all four surfaces share.
+  HEADER_COLLAPSED_STORAGE_KEY, parseHeaderCollapsed, loadHeaderCollapsed,
+  saveHeaderCollapsed, toggleHeaderCollapsed, syncHeaderDisclosure,
   pulseStripModel, issueWorkState, issueStage, affectedImpact, issueProgress, issueImpactLine,
   INVESTIGATION_STATE_VIEW, investigationView,
   usageCostReading, usageTokenReading, usageRateWindowText, burnbarInstant, emptyBoardVerdict,
@@ -1858,6 +1863,66 @@ function loadTldrView() {
 
 function saveTldrView() {
   try { localStorage.setItem(TLDR_VIEW_KEY, state.tldrView || "ALL"); } catch { /* storage unavailable */ }
+}
+
+/* The header disclosure preference. Strict on purpose: collapsing hides the
+   TL;DR and the readings stack, so only an explicitly stored literal "true"
+   may do it — a malformed value, an old JSON blob, or a blocked store all
+   resolve to the expanded default rather than to a hidden summary. */
+function parseHeaderCollapsed(raw) {
+  return raw === "true";
+}
+
+function loadHeaderCollapsed() {
+  try {
+    state.headerCollapsed = parseHeaderCollapsed(localStorage.getItem(HEADER_COLLAPSED_STORAGE_KEY));
+  } catch {
+    state.headerCollapsed = false;
+  }
+}
+
+function saveHeaderCollapsed() {
+  try { localStorage.setItem(HEADER_COLLAPSED_STORAGE_KEY, state.headerCollapsed === true ? "true" : "false"); } catch { /* storage unavailable */ }
+}
+
+/* The only writer of the preference: explicit operator toggles. The customizer
+   closes on BOTH directions — collapsing removes its anchor from the layout,
+   and expanding must return it closed rather than surprise-open. The static
+   button is never rebuilt, so focus stays where the operator pressed. */
+function toggleHeaderCollapsed() {
+  state.widgetCustomizerOpen = false;
+  state.headerCollapsed = !state.headerCollapsed;
+  saveHeaderCollapsed();
+  renderHealthRail();
+}
+
+/* One writer for every mode surface: hidden states, body class, toggle label,
+   and aria-expanded move together or the header lies about itself. Runs AHEAD
+   of the widgets paint guard in renderHealthRail — mode is not a widget value,
+   and it must apply even when every signed reading is unchanged. */
+function syncHeaderDisclosure() {
+  const collapsed = state.headerCollapsed === true;
+  const rail = $("health-rail");
+  const compact = $("compact-summary");
+  const toggle = $("header-summary-toggle");
+  if (rail) rail.hidden = collapsed;
+  if (compact) compact.hidden = !collapsed;
+  if (document.body && document.body.classList) {
+    document.body.classList.toggle("header-summary-collapsed", collapsed);
+  }
+  if (toggle) {
+    toggle.textContent = collapsed ? "Expand header" : "Collapse header";
+    toggle.setAttribute("aria-expanded", String(!collapsed));
+    /* Keep DOM, visual and keyboard order in agreement. Collapsed puts Expand
+       after the persistent controls; expanded restores the shipped first-control
+       geometry. Re-focus the same node because browsers drop focus on a move. */
+    const signals = toggle.parentElement || toggle.parent;
+    if (signals && typeof signals.insertBefore === "function") {
+      const heldFocus = document.activeElement === toggle;
+      signals.insertBefore(toggle, collapsed ? null : signals.firstElementChild);
+      if (heldFocus && typeof toggle.focus === "function") toggle.focus({ preventScroll: true });
+    }
+  }
 }
 
 function repoScopedReadings(program) {
@@ -2552,8 +2617,8 @@ function toggleContextDisplay() {
   render();
 }
 
-function widgetLabelNode(id, label) {
-  if (id !== "context-peak") return el("span", { class: "reading-label", text: label });
+function widgetLabelNode(id, label, interactive = true) {
+  if (id !== "context-peak" || !interactive) return el("span", { class: "reading-label", text: label });
   return el("button", {
     type: "button",
     class: "reading-label context-toggle",
@@ -2717,7 +2782,7 @@ function healthRefreshAction(ui = state) {
   return null;
 }
 
-function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id, state.snap, state.conn, state.contextDisplay)) {
+function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id, state.snap, state.conn, state.contextDisplay), compact = false) {
   const meta = WIDGET_CATALOG.find((widget) => widget.id === id);
   const cellClass = "reading-widget widget-" + id
     + (weight === "hot" ? " cell-hot" : weight === "micro" ? " cell-micro" : "");
@@ -2893,7 +2958,7 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
      — the same rule that retired the finding links. They are in the
      notification center's instrument block now, together, next to the sentence
      that says what is wrong. */
-  return reading(widgetLabelNode(id, meta.label), valueNode, subNode, cellClass);
+  return reading(widgetLabelNode(id, meta.label, !compact), valueNode, subNode, cellClass);
 }
 
 function setWidgetEnabled(id, enabled) {
@@ -3910,14 +3975,13 @@ function renderPulseCalm(healthData, watch = watchClauses(state.snap)) {
   /* Once anything is being watched the trailing verdict cannot read "All clear":
      that was a claim about the whole board computed from a predicate that never
      read stall, debris or context occupancy. The words narrow to what is known. */
-  const health = healthData || summaryWidgetData("health", snap, state.conn);
   line.append(healthMicroChip(watch.length
     /* Tone and glyph move with the word. Overriding only the text left a green
        check sitting beside "Watch" — the chip contradicting itself in three
        characters, which is the same self-disagreement the health headline had
        with its own badge. */
-    ? { ...health, value: calmVerdict(watch), tone: "advisory", icon: "warning" }
-    : health));
+    ? { ...healthData, value: calmVerdict(watch), tone: "advisory", icon: "warning" }
+    : healthData));
   return line;
 }
 
@@ -3954,6 +4018,38 @@ function renderScanWindow() {
   node.textContent = hours == null ? "" : `sessions seen in the last ${hours}h`;
 }
 
+/* The one target-population writer both header faces share. The MODEL decides
+   what speaks; this only chooses the branch (calm line, repo-scoped tuples,
+   stressed cells) and orders it — so the expanded grid and the compact face
+   cannot disagree without disagreeing with the same derivation. It never
+   re-derives: renderHealthRail computes model/dataById/scoped once per paint
+   and passes them in. */
+function renderReadingsInto(target, { model, dataById, scoped, compact = false }) {
+  target.textContent = "";
+  if (model.calm && !scoped) {
+    target.append(renderPulseCalm(dataById.get("health"), model.watch));
+  } else if (scoped) {
+    for (const id of ["health", "momentum", "burn", "context-peak"]) {
+      const data = scoped[id];
+      if (!data) continue;
+      target.append(renderSummaryWidget(id, data.tone === "hot" ? "hot" : "normal", data, compact));
+    }
+  } else {
+    /* This loop only orders what the model kept. It used to walk state.widgetIds
+       and fall back to summaryWidgetData for any id the model had omitted —
+       which meant every suppression decided in pulseStripModel (a cell with
+       nothing to report, a health cell already narrated by NEEDS YOU) rendered
+       anyway. The omissions were real in the model and invisible on screen;
+       caught by counting .reading-widget nodes in the browser against the
+       model's own cell list. */
+    for (const id of state.widgetIds) {
+      const cell = model.cells.find((c) => c.id === id);
+      if (!cell) continue;
+      target.append(renderSummaryWidget(id, cell.weight, cell.data, compact));
+    }
+  }
+}
+
 function renderHealthRail() {
   const widgets = $("health-widgets");
   const grid = $("readings-grid");
@@ -3963,7 +4059,7 @@ function renderHealthRail() {
   // One derivation per widget per paint. The signature, the cell and the calm
   // line all read this map; each used to call summaryWidgetData again, and each
   // of those calls re-derived the whole findings list underneath.
-  const dataById = new Map(model.cells.map((cell) => [cell.id, cell.data]));
+  const dataById = new Map(model.allCells.map((cell) => [cell.id, cell.data]));
   const attention = attentionSummary(state.snap);
   const needsYou = attention ? attention.count : 0;
   const tldrCount = tldrAttentionCount(state.snap, state.tldrView || "ALL");
@@ -3985,7 +4081,7 @@ function renderHealthRail() {
       ? ["momentum", "burn", "health"]
       : state.widgetIds.filter((id) => dataById.has(id))
     ).map((id) => {
-      const data = dataById.get(id) || summaryWidgetData(id, state.snap, state.conn, state.contextDisplay);
+      const data = dataById.get(id);
       return [id, data.value, data.unit, data.sublabel, data.tone].join(":");
     }).join("|"),
     /* The sweep's own state. The notification panel's signature already signs
@@ -4014,6 +4110,10 @@ function renderHealthRail() {
     envelopeRaw,
     state.tldrView || "ALL",
     staleBucket,
+    /* The disclosure mode. Without it, a toggle on a quiet fleet would sync
+       the hidden states below and then hit an unchanged signature — leaving
+       the newly shown face empty until the next snapshot moved a number. */
+    state.headerCollapsed ? "collapsed" : "expanded",
   ].join("\u001f");
   /* AHEAD of the widgets guard, deliberately. The scan window is not a widget
      and does not belong behind a widget signature: it changes when Settings
@@ -4023,6 +4123,10 @@ function renderHealthRail() {
      freezes when its own input does. It is one text assignment, so running it
      every paint costs nothing. */
   renderScanWindow();
+  /* Also ahead of the guard: mode is not a widget value. Hidden states, body
+     class, label and aria-expanded must be current even when every signed
+     reading is unchanged. */
+  syncHeaderDisclosure();
   if (paintUnchanged("widgets", sig)) return;
 
   const rail = $("health-rail");
@@ -4038,32 +4142,21 @@ function renderHealthRail() {
   /* Empty ONLY the readings grid — never the two-child ribbon shells, and never
      #cleanup-status (static in stack-head; destroying an aria-live region
      silences announcements). */
-  grid.textContent = "";
   const view = state.tldrView || "ALL";
   const scopedProgram = view !== "ALL" ? programForTldrRepo(state.snap, view) : null;
   const scoped = scopedProgram ? repoScopedReadings(scopedProgram) : null;
   updateReadingsScopePill(view !== "ALL" && scopedProgram ? view : "");
-  if (model.calm && !scoped) {
-    grid.append(renderPulseCalm(dataById.get("health"), model.watch));
-  } else if (scoped) {
-    for (const id of ["health", "momentum", "burn", "context-peak"]) {
-      const data = scoped[id];
-      if (!data) continue;
-      grid.append(renderSummaryWidget(id, data.tone === "hot" ? "hot" : "normal", data));
-    }
+  /* One derivation, one writer, whichever face is exposed. The inactive face
+     is emptied rather than left holding the previous mode's readings: it is
+     already `hidden`, and stale content in a hidden face is the two-truths
+     defect waiting for the next CSS regression to show it. */
+  const compact = $("compact-summary");
+  if (state.headerCollapsed) {
+    grid.textContent = "";
+    if (compact) renderReadingsInto(compact, { model, dataById, scoped, compact: true });
   } else {
-    /* The MODEL decides what speaks; this loop only orders it. It used to walk
-       state.widgetIds and fall back to summaryWidgetData for any id the model had
-       omitted — which meant every suppression decided in pulseStripModel (a cell
-       with nothing to report, a health cell already narrated by NEEDS YOU)
-       rendered anyway. The omissions were real in the model and invisible on
-       screen; caught by counting .reading-widget nodes in the browser against the
-       model's own cell list. */
-    for (const id of state.widgetIds) {
-      const cell = model.cells.find((c) => c.id === id);
-      if (!cell) continue;
-      grid.append(renderSummaryWidget(id, cell.weight, cell.data));
-    }
+    if (compact) compact.textContent = "";
+    renderReadingsInto(grid, { model, dataById, scoped });
   }
   renderWidgetCustomizer();
   renderHealthTldrLane();
@@ -5520,6 +5613,7 @@ function pulseStripModel(snap, conn = "live", queueItems = [], display = "percen
     calm,
     watch: calm ? watchClauses(snap) : [],
     cells: kept,
+    allCells: cells,
     findings: pulseFindings(snap, queueItems),
     queueError,
   };
@@ -12536,6 +12630,7 @@ function boot() {
   loadShelfOverrides();
   loadWidgetPreferences();
   loadTldrView();
+  loadHeaderCollapsed();
   loadLookback();
   loadContextSpread();
   loadNeedsYouDisplay();
@@ -12602,6 +12697,12 @@ function boot() {
     state.widgetCustomizerOpen = !state.widgetCustomizerOpen;
     renderHealthRail();
   });
+
+  /* The header disclosure. Applied once here too, ahead of the first snapshot:
+     a stored collapsed preference must not wait for /api/snapshot to resolve
+     before the header stops spending its 156px. */
+  $("header-summary-toggle").addEventListener("click", toggleHeaderCollapsed);
+  syncHeaderDisclosure();
 
   $("widget-reset").addEventListener("click", () => {
     state.widgetIds = defaultWidgetIds();

@@ -23,6 +23,7 @@ export function makeNode(tag: string): any {
     get childNodes() { return node.children; },
     get childElementCount() { return node.children.length; },
     get firstChild() { return node.children[0] || null; },
+    get firstElementChild() { return node.children[0] || null; },
     get nextSibling() {
       if (!node.parent) return null;
       const i = node.parent.children.indexOf(node);
@@ -36,6 +37,18 @@ export function makeNode(tag: string): any {
     setAttribute(k: string, v: unknown) { node.attributes[k] = String(v); },
     removeAttribute(k: string) { delete node.attributes[k]; },
     hasAttribute(k: string) { return k in node.attributes; },
+    focus() {
+      const doc = (globalThis as any).document;
+      if (doc) doc.activeElement = node;
+    },
+    contains(other: any) {
+      let cur = other;
+      while (cur) {
+        if (cur === node) return true;
+        cur = cur.parent;
+      }
+      return false;
+    },
     querySelector: () => null, querySelectorAll: () => [] as unknown[],
     listeners: {} as Record<string, any[]>,
     addEventListener(type: string, fn: any) { (node.listeners[type] ??= []).push(fn); },
@@ -80,8 +93,30 @@ export function fakeDocument() {
     querySelectorAll: () => [] as unknown[],
     querySelector: () => null,
     body: makeNode("body"),
+    activeElement: null as any,
   };
   return doc;
+}
+
+/** Map-backed localStorage stand-in. `throwOn` makes a verb throw, which is how
+    the fail-soft storage contracts are exercised. */
+export function fakeStorage(
+  initial: Record<string, string> = {},
+  throwOn: Array<"getItem" | "setItem"> = [],
+) {
+  const store = new Map(Object.entries(initial));
+  return {
+    store,
+    getItem(key: string) {
+      if (throwOn.includes("getItem")) throw new Error("storage unavailable");
+      return store.has(key) ? store.get(key)! : null;
+    },
+    setItem(key: string, value: string) {
+      if (throwOn.includes("setItem")) throw new Error("storage unavailable");
+      store.set(key, String(value));
+    },
+    removeItem(key: string) { store.delete(key); },
+  };
 }
 
 export function withDom<T>(fn: () => T): T {
@@ -177,6 +212,37 @@ export async function setupRailDom(): Promise<{ doc: any; M: any }> {
   customizer.append(options);
   rail.append(customizer);
 
+  /* Masthead disclosure nodes — static in index.html, registered here so the
+     collapse/expand contracts can drive the real renderers against the same
+     node identities boot() would find. */
+  const compact = makeNode("div");
+  compact.className = "compact-summary";
+  compact.setAttribute("id", "compact-summary");
+  compact.setAttribute("role", "group");
+  compact.setAttribute("aria-label", "Fleet summary, compact");
+  compact.hidden = true;
+  doc.register("compact-summary", compact);
+
+  const headerToggle = makeNode("button");
+  headerToggle.className = "btn header-summary-toggle";
+  headerToggle.setAttribute("id", "header-summary-toggle");
+  headerToggle.setAttribute("type", "button");
+  headerToggle.setAttribute("aria-controls", "health-rail compact-summary");
+  headerToggle.setAttribute("aria-expanded", "true");
+  headerToggle.dataset.fkey = "header-summary-toggle";
+  headerToggle.textContent = "Collapse header";
+  doc.register("header-summary-toggle", headerToggle);
+
+  const notify = makeNode("button");
+  notify.setAttribute("id", "notify-toggle");
+  const settings = makeNode("button");
+  settings.setAttribute("id", "settings-toggle");
+  const connection = makeNode("span");
+  connection.setAttribute("id", "conn-badge");
+  const signals = makeNode("div");
+  signals.className = "masthead-signals";
+  signals.append(headerToggle, notify, settings, connection);
+
   // @ts-expect-error browser client has no declaration
   await import("../../src/web/app.js");
   const M = (globalThis as any).TheAntHill;
@@ -189,7 +255,32 @@ export async function setupRailDom(): Promise<{ doc: any; M: any }> {
   M.state.tldrView = "ALL";
   M.state.cleanup = { running: false, error: "", view: null, at: 0 };
   M.state.cleaner = { sessionId: "", code: "", error: "", launching: false };
+  M.state.headerCollapsed = false;
+  /* The same wiring boot() performs; conditional so the shell also serves the
+     RED phase before the toggle exists. */
+  if (typeof M.toggleHeaderCollapsed === "function") {
+    headerToggle.addEventListener("click", M.toggleHeaderCollapsed);
+  }
   return { doc, M };
+}
+
+/** Ordered {label, value} tuples for every reading cell under `container`.
+    The calm line is not a cell; read it via findClass(…, "pulse-calm"). */
+export function readingTuples(container: any): Array<{ label: string; value: string }> {
+  const out: Array<{ label: string; value: string }> = [];
+  const walk = (node: any) => {
+    if (!node || typeof node !== "object") return;
+    if (node.classList?.contains?.("reading")) {
+      out.push({
+        label: textOf(findClass(node, "reading-label")).trim(),
+        value: textOf(findClass(node, "reading-value")).trim(),
+      });
+      return;
+    }
+    for (const kid of node.children || []) walk(kid);
+  };
+  walk(container);
+  return out;
 }
 
 export function snapWithHeartbeat(raw: string | null, agentOver: Record<string, unknown> = {}) {
