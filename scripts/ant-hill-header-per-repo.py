@@ -11,6 +11,7 @@ import os
 import pathlib
 import re
 import sys
+import tempfile
 import time
 import uuid
 from datetime import datetime, timezone
@@ -51,15 +52,35 @@ def migrate_open_safety_circuit(
     legacy_path: pathlib.Path, current_path: pathlib.Path
 ) -> None:
     """Carry an open legacy isolation circuit forward without overwriting state."""
-    if current_path.exists() or not core.safety_circuit_open(legacy_path):
+    if not core.safety_circuit_open(legacy_path):
         return
-    core.trip_safety_circuit(
-        current_path,
+    current_path.parent.mkdir(parents=True, exist_ok=True)
+    contents = json.dumps(
         {
+            "open": True,
+            "trippedAt": core.utc_iso(),
             "reason": "legacy header isolation safety circuit remained open",
             "legacySafetyPath": str(legacy_path),
         },
+        sort_keys=True,
     )
+    descriptor, temporary = tempfile.mkstemp(
+        prefix=f".{current_path.name}.", dir=current_path.parent
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(contents)
+            handle.flush()
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, current_path)
+        except FileExistsError:
+            return
+    finally:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
 
 
 def eligible_header_agent(agent: dict[str, Any]) -> bool:

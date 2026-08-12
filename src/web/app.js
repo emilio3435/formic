@@ -10303,7 +10303,7 @@ function renderAgentDrawer(pane, view) {
         text: agoText(agent.updatedAt),
       }));
     }
-    if (statusReason && activity !== "working" && outcome !== "healthy") {
+    if (statusReason && outcome !== "healthy") {
       processValue.append(el("span", {
         class: "drawer-session-reason",
         title: statusReason,

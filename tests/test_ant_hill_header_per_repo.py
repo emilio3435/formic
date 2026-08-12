@@ -202,6 +202,23 @@ class RuntimeTests(unittest.TestCase):
             )
 
             current.unlink()
+            real_link = os.link
+
+            def operator_closes_before_publish(source, destination):
+                runtime.atomic_write_text(
+                    pathlib.Path(destination),
+                    json.dumps({"open": False, "owner": "operator-race"}),
+                )
+                return real_link(source, destination)
+
+            with patch.object(header.os, "link", side_effect=operator_closes_before_publish):
+                header.migrate_open_safety_circuit(legacy, current)
+            self.assertEqual(
+                json.loads(current.read_text()),
+                {"open": False, "owner": "operator-race"},
+            )
+
+            current.unlink()
             runtime.atomic_write_text(legacy, json.dumps({"open": False}))
             header.migrate_open_safety_circuit(legacy, current)
             self.assertFalse(current.exists())

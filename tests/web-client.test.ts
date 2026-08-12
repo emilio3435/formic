@@ -4321,6 +4321,19 @@ describe("RHSP command header consolidation", () => {
     expect(byClass(doc, "drawer-chat")).not.toBeNull();
   });
 
+  test("a working nonhealthy session keeps its concrete reason visible", () => {
+    const drawer = renderDrawer({
+      activity: "working",
+      lifecycle: "working",
+      outcome: "blocked",
+      statusReason: "Blocked by CI gate on main.",
+      processLiveness: "running",
+    });
+    const statusFact = byClass(drawer, "drawer-session-status");
+    expect(textOf(byClass(statusFact, "drawer-session-activity"))).toBe("Working");
+    expect(textOf(byClass(statusFact, "drawer-session-reason"))).toBe("Blocked by CI gate on main.");
+  });
+
   test("Evidence keeps provenance and removes facts the command header already owns", () => {
     const drawer = renderDrawer({
       role: "orchestrator",
