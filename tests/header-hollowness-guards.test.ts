@@ -321,7 +321,9 @@ describe("header collapse — compact layout strategy stays collapsed-scoped", (
       && /display:\s*none/.test(rule.body));
     expect(hides(".reading-sub"), ".reading-sub").toBe(true);
     expect(hides(".ctx-gauge"), ".ctx-gauge").toBe(true);
-    expect(hides(".context-toggle"), ".context-toggle").toBe(true);
+    /* Compact Context keeps its label, but app.js renders it as a static span
+       instead of copying the expanded face's toggle into the compact face. */
+    expect(hides(".context-toggle"), ".context-toggle").toBe(false);
     /* Shipped fonts and weights only: the compact face inherits type from the
        existing reading classes and may resize, never re-family or re-weight. */
     const compactish = rules.filter((rule) =>
@@ -329,5 +331,13 @@ describe("header collapse — compact layout strategy stays collapsed-scoped", (
     for (const rule of compactish) {
       expect(/font-family|font-weight|font:/.test(rule.body), rule.selector).toBe(false);
     }
+  });
+
+  test("mobile both-mode packing is documented outside the collapsed-only block", () => {
+    const marker = "Header collapse — the masthead's compact summary face.";
+    const next = "Header disclosure — mobile operability in both modes.";
+    const block = css.slice(css.indexOf(marker), css.indexOf(next));
+    expect(block).not.toMatch(/@media\s*\(max-width:\s*720px\)[\s\S]*?\n\s*\.masthead-signals\s*\{/);
+    expect(css).toContain(next);
   });
 });

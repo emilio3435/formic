@@ -1913,6 +1913,15 @@ function syncHeaderDisclosure() {
   if (toggle) {
     toggle.textContent = collapsed ? "Expand header" : "Collapse header";
     toggle.setAttribute("aria-expanded", String(!collapsed));
+    /* Keep DOM, visual and keyboard order in agreement. Collapsed puts Expand
+       after the persistent controls; expanded restores the shipped first-control
+       geometry. Re-focus the same node because browsers drop focus on a move. */
+    const signals = toggle.parentElement || toggle.parent;
+    if (signals && typeof signals.insertBefore === "function") {
+      const heldFocus = document.activeElement === toggle;
+      signals.insertBefore(toggle, collapsed ? null : signals.firstElementChild);
+      if (heldFocus && typeof toggle.focus === "function") toggle.focus({ preventScroll: true });
+    }
   }
 }
 
@@ -2608,8 +2617,8 @@ function toggleContextDisplay() {
   render();
 }
 
-function widgetLabelNode(id, label) {
-  if (id !== "context-peak") return el("span", { class: "reading-label", text: label });
+function widgetLabelNode(id, label, interactive = true) {
+  if (id !== "context-peak" || !interactive) return el("span", { class: "reading-label", text: label });
   return el("button", {
     type: "button",
     class: "reading-label context-toggle",
@@ -2773,7 +2782,7 @@ function healthRefreshAction(ui = state) {
   return null;
 }
 
-function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id, state.snap, state.conn, state.contextDisplay)) {
+function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id, state.snap, state.conn, state.contextDisplay), compact = false) {
   const meta = WIDGET_CATALOG.find((widget) => widget.id === id);
   const cellClass = "reading-widget widget-" + id
     + (weight === "hot" ? " cell-hot" : weight === "micro" ? " cell-micro" : "");
@@ -2949,7 +2958,7 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
      — the same rule that retired the finding links. They are in the
      notification center's instrument block now, together, next to the sentence
      that says what is wrong. */
-  return reading(widgetLabelNode(id, meta.label), valueNode, subNode, cellClass);
+  return reading(widgetLabelNode(id, meta.label, !compact), valueNode, subNode, cellClass);
 }
 
 function setWidgetEnabled(id, enabled) {
@@ -3945,14 +3954,13 @@ function renderPulseCalm(healthData, watch = watchClauses(state.snap)) {
   /* Once anything is being watched the trailing verdict cannot read "All clear":
      that was a claim about the whole board computed from a predicate that never
      read stall, debris or context occupancy. The words narrow to what is known. */
-  const health = healthData || summaryWidgetData("health", snap, state.conn);
   line.append(healthMicroChip(watch.length
     /* Tone and glyph move with the word. Overriding only the text left a green
        check sitting beside "Watch" — the chip contradicting itself in three
        characters, which is the same self-disagreement the health headline had
        with its own badge. */
-    ? { ...health, value: calmVerdict(watch), tone: "advisory", icon: "warning" }
-    : health));
+    ? { ...healthData, value: calmVerdict(watch), tone: "advisory", icon: "warning" }
+    : healthData));
   return line;
 }
 
@@ -3995,7 +4003,7 @@ function renderScanWindow() {
    cannot disagree without disagreeing with the same derivation. It never
    re-derives: renderHealthRail computes model/dataById/scoped once per paint
    and passes them in. */
-function renderReadingsInto(target, { model, dataById, scoped }) {
+function renderReadingsInto(target, { model, dataById, scoped, compact = false }) {
   target.textContent = "";
   if (model.calm && !scoped) {
     target.append(renderPulseCalm(dataById.get("health"), model.watch));
@@ -4003,7 +4011,7 @@ function renderReadingsInto(target, { model, dataById, scoped }) {
     for (const id of ["health", "momentum", "burn", "context-peak"]) {
       const data = scoped[id];
       if (!data) continue;
-      target.append(renderSummaryWidget(id, data.tone === "hot" ? "hot" : "normal", data));
+      target.append(renderSummaryWidget(id, data.tone === "hot" ? "hot" : "normal", data, compact));
     }
   } else {
     /* This loop only orders what the model kept. It used to walk state.widgetIds
@@ -4016,7 +4024,7 @@ function renderReadingsInto(target, { model, dataById, scoped }) {
     for (const id of state.widgetIds) {
       const cell = model.cells.find((c) => c.id === id);
       if (!cell) continue;
-      target.append(renderSummaryWidget(id, cell.weight, cell.data));
+      target.append(renderSummaryWidget(id, cell.weight, cell.data, compact));
     }
   }
 }
@@ -4030,7 +4038,7 @@ function renderHealthRail() {
   // One derivation per widget per paint. The signature, the cell and the calm
   // line all read this map; each used to call summaryWidgetData again, and each
   // of those calls re-derived the whole findings list underneath.
-  const dataById = new Map(model.cells.map((cell) => [cell.id, cell.data]));
+  const dataById = new Map(model.allCells.map((cell) => [cell.id, cell.data]));
   const attention = attentionSummary(state.snap);
   const needsYou = attention ? attention.count : 0;
   const tldrCount = tldrAttentionCount(state.snap, state.tldrView || "ALL");
@@ -4052,7 +4060,7 @@ function renderHealthRail() {
       ? ["momentum", "burn", "health"]
       : state.widgetIds.filter((id) => dataById.has(id))
     ).map((id) => {
-      const data = dataById.get(id) || summaryWidgetData(id, state.snap, state.conn, state.contextDisplay);
+      const data = dataById.get(id);
       return [id, data.value, data.unit, data.sublabel, data.tone].join(":");
     }).join("|"),
     /* The sweep's own state. The notification panel's signature already signs
@@ -4124,7 +4132,7 @@ function renderHealthRail() {
   const compact = $("compact-summary");
   if (state.headerCollapsed) {
     grid.textContent = "";
-    if (compact) renderReadingsInto(compact, { model, dataById, scoped });
+    if (compact) renderReadingsInto(compact, { model, dataById, scoped, compact: true });
   } else {
     if (compact) compact.textContent = "";
     renderReadingsInto(grid, { model, dataById, scoped });
@@ -5584,6 +5592,7 @@ function pulseStripModel(snap, conn = "live", queueItems = [], display = "percen
     calm,
     watch: calm ? watchClauses(snap) : [],
     cells: kept,
+    allCells: cells,
     findings: pulseFindings(snap, queueItems),
     queueError,
   };

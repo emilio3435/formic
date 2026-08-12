@@ -23,6 +23,7 @@ export function makeNode(tag: string): any {
     get childNodes() { return node.children; },
     get childElementCount() { return node.children.length; },
     get firstChild() { return node.children[0] || null; },
+    get firstElementChild() { return node.children[0] || null; },
     get nextSibling() {
       if (!node.parent) return null;
       const i = node.parent.children.indexOf(node);
@@ -231,6 +232,16 @@ export async function setupRailDom(): Promise<{ doc: any; M: any }> {
   headerToggle.dataset.fkey = "header-summary-toggle";
   headerToggle.textContent = "Collapse header";
   doc.register("header-summary-toggle", headerToggle);
+
+  const notify = makeNode("button");
+  notify.setAttribute("id", "notify-toggle");
+  const settings = makeNode("button");
+  settings.setAttribute("id", "settings-toggle");
+  const connection = makeNode("span");
+  connection.setAttribute("id", "conn-badge");
+  const signals = makeNode("div");
+  signals.className = "masthead-signals";
+  signals.append(headerToggle, notify, settings, connection);
 
   // @ts-expect-error browser client has no declaration
   await import("../../src/web/app.js");

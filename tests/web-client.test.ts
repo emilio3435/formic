@@ -14790,5 +14790,6 @@ describe("header collapse — static masthead and fence contracts", () => {
     expect(helperBody).not.toContain("summaryWidgetData(");
     expect(helperBody).toContain("renderPulseCalm(");
     expect(helperBody).toContain("renderSummaryWidget(");
+    expect(source).not.toContain('healthData || summaryWidgetData("health"');
   });
 });

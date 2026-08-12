@@ -33,11 +33,10 @@
            collapsed row reads identity → readings → controls. -->
       <div id="compact-summary" class="compact-summary" role="group" aria-label="Fleet summary, compact" hidden></div>
       <div class="masthead-signals">
-        <!-- The summary disclosure. FIRST in this right-anchored row on
-             purpose: appending it after the existing controls would shift
-             every shipped control leftward, and the expanded masthead is under
-             a pixel-stability contract. Collapsed mode moves it to the row's
-             right edge with a collapsed-scoped order rule instead. -->
+        <!-- The summary disclosure starts first so expanded mode keeps every
+             shipped control rectangle. Collapse moves this SAME focused node
+             to the end, keeping DOM/tab order aligned with the compact row's
+             visual order; expanding restores it here. -->
         <button type="button" class="btn header-summary-toggle" id="header-summary-toggle" data-fkey="header-summary-toggle" aria-expanded="true" aria-controls="health-rail compact-summary">Collapse header</button>
         <!-- Opt-in out-of-page alerts. Permission is requested from this click
              and nowhere else — never on load. -->

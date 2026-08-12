@@ -343,6 +343,7 @@ describe("header disclosure — collapse/expand state machine", () => {
       /* Same static node, still focused — collapse must never rebuild it. */
       expect(doc.byId("header-summary-toggle")).toBe(toggle);
       expect(doc.activeElement).toBe(toggle);
+      expect(toggle.parent.children.at(-1)).toBe(toggle);
     });
   });
 
@@ -369,6 +370,7 @@ describe("header disclosure — collapse/expand state machine", () => {
       expect(M.state.facetProgram).toBe("p-mountain");
       expect(doc.byId("header-summary-toggle")).toBe(toggle);
       expect(doc.activeElement).toBe(toggle);
+      expect(toggle.parent.children[0]).toBe(toggle);
     });
   });
 
@@ -408,6 +410,7 @@ describe("header disclosure — compact face parity with the owner derivations",
       M.state.snap = calmSnapFixture();
       const model = M.pulseStripModel(M.state.snap, "live", [], "percent", "");
       expect(model.calm).toBe(true);
+      expect(model.allCells.find((cell: any) => cell.id === "health").data.value).toBe("Readings healthy");
       M.renderHealthRail();
       const expandedCopy = textOf(findClass(doc.byId("readings-grid"), "pulse-calm-copy"));
       expect(expandedCopy).toContain("3 shipping");
@@ -450,6 +453,24 @@ describe("header disclosure — compact face parity with the owner derivations",
           expect(tuples[at].value.startsWith(String(cell.data.value))).toBe(true);
         });
       }
+    });
+  });
+
+  test("compact health keeps the cleanup action reachable while expanded-only detail stays hidden", async () => {
+    await withHeaderHarness(({ doc, M }) => {
+      const snap: any = repoSnapFixture();
+      snap.controlHealth = {
+        cmuxReachable: true,
+        lastCheckedAt: new Date().toISOString(),
+        errors: ["collector degraded"],
+        staleSources: [],
+      };
+      M.state.snap = snap;
+      M.renderHealthRail();
+      fireClick(doc.byId("header-summary-toggle"));
+      const compact = doc.byId("compact-summary");
+      expect(findClass(compact, "verdict-cleanup")).not.toBeNull();
+      expect(findClass(compact, "reading-sub-action")).not.toBeNull();
     });
   });
 
