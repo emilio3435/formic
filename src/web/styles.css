@@ -3081,6 +3081,8 @@ body.feed-frozen .programs { opacity: 0.62; }
 .drawer-session-run .dual-marks .agent-mark { margin-left: -0.35rem; }
 .drawer-session-run-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .drawer-session-process { display: flex; align-items: center; flex-wrap: nowrap; gap: 0.35rem; }
+.drawer-session-activity { flex: none; font-weight: 600; }
+.drawer-session-reason { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 .drawer-process-dot {
   width: 8px;
   height: 8px;

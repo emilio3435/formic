@@ -10265,11 +10265,24 @@ function renderAgentDrawer(pane, view) {
     .join(" / ");
   const facts = el("dl", { class: "drawer-session-facts", "aria-label": "Session facts" });
   let hasFacts = false;
+  const activity = deriveActivity(agent);
+  const activityLabel = ACTIVITY_LABELS[activity] || activity;
   const liveness = livenessView(agent);
   const hazard = verdictGate(agent, outcome);
-  if (agent.updatedAt || liveness || hazard) {
+  const statusReason = typeof agent.statusReason === "string" ? agent.statusReason.trim() : "";
+  if (activityLabel || agent.updatedAt || liveness || hazard) {
     hasFacts = true;
-    const processValue = el("dd", { class: "drawer-session-process", role: "status" });
+    const processValue = el("dd", {
+      class: "drawer-session-process",
+      role: "status",
+      "aria-label": [activityLabel, statusReason].filter(Boolean).join(". "),
+    });
+    if (activityLabel) {
+      processValue.append(el("span", {
+        class: "drawer-session-activity act-" + activity,
+        text: activityLabel,
+      }));
+    }
     if (liveness?.key === "running") {
       processValue.append(el("span", {
         class: "drawer-process-dot status-line-liveness liveness-running",
@@ -10288,6 +10301,13 @@ function renderAgentDrawer(pane, view) {
         class: "drawer-session-age",
         dataset: { ago: agent.updatedAt },
         text: agoText(agent.updatedAt),
+      }));
+    }
+    if (statusReason && activity !== "working" && outcome !== "healthy") {
+      processValue.append(el("span", {
+        class: "drawer-session-reason",
+        title: statusReason,
+        text: conciseText(statusReason, 72),
       }));
     }
     if (hazard) processValue.append(hazard);
@@ -11470,8 +11490,28 @@ function renderChatFeedBody(agent, ui = state, opts = {}) {
     body.append(transcriptLineNode(line));
     i += 1;
   }
+  /* Loaded transcripts replace the preview renderer, but they must not replace
+     its provider-task floor. Append the task only when no loaded line already
+     carries the same prose; this keeps turn-less and assistant-only records
+     identifiable without restoring a separate Task card. */
+  const loadedTurns = lines.map((line) => ({
+    role: line.role,
+    text: withoutSenderHeader(line.text),
+  }));
+  const taskFloor = dedupeTurns([
+    ...loadedTurns,
+    { role: "task", text: withoutSenderHeader(agent.task) },
+  ]).at(-1);
+  if (taskFloor?.role === "task") {
+    body.append(chatMessageGroupNode(
+      [{ at: null, role: taskFloor.role, text: agent.task }],
+      agent,
+      ui,
+    ));
+  }
   if (shouldAnimateEntry) {
-    const entry = body.childNodes[body.childNodes.length - 1];
+    const taskOffset = taskFloor?.role === "task" ? 2 : 1;
+    const entry = body.childNodes[body.childNodes.length - taskOffset];
     entry?.classList?.add("chat-entry");
     enteredTranscriptPayloads.add(view.data);
   }

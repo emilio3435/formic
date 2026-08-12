@@ -178,6 +178,34 @@ class RuntimeTests(unittest.TestCase):
             popen.assert_not_called()
             self.assertTrue(runtime.safety_circuit_open(safety_path))
 
+    def test_open_legacy_safety_circuit_migrates_without_overwriting_current_state(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = pathlib.Path(root)
+            legacy = root_path / "legacy/.task-refiner-safety.json"
+            current = root_path / "current/.header-summarizer-safety.json"
+            runtime.atomic_write_text(legacy, json.dumps({"open": True, "reason": "legacy leak"}))
+
+            header.migrate_open_safety_circuit(legacy, current)
+            migrated = json.loads(current.read_text())
+            self.assertTrue(migrated["open"])
+            self.assertEqual(
+                migrated["reason"],
+                "legacy header isolation safety circuit remained open",
+            )
+            self.assertEqual(migrated["legacySafetyPath"], str(legacy))
+
+            runtime.atomic_write_text(current, json.dumps({"open": False, "owner": "operator"}))
+            header.migrate_open_safety_circuit(legacy, current)
+            self.assertEqual(
+                json.loads(current.read_text()),
+                {"open": False, "owner": "operator"},
+            )
+
+            current.unlink()
+            runtime.atomic_write_text(legacy, json.dumps({"open": False}))
+            header.migrate_open_safety_circuit(legacy, current)
+            self.assertFalse(current.exists())
+
     def test_timeout_stops_the_process_group_and_accounts_for_post_timeout_leaks(self):
         with tempfile.TemporaryDirectory() as root:
             safety_path = pathlib.Path(root) / runtime.SAFETY_CIRCUIT_FILENAME

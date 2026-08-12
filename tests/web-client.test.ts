@@ -4302,7 +4302,8 @@ describe("RHSP command header consolidation", () => {
     expect(liveDot).not.toBeNull();
     expect(liveDot?.attributes?.["aria-label"]).toBe("Process live");
     expect(byClass(statusFact, "drawer-session-age")?.dataset?.ago).toBe("2026-08-12T04:00:00.000Z");
-    expect(headerText).not.toContain("Quiet 12m");
+    expect(textOf(byClass(statusFact, "drawer-session-activity"))).toBe("Waiting");
+    expect(statusFact?.children?.[1]?.attributes?.["aria-label"]).toContain("Waiting");
     expect(textOf(byClass(header, "drawer-session-context"))).toContain("Context28%");
     expect(headerText).toContain("71k / 258k");
     const gauge = findAll(header, (node) => node.attributes?.role === "progressbar")[0];
@@ -7063,6 +7064,27 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(textOf(withDom(() => M.renderChat(bare)))).toContain("Port the SEM forecast");
     const duplicate = agent({ task: "Port the SEM forecast rate limiter", lastUserMessage: "Port the SEM forecast rate limiter", lastAgentMessage: "" });
     expect(textOf(withDom(() => M.renderChat(duplicate))).match(/Port the SEM forecast/g)).toHaveLength(1);
+
+    // A successfully loaded transcript replaces the preview, so the floor must
+    // survive that normal path too. Assistant-only history cannot erase the
+    // standing provider task, and an exact loaded duplicate still renders once.
+    const loaded = transcriptUi({
+      ok: true,
+      agentId: both.id,
+      source: "/tmp/session.jsonl",
+      truncated: false,
+      lines: [{ at: null, role: "assistant", text: "done" }],
+    });
+    const loadedText = textOf(withDom(() => M.renderChatFeedBody(both, loaded)));
+    expect(loadedText).toContain("Port the SEM forecast");
+    const loadedDuplicate = transcriptUi({
+      ok: true,
+      agentId: both.id,
+      source: "/tmp/session.jsonl",
+      truncated: false,
+      lines: [{ at: null, role: "assistant", text: "Port the SEM forecast rate limiter" }],
+    });
+    expect(textOf(withDom(() => M.renderChatFeedBody(both, loadedDuplicate))).match(/Port the SEM forecast/g)).toHaveLength(1);
   });
 
   /* Cockpit audit §5 and §11: widgets that render their empty state instead of

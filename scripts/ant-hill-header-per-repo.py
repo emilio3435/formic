@@ -39,11 +39,27 @@ FLEET_SUMMARY_MIN_CHARS = 80
 HEADER_LOOKBACK_MS = 60 * 60 * 1000
 DEFAULT_SNAPSHOT_URL = "http://127.0.0.1:4701/api/snapshot"
 DEFAULT_SUMMARY_ROOT = REPO_ROOT / "data/header-summaries"
+LEGACY_SAFETY_PATH = REPO_ROOT / "data/task-summaries/.task-refiner-safety.json"
 DEFAULT_MONITOR = pathlib.Path.home() / ".prime/agent/sessions/ANT-HEARTBEAT-MONITOR.jsonl"
 
 
 def header_model_enabled(environment: Any = os.environ) -> bool:
     return environment.get("ANT_HILL_HEADER_SUMMARIZER_ENABLED") == "1"
+
+
+def migrate_open_safety_circuit(
+    legacy_path: pathlib.Path, current_path: pathlib.Path
+) -> None:
+    """Carry an open legacy isolation circuit forward without overwriting state."""
+    if current_path.exists() or not core.safety_circuit_open(legacy_path):
+        return
+    core.trip_safety_circuit(
+        current_path,
+        {
+            "reason": "legacy header isolation safety circuit remained open",
+            "legacySafetyPath": str(legacy_path),
+        },
+    )
 
 
 def eligible_header_agent(agent: dict[str, Any]) -> bool:
@@ -748,6 +764,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
+    safety_path = core.safety_circuit_path(args.summary_root)
+    if args.summary_root.resolve() == DEFAULT_SUMMARY_ROOT.resolve():
+        migrate_open_safety_circuit(LEGACY_SAFETY_PATH, safety_path)
     lock = core.SingletonLock(
         args.summary_root / ".header-per-repo.lock",
         prompt_version=PROMPT_VERSION,
@@ -765,7 +784,7 @@ def main(argv: list[str] | None = None) -> int:
             component_name="header-summarizer",
             codex_bin=args.codex_bin,
             timeout_seconds=args.timeout,
-            safety_path=core.safety_circuit_path(args.summary_root),
+            safety_path=safety_path,
         )
         core.install_stop_handlers(runner)
         summarizer = HeaderSummarizer(
