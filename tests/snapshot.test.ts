@@ -62,6 +62,75 @@ const uniqueSurface: CmuxSurface = {
 };
 
 describe("snapshot control safety and SSE deduplication", () => {
+  test("last-known provider rows remain visible but cannot become live or authoritative", () => {
+    const source = collected({
+      id: "codex:last-known",
+      sourceSessionId: "last-known",
+      processAlive: true,
+      processIds: [4242],
+      recordedTarget: { surfaceId: uniqueSurface.surfaceId },
+    });
+    const snapshot = buildSnapshot({
+      agents: [],
+      lastKnownAgents: [source],
+      lastKnownSourceReasons: {
+        codex: "Codex collection exceeded the 7.5s provider wait; showing last-known Codex sessions.",
+      },
+      surfaces: [{ ...uniqueSurface, sourceSessionIds: [source.sourceSessionId] }],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    const published = snapshot.programs.flatMap(({ agents }) => agents)[0];
+
+    expect(published).toMatchObject({
+      id: source.id,
+      sourceFreshness: "last-known",
+      status: "stale",
+      activity: "unknown",
+      lifecycle: "unverified",
+      processState: "unknown",
+      target: { resolution: "missing" },
+      statusReason: expect.stringContaining("showing last-known Codex sessions"),
+    });
+    expect(Object.fromEntries(published?.controls.map(({ action, enabled }) => [action, enabled]) ?? [])).toMatchObject({
+      focus: false,
+      instruct: false,
+      interrupt: false,
+      archive: true,
+    });
+    expect(snapshot.totals.live).toBe(0);
+    expect(snapshot.totals.working).toBe(0);
+    expect(snapshot.totals.attention).toBe(0);
+    expect(snapshot.totals.retained).toBe(0);
+    expect(snapshot.totals.consumption).toBeUndefined();
+  });
+
+  test("operator archive intent wins over a cached last-known provider row", () => {
+    const source = collected({ id: "codex:archived-cache", sourceSessionId: "archived-cache" });
+    const archivedStore: ArchiveStore = {
+      has: (agentId) => agentId === source.id,
+      archive: async () => {},
+      archivedAgents: () => [{ ...source, archivedAt: "2026-07-21T23:00:10.000Z" }],
+    };
+    const snapshot = buildSnapshot({
+      agents: [],
+      lastKnownAgents: [{ ...source, updatedAt: "2026-07-21T23:00:20.000Z" }],
+      lastKnownSourceReasons: { codex: "Codex timed out; showing last-known Codex sessions." },
+      surfaces: [],
+      archiveStore: archivedStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    const published = snapshot.programs.flatMap(({ agents }) => agents)[0];
+
+    expect(published).toMatchObject({
+      id: source.id,
+      scope: "retained",
+      lifecycle: "finished",
+    });
+    expect(published?.sourceFreshness).toBeUndefined();
+    expect(snapshot.totals.retained).toBe(1);
+  });
+
   test("CWD-GROUP-1 launch repository groups an exact-linked home-cwd agent without weakening the link", () => {
     const source = collected({
       cwd: HOME_DIR,

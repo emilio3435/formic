@@ -94,6 +94,32 @@ afterEach(() => {
 });
 
 describe("durable agent focus links", () => {
+  test("a last-known provider row cannot re-attest Focus through a durable link", async () => {
+    loadHookStore({ sessionId: "live-session", lifecycle: "running" });
+    const runner = new StubRunner();
+    const agent = snapshotAgent({ sourceFreshness: "last-known" });
+    const fetch = createAgentLinkFetch(
+      () => new Response("fallback", { status: 418 }),
+      {
+        getSnapshot: () => snapshot(agent),
+        surfaces: () => [surface()],
+        runner,
+        archiveStore,
+        cmuxExecutable: "cmux",
+      },
+    );
+
+    const response = await fetch(new Request(
+      `http://127.0.0.1:4701/agent/${encodeURIComponent(agent.id)}/focus`,
+    ));
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: { code: "CONTROL_DISABLED" },
+    });
+    expect(runner.commands).toHaveLength(0);
+  });
+
   test("an exact agent URL re-resolves through the hook-store tier and focuses that surface", async () => {
     loadHookStore({ sessionId: "live-session", lifecycle: "running" });
     const runner = new StubRunner();

@@ -6,6 +6,7 @@ import { collectCmuxWorkspaceEnvs } from "../src/server/cmux";
 import { handleControlRequest } from "../src/server/http";
 import { HubState, type HubCollectors } from "../src/server/state";
 import { MemoryIdentityBindingStore, type IdentityBindingStore } from "../src/server/identity-bindings";
+import { normalizeSettings } from "../src/server/settings";
 import type {
   ArchiveStore,
   CmuxNotification,
@@ -965,6 +966,50 @@ describe("cmux collection time truth", () => {
     logged.mockRestore();
   });
 
+  test("the refresh watchdog captured at pass start allows the configured 15 second provider wait", async () => {
+    let nowMs = 1_000;
+    const now = spyOn(Date, "now").mockImplementation(() => nowMs);
+    let providerWaitMs: 15_000 | 3_000 = 15_000;
+    let sessionCalls = 0;
+    let releaseFirst!: () => void;
+    const firstSessionScan = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const collectors: HubCollectors = {
+      sessions: async () => {
+        sessionCalls += 1;
+        if (sessionCalls === 1) await firstSessionScan;
+        return emptySessions();
+      },
+      cmux: async () => ({ value: [], errors: [] }),
+      notifications: async () => ({ value: [], errors: [] }),
+      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    const state = new HubState(runner, archiveStore, [], {
+      collectors,
+      settingsReader: () => ({
+        ...normalizeSettings(undefined),
+        providerWaitMs,
+      }),
+    });
+
+    const first = state.refresh();
+    for (let turn = 0; turn < 10; turn += 1) await Promise.resolve();
+    providerWaitMs = 3_000;
+    nowMs += 12_001;
+    void state.refresh();
+    expect(sessionCalls).toBe(1);
+
+    nowMs += 5_000;
+    await state.refresh();
+    expect(sessionCalls).toBe(2);
+    releaseFirst();
+    await first;
+    now.mockRestore();
+  });
+
   test("the collector aggregate deadline publishes partial source truth with visible degradation", async () => {
     const source: CollectedAgent = {
       id: "codex:partial",
@@ -1009,6 +1054,84 @@ describe("cmux collection time truth", () => {
     ]));
     expect(logged).toHaveBeenCalledWith(expect.stringContaining("publishing partial snapshot"));
     logged.mockRestore();
+  });
+
+  test("provider timeout publishes fast current rows once and stages a late result for the next refresh", async () => {
+    const oldCodex = routingRaceSource({
+      id: "codex:settlement",
+      sourceSessionId: "settlement",
+      displayName: "Codex before timeout",
+    });
+    const currentOmp = routingRaceSource({
+      id: "omp:current",
+      provider: "omp",
+      sourceSessionId: "current",
+      displayName: "OMP current result",
+    });
+    const recoveredCodex = { ...oldCodex, displayName: "Codex late result" };
+    let generation = 0;
+    let releaseCodex!: (value: { value: CollectedAgent[]; errors: string[] }) => void;
+    const lateCodex = new Promise<{ value: CollectedAgent[]; errors: string[] }>((resolve) => {
+      releaseCodex = resolve;
+    });
+    const recorded: string[][] = [];
+    const collectors: HubCollectors = {
+      sessions: async () => emptySessions(),
+      sessionProvider: async (provider) => {
+        if (generation === 0) {
+          return { value: provider === "codex" ? [oldCodex] : [], errors: [] };
+        }
+        if (provider === "codex") return lateCodex;
+        return { value: provider === "omp" ? [currentOmp] : [], errors: [] };
+      },
+      finalizeSessions: (results) => results,
+      cmux: async () => ({ value: [], errors: [] }),
+      notifications: async () => ({ value: [], errors: [] }),
+      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = {
+      has: () => false,
+      archive: async () => {},
+      record: async (agents) => { recorded.push(agents.map(({ id }) => id)); },
+    };
+    const state = new HubState(runner, archiveStore, [], {
+      collectors,
+      refreshAggregateTimeoutMs: 5,
+      settingsReader: () => normalizeSettings(undefined),
+    });
+    await state.refresh();
+    generation = 1;
+    const publications: HubSnapshot[] = [];
+    const unsubscribe = state.subscribe((snapshot) => { publications.push(snapshot); });
+
+    const degraded = await state.refresh();
+    const degradedAgents = degraded.programs.flatMap(({ agents }) => agents);
+    expect(degradedAgents.find(({ id }) => id === oldCodex.id)).toMatchObject({
+      sourceFreshness: "last-known",
+      status: "stale",
+      target: { resolution: "missing" },
+    });
+    expect(degradedAgents.some(({ id }) => id === currentOmp.id)).toBeTrue();
+    expect(recorded.at(-1)).toEqual([currentOmp.id]);
+    expect(publications).toHaveLength(1);
+    expect(degraded.controlHealth.staleSources).toContain("codex");
+    expect(degraded.totals.sourceHealth?.byProvider?.codex).toMatchObject({
+      healthy: false,
+      lastHealthyAt: expect.any(String),
+    });
+
+    releaseCodex({ value: [recoveredCodex], errors: [] });
+    for (let turn = 0; turn < 5; turn += 1) await Promise.resolve();
+    expect(publications).toHaveLength(1);
+
+    const recovered = await state.refresh();
+    const recoveredAgent = recovered.programs.flatMap(({ agents }) => agents).find(({ id }) => id === oldCodex.id);
+    expect(recoveredAgent?.displayName).toBe("Codex late result");
+    expect(recoveredAgent?.sourceFreshness).toBeUndefined();
+    unsubscribe();
   });
 
   test("observed sessions survive later scans as ended history and never count as live", async () => {
@@ -1188,6 +1311,7 @@ describe("operator thresholds reach the collectors", () => {
           scanWindowHours: 36,
           historyRetentionDays: 30,
           historyRecordLimit: 5000,
+          providerWaitMs: 7500,
           defaultView: "needs-you",
           showReviewWorkers: false,
         }),

@@ -20,6 +20,9 @@ export const SETTINGS_VERSION = 2;
 export const SETTINGS_VIEWS = ["needs-you", "now", "waiting", "history", "usage"] as const;
 export type SettingsView = (typeof SETTINGS_VIEWS)[number];
 export const DEFAULT_VIEW: SettingsView = "needs-you";
+export const PROVIDER_WAIT_OPTIONS_MS = [3_000, 5_000, 7_500, 10_000, 15_000] as const;
+export type ProviderWaitMs = (typeof PROVIDER_WAIT_OPTIONS_MS)[number];
+export const DEFAULT_PROVIDER_WAIT_MS: ProviderWaitMs = 7_500;
 
 /* One row per tunable number, so validation, reset, migration and the API
    whitelist all read the same table instead of four hand-maintained copies —
@@ -40,7 +43,12 @@ export const NUMERIC_SETTINGS = {
 
 export type NumericSettingKey = keyof typeof NUMERIC_SETTINGS;
 export const NUMERIC_SETTING_KEYS = Object.keys(NUMERIC_SETTINGS) as NumericSettingKey[];
-export const SETTING_KEYS = [...NUMERIC_SETTING_KEYS, "defaultView", "showReviewWorkers"] as const;
+export const SETTING_KEYS = [
+  ...NUMERIC_SETTING_KEYS,
+  "providerWaitMs",
+  "defaultView",
+  "showReviewWorkers",
+] as const;
 
 export interface HubSettings {
   version: typeof SETTINGS_VERSION;
@@ -56,6 +64,8 @@ export interface HubSettings {
   historyRetentionDays: number;
   /** At most this many History records are kept. */
   historyRecordLimit: number;
+  /** How long one refresh waits for provider scans before using last-known data. */
+  providerWaitMs: ProviderWaitMs;
   /** The tab the board opens on. */
   defaultView: SettingsView;
   /** Whether routine review sessions are shown on the Board by default. */
@@ -106,6 +116,17 @@ export function normalizeView(value: unknown): SettingsView | null {
   return SETTINGS_VIEWS.includes(value as SettingsView) ? (value as SettingsView) : null;
 }
 
+export function normalizeProviderWaitMs(value: unknown): ProviderWaitMs | null {
+  const numeric = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return PROVIDER_WAIT_OPTIONS_MS.includes(numeric as ProviderWaitMs)
+    ? numeric as ProviderWaitMs
+    : null;
+}
+
+export function providerWaitMessage(): string {
+  return `providerWaitMs must be one of ${PROVIDER_WAIT_OPTIONS_MS.join(", ")}`;
+}
+
 export interface SettingsFileOperations {
   readText(path: string): Promise<string>;
   makeDirectory(path: string): Promise<void>;
@@ -141,6 +162,7 @@ export function normalizeSettings(value: unknown): HubSettings {
     : {};
   const settings = {
     version: SETTINGS_VERSION,
+    providerWaitMs: normalizeProviderWaitMs(record.providerWaitMs) ?? DEFAULT_PROVIDER_WAIT_MS,
     defaultView: normalizeView(record.defaultView) ?? DEFAULT_VIEW,
     showReviewWorkers: typeof record.showReviewWorkers === "boolean" ? record.showReviewWorkers : false,
   } as HubSettings;
@@ -226,6 +248,11 @@ export class JsonSettingsStore {
         const clamped = clampSetting(key, patch[key]);
         if (clamped == null) throw new Error(settingRangeMessage(key));
         next[key] = clamped;
+      }
+      if (patch.providerWaitMs !== undefined) {
+        const providerWaitMs = normalizeProviderWaitMs(patch.providerWaitMs);
+        if (providerWaitMs == null) throw new Error(providerWaitMessage());
+        next.providerWaitMs = providerWaitMs;
       }
       if (patch.defaultView !== undefined) {
         const view = normalizeView(patch.defaultView);
@@ -316,6 +343,13 @@ export async function handleSettingsRequest(
     const clamped = clampSetting(key, record[key]);
     if (clamped == null) return requestError(400, "INVALID_SETTINGS", `${settingRangeMessage(key)}.`);
     patch[key] = clamped;
+  }
+  if ("providerWaitMs" in record) {
+    const providerWaitMs = normalizeProviderWaitMs(record.providerWaitMs);
+    if (providerWaitMs == null) {
+      return requestError(400, "INVALID_SETTINGS", `${providerWaitMessage()}.`);
+    }
+    patch.providerWaitMs = providerWaitMs;
   }
   if ("defaultView" in record) {
     const view = normalizeView(record.defaultView);

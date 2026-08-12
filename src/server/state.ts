@@ -15,7 +15,14 @@ import {
   type CmuxEventFrame,
   type CmuxEventsRuntime,
 } from "./cmux-events";
-import { collectSessions, DEFAULT_SESSION_WINDOW_MS } from "./collectors";
+import {
+  collectSessionProvider,
+  collectSessions,
+  DEFAULT_SESSION_WINDOW_MS,
+  finalizeSessionProviders,
+  type SessionProviderResult,
+  type SessionProviderResults,
+} from "./collectors";
 import { withAttentionClasses } from "./attention-signal";
 import { buildSnapshot, type ProgramHint, withIssueDecoration, withPulse } from "./snapshot";
 import { PulseTracker } from "./pulse";
@@ -30,7 +37,12 @@ import type {
 } from "./types";
 import { enrichCmuxIdentity } from "./identity";
 import { bridgeAgentsWithBindings, updateBindingsFromScan, type IdentityBindingStore } from "./identity-bindings";
-import { DEFAULT_SCAN_WINDOW_HOURS, lifecycleThresholds, type HubSettings } from "./settings";
+import {
+  DEFAULT_PROVIDER_WAIT_MS,
+  DEFAULT_SCAN_WINDOW_HOURS,
+  lifecycleThresholds,
+  type HubSettings,
+} from "./settings";
 import { controlsFor, lifecycleFor } from "./snapshot-agent";
 import { resolveAgentTarget } from "./targets";
 import {
@@ -51,9 +63,12 @@ import {
   senderTranscriptTailsFor,
   type SenderTranscriptEvidence,
 } from "./sender-verification";
+import { ProviderSettlementCoordinator } from "./provider-settlement";
 
 export interface HubCollectors {
   sessions: typeof collectSessions;
+  sessionProvider?: typeof collectSessionProvider;
+  finalizeSessions?: typeof finalizeSessionProviders;
   cmux: typeof collectCmux;
   sidebar?: typeof collectCmuxSidebar;
   workspaceEnv?: typeof collectCmuxWorkspaceEnvs;
@@ -64,6 +79,8 @@ export interface HubCollectors {
 
 const DEFAULT_COLLECTORS: HubCollectors = {
   sessions: collectSessions,
+  sessionProvider: collectSessionProvider,
+  finalizeSessions: finalizeSessionProviders,
   cmux: collectCmux,
   sidebar: collectCmuxSidebar,
   workspaceEnv: collectCmuxWorkspaceEnvs,
@@ -72,8 +89,7 @@ const DEFAULT_COLLECTORS: HubCollectors = {
   enrichIdentity: enrichCmuxIdentity,
 };
 
-const REFRESH_WATCHDOG_MS = 12_000;
-export const REFRESH_AGGREGATE_TIMEOUT_MS = 10_000;
+const MIN_REFRESH_WATCHDOG_MS = 12_000;
 
 async function readBoundedTranscriptTail(
   path: string,
@@ -150,6 +166,7 @@ export class HubState {
   /* One naming pass at a time; a second refresh while one runs simply skips. */
   #naming?: Promise<void>;
   #refreshStartedAtMs?: number;
+  #refreshWatchdogMs?: number;
   /* Which refresh pass is the current one. Only the watchdog below can put two
      passes in flight at once, and when it does, the abandoned one must stop
      writing — see #superseded. */
@@ -172,6 +189,9 @@ export class HubState {
   };
 
   #scanWindowHours = DEFAULT_SCAN_WINDOW_HOURS;
+  readonly #providerSettlement = new ProviderSettlementCoordinator<Provider, SessionProviderResult>(
+    (result) => result.errors.length === 0,
+  );
 
   private readonly collectors: HubCollectors;
   private readonly settingsReader?: () => HubSettings;
@@ -179,7 +199,7 @@ export class HubState {
   private readonly burnReader?: () => Promise<UsageSummary>;
   private readonly cmuxExecutable: string;
   private readonly bindingStore?: IdentityBindingStore;
-  private readonly refreshAggregateTimeoutMs: number;
+  private readonly refreshAggregateTimeoutMs?: number;
   /* Optional so every existing construction — and the tests are full of them —
      keeps the derived names rather than requiring a naming store. */
   private readonly sessionNames?: JsonSessionNameStore;
@@ -197,7 +217,7 @@ export class HubState {
     this.burnReader = options.burnReader;
     this.cmuxExecutable = options.cmuxExecutable ?? DEFAULT_CMUX_EXECUTABLE;
     this.bindingStore = options.bindingStore;
-    this.refreshAggregateTimeoutMs = options.refreshAggregateTimeoutMs ?? REFRESH_AGGREGATE_TIMEOUT_MS;
+    this.refreshAggregateTimeoutMs = options.refreshAggregateTimeoutMs;
     this.sessionNames = options.sessionNames;
     this.witnessStore = options.witnessStore;
     this.#bootId = options.bootId ?? currentBootId(uptime(), Date.now());
@@ -435,23 +455,28 @@ export class HubState {
   async refresh(options: { cmux?: boolean } = {}): Promise<HubSnapshot> {
     if (this.#refreshing) {
       const pendingMs = Date.now() - (this.#refreshStartedAtMs ?? Date.now());
-      if (pendingMs <= REFRESH_WATCHDOG_MS) {
+      if (pendingMs <= (this.#refreshWatchdogMs ?? MIN_REFRESH_WATCHDOG_MS)) {
         if (options.cmux && !this.#refreshingCmux) this.#cmuxRequested = true;
         return this.#refreshing;
       }
       console.error(`[HubState] refresh watchdog dropped a pass pending for ${pendingMs}ms`);
       this.#refreshing = undefined;
       this.#refreshStartedAtMs = undefined;
+      this.#refreshWatchdogMs = undefined;
       this.#refreshingCmux = false;
     }
     if (options.cmux) this.#cmuxRequested = true;
+    const providerWaitMs = this.settingsReader?.().providerWaitMs ?? DEFAULT_PROVIDER_WAIT_MS;
+    const watchdogMs = Math.max(MIN_REFRESH_WATCHDOG_MS, providerWaitMs + 2_000);
     const generation = ++this.#refreshGeneration;
-    const refresh = this.#drainRefreshes(generation).finally(() => {
+    const refresh = this.#drainRefreshes(generation, providerWaitMs).finally(() => {
       if (this.#refreshing !== refresh) return;
       this.#refreshing = undefined;
       this.#refreshStartedAtMs = undefined;
+      this.#refreshWatchdogMs = undefined;
     });
     this.#refreshStartedAtMs = Date.now();
+    this.#refreshWatchdogMs = watchdogMs;
     this.#refreshing = refresh;
     return refresh;
   }
@@ -466,7 +491,7 @@ export class HubState {
     return generation !== this.#refreshGeneration;
   }
 
-  async #drainRefreshes(generation: number): Promise<HubSnapshot> {
+  async #drainRefreshes(generation: number, providerWaitMs: number): Promise<HubSnapshot> {
     let snapshot = this.#snapshot;
     do {
       if (this.#superseded(generation)) return this.#snapshot;
@@ -474,7 +499,7 @@ export class HubState {
       this.#cmuxRequested = false;
       this.#refreshingCmux = cmux;
       try {
-        snapshot = await this.#performRefresh({ cmux }, generation);
+        snapshot = await this.#performRefresh({ cmux }, generation, providerWaitMs);
       } finally {
         // Never clear a flag the pass that replaced this one is relying on.
         if (!this.#superseded(generation)) this.#refreshingCmux = false;
@@ -510,7 +535,11 @@ export class HubState {
     })();
   }
 
-  async #performRefresh(options: { cmux?: boolean }, generation: number): Promise<HubSnapshot> {
+  async #performRefresh(
+    options: { cmux?: boolean },
+    generation: number,
+    providerWaitMs: number,
+  ): Promise<HubSnapshot> {
     const cmuxAttemptAt = options.cmux ? new Date().toISOString() : undefined;
     /* From the union, not a second list. This WAS a literal, and the literal
        silently dropped Factory: the collector read its sessions correctly and
@@ -533,6 +562,8 @@ export class HubState {
     type NotificationsResult = Awaited<ReturnType<HubCollectors["notifications"]>>;
     type IdentityResult = Awaited<ReturnType<HubCollectors["enrichIdentity"]>>;
     let sessionsResult: SessionsResult | undefined;
+    let lastKnownAgents: CollectedAgent[] = [];
+    const lastKnownSourceReasons: Partial<Record<Provider, string>> = {};
     let cmuxResult: CmuxResult | undefined;
     let sidebarResult: SidebarResult | undefined;
     let workspaceEnvResult: WorkspaceEnvResult | undefined;
@@ -551,11 +582,47 @@ export class HubState {
         collectionErrors.push(`${label}: ${error instanceof Error ? error.message : String(error)}`);
       }
     };
+    const aggregateTimeoutMs = this.refreshAggregateTimeoutMs ?? providerWaitMs;
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    const deadlineReached = new Promise<void>((resolve) => {
+      deadlineTimer = setTimeout(resolve, aggregateTimeoutMs);
+    });
+    const providerCollection = this.collectors.sessionProvider && this.collectors.finalizeSessions
+      ? (async () => {
+          const selection = await this.#providerSettlement.settle(
+            providers,
+            async (provider) => {
+              try {
+                return await this.collectors.sessionProvider!(provider, homedir(), windowMs, thresholds);
+              } catch (error) {
+                return {
+                  value: [],
+                  errors: [`${provider} collection failed: ${error instanceof Error ? error.message : String(error)}`],
+                };
+              }
+            },
+            { waitMs: providerWaitMs, wait: () => deadlineReached },
+          );
+          const selected = Object.fromEntries(providers.map((provider) => {
+            const current = selection.current[provider];
+            if (current) return [provider, current];
+            const seconds = providerWaitMs / 1_000;
+            const label = `${provider[0]!.toUpperCase()}${provider.slice(1)}`;
+            const fallback = selection.lastKnown[provider];
+            const reason = `${label} collection exceeded the ${seconds}s provider wait; `
+              + (fallback ? `showing last-known ${label} sessions.` : `no last-known ${label} sessions are available.`);
+            if (fallback) lastKnownSourceReasons[provider] = reason;
+            return [provider, { value: [], errors: [reason] }];
+          })) as SessionProviderResults;
+          sessionsResult = this.collectors.finalizeSessions!(selected, homedir());
+          lastKnownAgents = providers.flatMap((provider) => selection.lastKnown[provider]?.value ?? []);
+        })()
+      : capture("session collection failed", this.collectors.sessions(homedir(), windowMs, thresholds), (value) => {
+          sessionsResult = value;
+        });
     let aggregateSettled = false;
     const aggregate = Promise.all([
-      capture("session collection failed", this.collectors.sessions(homedir(), windowMs, thresholds), (value) => {
-        sessionsResult = value;
-      }),
+      providerCollection,
       ...(options.cmux
         ? [
             capture("cmux discovery failed", this.collectors.cmux(this.runner, this.cmuxExecutable), (value) => {
@@ -616,18 +683,22 @@ export class HubState {
       }
       aggregateSettled = true;
     });
-    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([
       aggregate,
-      new Promise<void>((resolve) => {
-        deadlineTimer = setTimeout(resolve, this.refreshAggregateTimeoutMs);
-      }),
+      deadlineReached,
     ]);
+    if (this.collectors.sessionProvider && this.collectors.finalizeSessions) {
+      await providerCollection;
+      /* Let the aggregate's completion continuation run when providers were
+         the only work. A provider timeout is already reported by that source;
+         it is not also an aggregate failure. */
+      await Promise.resolve();
+    }
     if (aggregateSettled && deadlineTimer) clearTimeout(deadlineTimer);
     /* Collection is done; from here every line writes. If the watchdog gave up
        on this pass while it was collecting, stop before the first write. */
     if (this.#superseded(generation)) return this.#snapshot;
-    const deadlineError = `collector aggregate exceeded ${this.refreshAggregateTimeoutMs}ms deadline`;
+    const deadlineError = `collector aggregate exceeded ${aggregateTimeoutMs}ms deadline`;
     if (!aggregateSettled) {
       collectionErrors.push(deadlineError);
       console.error(`[HubState] ${deadlineError}; publishing partial snapshot`);
@@ -830,6 +901,8 @@ export class HubState {
     ) as Record<Provider, boolean>;
     const built = this.#withSourceHealth(buildSnapshot({
       agents: publishedAgents,
+      lastKnownAgents,
+      lastKnownSourceReasons,
       surfaces: this.#surfaces,
       workspaceEnvs: this.#workspaceEnvs,
       sidebarWorkspaces: this.#sidebarWorkspaces,

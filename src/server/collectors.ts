@@ -31,6 +31,8 @@ export interface CollectSessionsOptions {
   hookProcessStarts?: () => ReadonlyMap<number, number> | undefined;
   processLineageExec?: ProcessLineageExec;
 }
+export type SessionProviderResult = CollectionResult<CollectedAgent[]>;
+export type SessionProviderResults = Record<Provider, SessionProviderResult>;
 const fileCache = new Map<string, {
   provider: Provider;
   dev: number;
@@ -1262,21 +1264,35 @@ function attachHookFacts(
   };
 }
 
-export async function collectSessions(
+export async function collectSessionProvider(
+  provider: Provider,
   home = homedir(),
   windowMs = DEFAULT_SESSION_WINDOW_MS,
   thresholds?: LifecycleThresholds,
+): Promise<SessionProviderResult> {
+  switch (provider) {
+    case "omp":
+      return collectProvider("omp", join(home, ".omp/agent/sessions"), 2, parseOmpJsonl, windowMs, thresholds);
+    case "codex":
+      return collectProvider("codex", join(home, ".codex/sessions"), 4, parseCodexJsonl, windowMs, thresholds);
+    case "claude":
+      return collectProvider("claude", join(home, ".claude/projects"), 3, parseClaudeJsonl, windowMs, thresholds);
+    case "cursor":
+      return collectCursorSessions(home, Date.now(), windowMs, thresholds);
+    case "factory":
+      return collectProvider("factory", join(home, ".factory/sessions"), 2, parseFactoryJsonl, windowMs, thresholds);
+    case "prime":
+      return collectProvider("prime", join(home, ".prime/agent/sessions"), 1, parsePrimeJsonl, windowMs, thresholds);
+  }
+}
+
+export function finalizeSessionProviders(
+  results: SessionProviderResults,
+  home = homedir(),
   options: CollectSessionsOptions = {},
-): Promise<Record<Provider, CollectionResult<CollectedAgent[]>>> {
+): SessionProviderResults {
+  const { omp, codex, claude, cursor, factory, prime } = results;
   const hookRecords = readHookSessionStores(join(home, ".cmuxterm"));
-  const [omp, codex, claude, cursor, factory, prime] = await Promise.all([
-    collectProvider("omp", join(home, ".omp/agent/sessions"), 2, parseOmpJsonl, windowMs, thresholds),
-    collectProvider("codex", join(home, ".codex/sessions"), 4, parseCodexJsonl, windowMs, thresholds),
-    collectProvider("claude", join(home, ".claude/projects"), 3, parseClaudeJsonl, windowMs, thresholds),
-    collectCursorSessions(home, Date.now(), windowMs, thresholds),
-    collectProvider("factory", join(home, ".factory/sessions"), 2, parseFactoryJsonl, windowMs, thresholds),
-    collectProvider("prime", join(home, ".prime/agent/sessions"), 1, parsePrimeJsonl, windowMs, thresholds),
-  ]);
   const recordsBySession = new Map(
     hookRecords.map((record) => [`${record.provider}:${record.sessionId.toLowerCase()}`, record]),
   );
@@ -1298,4 +1314,21 @@ export async function collectSessions(
     factory: attachHookFacts(factory, recordsBySession, starts, processLineage?.observedParents, knownAgentIds),
     prime: attachHookFacts(prime, recordsBySession, starts, processLineage?.observedParents, knownAgentIds),
   };
+}
+
+export async function collectSessions(
+  home = homedir(),
+  windowMs = DEFAULT_SESSION_WINDOW_MS,
+  thresholds?: LifecycleThresholds,
+  options: CollectSessionsOptions = {},
+): Promise<SessionProviderResults> {
+  const [omp, codex, claude, cursor, factory, prime] = await Promise.all([
+    collectSessionProvider("omp", home, windowMs, thresholds),
+    collectSessionProvider("codex", home, windowMs, thresholds),
+    collectSessionProvider("claude", home, windowMs, thresholds),
+    collectSessionProvider("cursor", home, windowMs, thresholds),
+    collectSessionProvider("factory", home, windowMs, thresholds),
+    collectSessionProvider("prime", home, windowMs, thresholds),
+  ]);
+  return finalizeSessionProviders({ omp, codex, claude, cursor, factory, prime }, home, options);
 }

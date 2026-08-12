@@ -395,6 +395,8 @@ export interface AgentSnapshot {
      fact about the board's reach, not about the session's ending, and folding
      the two is how "archived" came to mean four different things. */
   scope?: CollectionScope;
+  /** A timed-out provider's cached display row; absent for current source evidence. */
+  sourceFreshness?: "last-known";
   /** Which clean completion a source recorded, when it recorded one. */
   endEvidence?: EndEvidence;
   /* An unread cmux notification is waiting on this session. An OVERLAY: it adds
