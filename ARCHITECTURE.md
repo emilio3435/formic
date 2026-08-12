@@ -1,4 +1,8 @@
-# The Ant Hill — Architecture
+# Formic — Architecture
+
+> Compatibility: internal identifiers, historical notes, and test surfaces may
+> still say `The Ant Hill` / `the-mountain`. Those names remain for ops
+> compatibility; this document uses Formic as the product name.
 
 How a provider transcript on disk becomes a controllable agent row in the dashboard. The pipeline is: **collectors → refresh loop → identity enrichment → target resolution → controls**. Every stage is fail-closed: when evidence is ambiguous the agent stays visible but its controls stay disabled, with the reason attached.
 
