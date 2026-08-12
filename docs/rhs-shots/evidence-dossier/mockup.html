@@ -358,27 +358,32 @@
                   <span class="exhibit-mark" data-exhibit="where"><img src="marks/folder.svg" alt=""></span>
                   <h3 class="section-title" data-evidence-section="where">Workspace</h3>
                 </div>
-                <p class="evidence-value" data-when="linked conflict retained"><code>/Users/emilionunezgarcia/Developer/the-mountain-main</code></p>
-                <div data-when="dirty" hidden>
-                  <dl class="detail-grid">
-                    <dt>Current</dt>
-                    <dd><code>/Users/emilionunezgarcia/Developer/the-mountain-main/docs</code></dd>
-                    <dt>Repository</dt>
-                    <dd><code>the-mountain-main</code></dd>
-                    <dt>Launch</dt>
-                    <dd><code>/Users/emilionunezgarcia/Developer/the-mountain-main</code></dd>
-                    <dt>Shell</dt>
-                    <dd><code>/Users/emilionunezgarcia/Developer/the-mountain-main</code></dd>
-                  </dl>
-                  <p class="directory-relation-note">Claude’s tool session and the terminal shell maintain separate working directories. This does not change the exact cmux link.</p>
+                <div class="exhibit-body">
+                  <p class="evidence-value exhibit-readout" data-when="linked conflict retained">
+                    <code>/Users/emilionunezgarcia/Developer/the-mountain-main</code>
+                    <button type="button" class="artifact-copy evidence-path-copy" data-full-path="/Users/emilionunezgarcia/Developer/the-mountain-main" aria-label="Copy full path" title="Copy full path"><span data-ico="copy"></span></button>
+                  </p>
+                  <div data-when="dirty" hidden>
+                    <dl class="detail-grid exhibit-readout">
+                      <dt>Current</dt>
+                      <dd><code>/Users/emilionunezgarcia/Developer/the-mountain-main/docs</code></dd>
+                      <dt>Repository</dt>
+                      <dd><code>the-mountain-main</code></dd>
+                      <dt>Launch</dt>
+                      <dd><code>/Users/emilionunezgarcia/Developer/the-mountain-main</code></dd>
+                      <dt>Shell</dt>
+                      <dd><code>/Users/emilionunezgarcia/Developer/the-mountain-main</code></dd>
+                    </dl>
+                    <p class="directory-relation-note">Claude’s tool session and the terminal shell maintain separate working directories. This does not change the exact cmux link.</p>
+                  </div>
+                  <ul class="artifact-list" data-when="linked conflict dirty">
+                    <li>
+                      <span class="artifact-label">Evidence review</span>
+                      <span class="artifact-path" title="/Users/emilionunezgarcia/Developer/the-mountain-main/docs/rhs-shots/evidence-dossier/REPORT.md">docs/rhs-shots/evidence-dossier/REPORT.md</span>
+                      <button type="button" class="artifact-copy" data-full-path="/Users/emilionunezgarcia/Developer/the-mountain-main/docs/rhs-shots/evidence-dossier/REPORT.md" aria-label="Copy full path" title="Copy full path"><span data-ico="copy"></span></button>
+                    </li>
+                  </ul>
                 </div>
-                <ul class="artifact-list" data-when="linked conflict dirty">
-                  <li>
-                    <span class="artifact-label">Evidence review</span>
-                    <span class="artifact-path">docs/rhs-shots/evidence-dossier/REPORT.md</span>
-                    <button type="button" class="artifact-copy" aria-label="Copy path" title="Copy path"><span data-ico="copy"></span></button>
-                  </li>
-                </ul>
               </div>
 
               <!-- GIT — omitted when empty. Official Git SCM logo; dirty = same mark + amber pip. -->
@@ -387,20 +392,24 @@
                   <span class="exhibit-mark" data-exhibit="git" title="Clean working tree"><img src="marks/git.svg" alt="Git"></span>
                   <h3 class="section-title" data-evidence-section="git">Git</h3>
                 </div>
-                <span class="git-line">
-                  <code>docs/formic-evidence-ux-adversarial</code>
-                  <code>@a0368d5</code>
-                </span>
+                <div class="exhibit-body">
+                  <span class="git-line exhibit-readout">
+                    <code>docs/formic-evidence-ux-adversarial</code>
+                    <code class="git-rev">@a0368d5</code>
+                  </span>
+                </div>
               </div>
               <div class="exhibit" data-when="dirty" hidden>
                 <div class="exhibit-head">
                   <span class="exhibit-mark git-dirty" data-exhibit="git" title="Uncommitted changes"><img src="marks/git.svg" alt="Git"></span>
                   <h3 class="section-title" data-evidence-section="git">Git</h3>
                 </div>
-                <span class="git-line">
-                  <code>docs/formic-evidence-ux-adversarial</code>
-                  <code>@a0368d5</code>
-                </span>
+                <div class="exhibit-body">
+                  <span class="git-line exhibit-readout">
+                    <code>docs/formic-evidence-ux-adversarial</code>
+                    <code class="git-rev">@a0368d5</code>
+                  </span>
+                </div>
               </div>
 
               <!-- PULL REQUEST — omit-empty. Official GitHub mark. -->
@@ -409,13 +418,15 @@
                   <span class="exhibit-mark" data-exhibit="pr"><img src="marks/github.svg" alt=""></span>
                   <h3 class="section-title" data-evidence-section="pr">Pull request</h3>
                 </div>
-                <ul class="artifact-list">
-                  <li>
-                    <span class="artifact-label">formic-evidence-ux</span>
-                    <a class="artifact-path" href="https://github.com/example/the-mountain/pull/42">github.com/example/the-mountain/pull/42</a>
-                    <button type="button" class="artifact-copy" aria-label="Copy URL" title="Copy URL"><span data-ico="copy"></span></button>
-                  </li>
-                </ul>
+                <div class="exhibit-body">
+                  <ul class="artifact-list">
+                    <li>
+                      <span class="artifact-label">formic-evidence-ux</span>
+                      <a class="artifact-path" href="https://github.com/example/the-mountain/pull/42">github.com/example/the-mountain/pull/42</a>
+                      <button type="button" class="artifact-copy" data-full-path="https://github.com/example/the-mountain/pull/42" aria-label="Copy URL" title="Copy URL"><span data-ico="copy"></span></button>
+                    </li>
+                  </ul>
+                </div>
               </div>
 
               <div class="exhibit" data-when="retained" hidden>
@@ -423,10 +434,12 @@
                   <span class="exhibit-mark" data-exhibit="history"><img src="marks/history.svg" alt=""></span>
                   <h3 class="section-title" data-evidence-section="history">History</h3>
                 </div>
-                <dl class="detail-grid">
-                  <dt>history record</dt>
-                  <dd>Operator archive · retained</dd>
-                </dl>
+                <div class="exhibit-body">
+                  <dl class="detail-grid exhibit-readout">
+                    <dt>history record</dt>
+                    <dd>Operator archive · retained</dd>
+                  </dl>
+                </div>
               </div>
 
               <!-- ROUTE — filled target mark. Exact is a chip, not a paragraph.
@@ -438,20 +451,22 @@
                   <span class="route-chip route-chip--exact">Exact</span>
                   <button type="button" class="identity-load identity-expand" data-load-route aria-expanded="false" aria-label="Show which terminals claim this session" title="Show which terminals claim this session"><span data-ico="arrow-up-right"></span></button>
                 </div>
-                <div class="route-bind">
-                  <span class="route-bind-kicker">Session ID</span>
-                  <p>One cmux pane reports this session.</p>
-                </div>
-                <div class="identity-surfaces">
-                  <ul class="identity-surface-list" aria-label="Terminals claiming this session" hidden>
-                    <li class="identity-surface">
-                      <span class="identity-surface-line mono">ttys082 — one session open: Codex 8f3a (pid 41211, node …/codex)</span>
-                    </li>
-                  </ul>
-                  <ul class="identity-hints" hidden>
-                    <li class="identity-hint">open files: ~/.cmux/sessions/codex-8f3a.jsonl</li>
-                    <li class="identity-hint">hint: tmux ls | grep 8f3a</li>
-                  </ul>
+                <div class="exhibit-body">
+                  <div class="route-bind">
+                    <span class="route-bind-kicker">Session ID</span>
+                    <p>One cmux pane reports this session.</p>
+                  </div>
+                  <div class="identity-surfaces">
+                    <ul class="identity-surface-list" aria-label="Terminals claiming this session" hidden>
+                      <li class="identity-surface">
+                        <span class="identity-surface-line mono">ttys082 — one session open: Codex 8f3a (pid 41211, node …/codex)</span>
+                      </li>
+                    </ul>
+                    <ul class="identity-hints" hidden>
+                      <li class="identity-hint">open files: ~/.cmux/sessions/codex-8f3a.jsonl</li>
+                      <li class="identity-hint">hint: tmux ls | grep 8f3a</li>
+                    </ul>
+                  </div>
                 </div>
               </div>
 
@@ -462,26 +477,28 @@
                   <span class="route-chip route-chip--lock">Quarantined</span>
                   <button type="button" class="identity-load identity-expand" data-load-route aria-expanded="false" aria-label="Show which terminals claim this session" title="Show which terminals claim this session"><span data-ico="arrow-up-right"></span></button>
                 </div>
-                <div class="route-bind route-bind--lock">
-                  <span class="route-bind-kicker">Session ID</span>
-                  <p>ttys082 is claimed by two sessions. Routing is quarantined until one releases it.</p>
-                </div>
-                <div class="route-bind route-bind--warn">
-                  <span class="route-bind-kicker">Working folder</span>
-                  <p>Folder match cannot pick a single pane. This is the bind key, not the Workspace path.</p>
-                </div>
-                <p class="identity-note">A remembered binding to surface s-19c carried this session through a scan with no live evidence (last confirmed 14m ago).</p>
-                <div class="identity-surfaces">
-                  <ul class="identity-surface-list" aria-label="Terminals claiming this session" hidden>
-                    <li class="identity-surface is-contested">
-                      <span class="identity-surface-line mono">ttys082 — 2 sessions claim it: Codex 8f3a (pid 41211) · Claude c21e (pid 41902)</span>
-                      <span class="identity-surface-conflict">lsof evidence conflicts</span>
-                    </li>
-                  </ul>
-                  <ul class="identity-hints" hidden>
-                    <li class="identity-hint">open files: ~/.cmux/sessions/codex-8f3a.jsonl · ~/.cmux/sessions/claude-c21e.jsonl</li>
-                    <li class="identity-hint">hint: lsof -p 41211,41902 | grep ttys082</li>
-                  </ul>
+                <div class="exhibit-body">
+                  <div class="route-bind route-bind--lock">
+                    <span class="route-bind-kicker">Session ID</span>
+                    <p>ttys082 is claimed by two sessions. Routing is quarantined until one releases it.</p>
+                  </div>
+                  <div class="route-bind route-bind--warn">
+                    <span class="route-bind-kicker">Working folder</span>
+                    <p>Folder match cannot pick a single pane. This is the bind key, not the Workspace path.</p>
+                  </div>
+                  <p class="identity-note">A remembered binding to surface s-19c carried this session through a scan with no live evidence (last confirmed 14m ago).</p>
+                  <div class="identity-surfaces">
+                    <ul class="identity-surface-list" aria-label="Terminals claiming this session" hidden>
+                      <li class="identity-surface is-contested">
+                        <span class="identity-surface-line mono">ttys082 — 2 sessions claim it: Codex 8f3a (pid 41211) · Claude c21e (pid 41902)</span>
+                        <span class="identity-surface-conflict">lsof evidence conflicts</span>
+                      </li>
+                    </ul>
+                    <ul class="identity-hints" hidden>
+                      <li class="identity-hint">open files: ~/.cmux/sessions/codex-8f3a.jsonl · ~/.cmux/sessions/claude-c21e.jsonl</li>
+                      <li class="identity-hint">hint: lsof -p 41211,41902 | grep ttys082</li>
+                    </ul>
+                  </div>
                 </div>
               </div>
 
@@ -611,6 +628,20 @@
     });
     document.querySelectorAll("form.command-composer").forEach((form) => {
       form.addEventListener("submit", (e) => e.preventDefault());
+    });
+    document.querySelectorAll(".artifact-copy").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const row = btn.closest("li, .evidence-value");
+        const text = btn.getAttribute("data-full-path")
+          || row?.querySelector("[data-full-path]")?.getAttribute("data-full-path")
+          || row?.querySelector(".artifact-path, code")?.textContent?.trim();
+        if (!text) return;
+        try {
+          await navigator.clipboard.writeText(text);
+          btn.classList.add("is-copied");
+          window.setTimeout(() => btn.classList.remove("is-copied"), 900);
+        } catch { /* clipboard blocked in some file:// contexts */ }
+      });
     });
 
     paintIcons();

@@ -5,6 +5,7 @@
 **Implementation plan:** `docs/superpowers/plans/2026-08-12-evidence-column-exhibits-grok46.md`
 **Implementation model:** Cursor Grok 4.6 Extra Extra High Fast
 **Authoritative visual:** `docs/rhs-shots/evidence-dossier/mockup.html` + `mockup-delta.css` + `marks/`
+**Visual chrome spec:** `docs/superpowers/specs/2026-08-12-evidence-column-instrument-plates-design.md` (instrument plates, flat desk, copy law). That spec wins on chrome. This spec wins on exhibit set, omit-empty, and copy.
 **Adversarial review:** `docs/rhs-shots/evidence-dossier/REPORT.md` (field inventory). This spec wins where they disagree.
 **Not the target:** specimen-sheet files (`desktop.html`, `state-*.html`, `dossier.css`). Those are the earlier parallel look.
 
@@ -137,7 +138,7 @@ Banner “See routing evidence →” scrolls to `.identity-block` / `[data-evid
 
 Kill the sticky desk title “Evidence” (`drawer-section-head` in `renderAgentDrawer`). The first exhibit head is the start of the column.
 
-Each exhibit head:
+Each exhibit is a plate: nameplate head, then readout body. Head chrome:
 
 ```text
 [16px img] [h3 14.5px UI face, sentence case, no hairline] [optional chip] [optional ↗]
@@ -145,7 +146,7 @@ Each exhibit head:
 
 Do not restyle roster `.section-title`. Scope type overrides to `.drawer-desk .exhibit-head .section-title`.
 
-CSS lives in `src/web/styles.css`, ported from `docs/rhs-shots/evidence-dossier/mockup-delta.css`. No new `:root` tokens. No 28px tiles, no inset color rails on marks.
+CSS lives in `src/web/styles.css`, ported from `docs/rhs-shots/evidence-dossier/mockup-delta.css`. No new `:root` tokens. No 28px tiles, no inset color rails on marks. Desk fill stays flat (no gradient, no desk shadow). Plate chrome, copy law, and readout wells are specified in the visual chrome spec.
 
 ## Ownership — do not repeat
 
@@ -166,6 +167,8 @@ Do not re-open these.
 2. **identityTrace transport** — hydrate from `/api/debug/identity` only. Do not put the getter on the SSE fingerprint.
 3. **Succession** — omit-empty rows under Workspace when `succeededBy` / `supersedes` are present. Do not extend Lineage.
 4. **Sticky Evidence head** — delete it. If `--drawer-vitals-h` is only used to offset that head, delete the token and `.drawer-section-head { top: var(--drawer-vitals-h) }`.
+5. **Desk chrome** — flat sand/slate well + 2px ink rail. No cool gradient. No shadow on `.drawer-desk`. Plates may lift; the desk may not.
+6. **Copy** — in-tree files display relative to cwd and copy the absolute filesystem path. Workspace / Repository / Launch / Shell aria-labels stay CWD-COPY-1 (`Copy {label} path`).
 
 ## Out of scope
 
