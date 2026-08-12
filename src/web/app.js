@@ -90,7 +90,6 @@ import {
   roleView,
   roleSourceView,
   parseSenderHeader,
-  parseTaskEnvelope,
   senderOf,
   senderClaimText,
   withoutSenderHeader,
@@ -1505,7 +1504,7 @@ globalThis.TheAntHill = {
   parseSenderHeader, senderOf, senderClaimText, withoutSenderHeader, roleSourceView, specialtyLabel,
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
   sourceAgentName, presentationLabelKey, agentLabelEligible, programName, sessionTag, ambiguousNames, landingRosterNames,
-  preferredRenameTarget, terminalSourceName, stripSpinnerFrame, terminalIdentity, terminalBreadcrumb, focusDestinationHint, focusButtonLabel, taskMeaningfullyDifferent,
+  preferredRenameTarget, terminalSourceName, stripSpinnerFrame, terminalIdentity, terminalBreadcrumb, focusDestinationHint, focusButtonLabel,
   quietSourceLine, fullSourceDetail, verdictGate, conciseText,
   renderAgentRow, renderAgentColumnHeader, renderSummaryWidget,
   renderProgramDrawer, programRollupLine, programRollupCells, programHeadRollup,
@@ -1528,7 +1527,7 @@ globalThis.TheAntHill = {
   healthRemedy, instrumentRemedy,
   parseInvestigationResult, routeFromBullet,
   serverUnreachableHint, usageBarTitle, renderUsageSeriesChart,
-  renderAgentDrawer, renderChat, dedupeTurns, drawerObjective, drawerSessionTag, renderEvidence, renderNamesDisclosure,
+  renderAgentDrawer, renderChat, dedupeTurns, drawerSessionTag, renderEvidence, renderNamesDisclosure,
   parseHeartbeatStructured, programForTldrRepo, deterministicRepoStats, tldrAttentionCount, fleetFallbackLine,
   heartbeatTldrAgent,
   renderHealthRail, renderHealthTldrLane, repoScopedReadings, tldrRepoOrder,
@@ -4765,8 +4764,8 @@ function renderTldrRepoLane(lane, parsed, agent, time, repoName, attentionCount)
       const isWaiting = !!ag.attentionSignal || ag.lifecycle === "waiting";
       const sig = isWaiting ? "needs-you" : ag.lifecycle === "working" ? "working" : "ok";
       const cls = tldrCardSignalClass(sig);
-      const rawTask = String(ag.task || ag.lastHumanMessage || ag.displayName || "").trim().split("\n")[0].trim();
-      let cleanTask = rawTask;
+      const sourceTask = String(ag.task || ag.lastHumanMessage || ag.displayName || "").trim().split("\n")[0].trim();
+      let cleanTask = sourceTask;
       const low = cleanTask.toLowerCase();
       if (low.startsWith("handoff:")) cleanTask = "handoff";
       else if (low.includes("chrome tabs") && low.includes("chrome extension")) cleanTask = "Chrome tab check";
@@ -4779,7 +4778,7 @@ function renderTldrRepoLane(lane, parsed, agent, time, repoName, attentionCount)
       if (!cleanTask) cleanTask = ag.displayName || "working";
       const blockerText = isWaiting ? (ag.attentionSignal?.kind || "needs you") : "";
       const label = blockerText && blockerText !== "all clear" ? `${cleanTask} → ${blockerText}` : cleanTask;
-      proof.append(el("div", { class: "tldr-proof-row " + cls, role: "listitem", title: rawTask },
+      proof.append(el("div", { class: "tldr-proof-row " + cls, role: "listitem", title: sourceTask },
         el("span", { class: "tldr-proof-rail", "aria-hidden": "true" }),
         el("span", { class: "tldr-proof-name", text: isWaiting ? "waiting" : "working" }),
         el("span", { class: "tldr-proof-body" }, ...tldrMarkupNodes(label)),
@@ -8607,8 +8606,7 @@ function renderSwarmAnchor(agent, depth, activeChildren, pinned = false, board =
 }
 
 function rowSummary(agent) {
-  // Row stability: Task is the stable identity, refined every 5m via sidecar (data/task-summaries/<id>.txt, LLM)
-  // written by scripts/ant-hill-task-refine.py — no chat spam, no transcriptTail flicker.
+  // Row stability: prefer the provider-recorded task over fast-changing transcript prose.
   // Header per-repo TL;DR lives in prime:ant-heartbeat-monitor transcriptTail (fleet-wide, repo-specific),
   // rendered by renderHealthTldrLane() — row keeps Task so the collapsed roster stays readable.
   // transcriptTail [TL;DR] is still surfaced in drawer Chat (renderChat) and header, not here.
@@ -10211,41 +10209,6 @@ function drawerSessionTag(agent, ui = state) {
   return visibleSessionTag(agent, boardIndex(ui));
 }
 
-/* Two texts that begin the same way are the same text to a reader, even when
-   neither contains the other. Containment alone is not enough here: the server
-   truncates long prose and appends an ellipsis, so `lastUserMessage` is
-   frequently a shortened `task` ending in a character the original never had —
-   which defeats includes() in both directions while looking identical on screen.
-   Verified in a browser: the head and the "You" turn printed the same wall of
-   prompt preamble six lines apart, and every containment check passed. */
-function sameOpening(a, b) {
-  const n = Math.min(a.length, b.length, 120);
-  return n >= 24 && a.slice(0, n) === b.slice(0, n);
-}
-
-/* The standing objective, promoted out of Operate.
-
-   `taskMeaningfullyDifferent` compares `task` against `lastHumanMessage`, which
-   was the right question while Operate rendered that field — but Thread renders
-   `lastUserMessage`, and on a live board the task is frequently byte-identical
-   to THAT instead. Verified in a browser rather than in the diff: the head
-   printed a wall of prompt preamble and the "You" turn printed the same wall
-   again, six lines apart. Comparing against the wrong neighbour reintroduced the
-   exact duplication this overhaul was commissioned to remove.
-
-   So compare against every turn Thread can actually paint. */
-function drawerObjective(agent) {
-  const task = String(agent.task || "").trim();
-  if (!task || !taskMeaningfullyDifferent(agent)) return "";
-  const norm = normalizeCompareText(task);
-  if (!norm) return "";
-  for (const other of [agent.lastUserMessage, agent.lastAgentMessage]) {
-    const cmp = normalizeCompareText(String(other || "").trim());
-    if (cmp && sameOpening(norm, cmp)) return "";
-  }
-  return conciseText(task, 140);
-}
-
 /* The head said the same things twice, two lines apart, in different orders.
    The title is not one shape: `agentName` returns an operator alias, else the
    cmux terminal title, else `provider · folder` — so what it has already said
@@ -10314,22 +10277,6 @@ function renderAgentDrawer(pane, view) {
      separate it from. */
   const title = rowDisplayName(agent);
   const sourceLine = quietSourceLine(agent);
-
-  /* One task model, one rendering. The old head called drawerObjective while
-     the card below parsed rawTask separately, so two surfaces could disagree
-     about what the task was. Parse the full envelope once and let the command
-     header own both its concise face and its optional raw disclosure. */
-  const fullTask = String(agent.rawTask || agent.task || "").trim();
-  const parsedTask = parseTaskEnvelope(fullTask);
-  const taskObjective = agent.rawTask
-    ? withoutSenderHeader(String(agent.task || "")).trim()
-    : parsedTask.objective;
-  const taskMeta = [];
-  if (parsedTask.meta.from || parsedTask.meta.to)
-    taskMeta.push([parsedTask.meta.from, parsedTask.meta.to].filter(Boolean).join(" → "));
-  if (parsedTask.meta.date) taskMeta.push(parsedTask.meta.date);
-  if (parsedTask.meta.branch) taskMeta.push(parsedTask.meta.branch);
-  const showBrief = Boolean(fullTask) && fullTask !== taskObjective;
 
   const role = roleView(agent.role);
   const eyebrow = [role.key !== "agent" ? role.label : "", programName(program), sourceLine]
@@ -10421,19 +10368,7 @@ function renderAgentDrawer(pane, view) {
         /* Same value the subtraction below compares against — one call, so the
            two can never disagree about what the title said. */
         title,
-        tag ? el("span", { class: "inspector-tag mono", text: "#" + tag }) : null),
-      el("section", { class: "drawer-task-summary", "aria-labelledby": "drawer-task-label" },
-        el("span", { id: "drawer-task-label", class: "drawer-task-label", text: "Task" }),
-        taskObjective
-          ? el("p", { class: "drawer-task-objective", text: taskObjective })
-          : el("p", { class: "drawer-task-objective is-empty", title: "No prose task was recorded for this lane", text: "No task recorded" }),
-        taskMeta.length ? el("p", { class: "drawer-task-meta", text: taskMeta.join(" · ") }) : null,
-        showBrief
-          ? el("details", { class: "drawer-task-brief" },
-              el("summary", { class: "drawer-task-brief-summary" }, "Full brief"),
-              el("pre", { class: "drawer-task-brief-body", text: fullTask }))
-          : null),
-      ),
+        tag ? el("span", { class: "inspector-tag mono", text: "#" + tag }) : null)),
     el("div", { class: "verdict-side" }, closeButton()),
     hasFacts ? facts : null));
 
@@ -10446,10 +10381,8 @@ function renderAgentDrawer(pane, view) {
      `activity === "ended"` dressed as advice. A directive that is the same
      sentence on nine agents out of ten is not a directive. */
 
-  // Document (conversation) + Desk (evidence). The command header above owns
-  // the task, so the left column begins with the transcript instead of a second
-  // task card.
-  const chatBody = renderChatFeedBody(agent, state, { taskCarried: Boolean(fullTask) });
+  // Document (conversation) + Desk (evidence).
+  const chatBody = renderChatFeedBody(agent, state);
   const chatLead = renderTranscriptFeedLead(agent, state);
   const chatAlarm = feedAlarm(state.conn, state.snap && state.snap.generatedAt);
   const chatFreshness = chatAlarm
@@ -10460,15 +10393,12 @@ function renderAgentDrawer(pane, view) {
         chatAlarm.detail,
       )
     : null;
-  /* Mini chat window. The left column is Task on top and a chat APP below it —
-     and the feed IS the transcript: bubbles edge to edge, auto-loaded on open
+  /* Mini chat window. The feed IS the transcript: bubbles edge to edge, auto-loaded on open
      (selectEntity starts the fetch), with
      renderChat's preview standing in only while the record is loading, errored,
      or absent. Exceptional state and the manual older-history action lead the
      feed rather than consuming a separate footer row. The feed is the one
-     deliberate inner scroller on the left; at ≥861px the box takes the column
-     height Task doesn't use (Task height is intrinsic — 2-line clamp + meta +
-     closed brief).
+     deliberate inner scroller on the left.
      role="log" + tabindex make the feed itself a named, keyboard-reachable
      scroll region. */
   const chatScroll = el("div", { id: "drawer-chat-feed", class: "drawer-chat-scroll", role: "log", tabindex: "0", "aria-label": "Conversation" },
@@ -11291,19 +11221,6 @@ function normalizeCompareText(value) {
   return String(value || "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function taskMeaningfullyDifferent(agent) {
-  const task = typeof agent?.task === "string" ? agent.task.trim() : "";
-  if (!task) return false;
-  const message = typeof agent?.lastHumanMessage === "string" ? agent.lastHumanMessage.trim() : "";
-  if (!message) return true;
-  const a = normalizeCompareText(task);
-  const b = normalizeCompareText(message);
-  if (!a || a === b) return false;
-  if (a.length >= 12 && b.includes(a)) return false;
-  if (b.length >= 12 && a.includes(b)) return false;
-  return true;
-}
-
 function transcriptArtifact(agent) {
   return (agent.artifacts || []).find((a) => a && (a.kind === "transcript" || /transcript/i.test(a.label || "")));
 }
@@ -11421,9 +11338,9 @@ function dedupeTurns(candidates) {
 /* Thread — the drawer's one reading surface, and the only place a message is
    printed. Operate is gone: its "Last human message" was the SAME string as this
    panel's user turn on 37% of the board, and on active agents it was actually the
-   ASSISTANT's prose under a label claiming a human wrote it. Its task moved to the
-   head, its outcome note to the status line, its role/model chips were the third
-   printing of facts the row and the head already carry.
+   ASSISTANT's prose under a label claiming a human wrote it. Its provider task
+   remains a fallback turn, its outcome note moved to the status line, and its
+   role/model chips were the third printing of facts the row and head already carry.
 
    `lastHumanMessage` is deliberately NOT a fallback here. The server documents it
    as "the latest provider-shaped assistant OR user prose", so using it to fill a
@@ -11431,22 +11348,9 @@ function dedupeTurns(candidates) {
    the honest stand-in is the task the operator actually set. */
 function renderChat(agent, ui = state, opts = {}) {
   const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
-  /* `task` is the last candidate, and it is what stops three independently
-     reasonable dedup rules from composing into an empty drawer: the head
-     suppresses the objective when it equals the message, Thread reads only the
-     two turn fields, and the row summary is folded on the selected row — so an
-     agent whose only prose is `task` could end up with the head silent, Thread
-     saying "no messages", and the roster copy hidden, for a session whose task
-     is populated on the wire. Recovering it meant leaving the cockpit.
-
-     dedupeTurns still drops it when a turn already says the same thing, so this
-     adds a floor without adding a duplicate: at least one copy always survives. */
-  /* The task is a FLOOR, not a fixture: it appears here only when nothing else
-     carries it. The head already prints it as the objective whenever it differs
-     from the turns, so including it unconditionally rendered the same prose
-     twice in one drawer — six lines apart, which is the exact defect this
-     overhaul was commissioned to remove, reintroduced by the fix for the
-     opposite failure (a drawer that could go completely empty). */
+  /* The provider task is the final candidate: it keeps a turn-less drawer useful,
+     while dedupeTurns removes it whenever a recorded turn already carries the
+     same prose. The header does not render task content. */
   /* The agent's reply leads. An operator opens this to find out what the AGENT
      said; their own message is the one thing in the drawer they already know.
      Reading order was user-first, and with the panel's head, banner and vitals
@@ -11474,10 +11378,7 @@ function renderChat(agent, ui = state, opts = {}) {
     { role: "assistant", text: agent.lastAgentMessage },
     { role: "assistant", text: tldrTail },
     { role: "user", text: agent.lastUserMessage },
-    /* opts.taskCarried: the drawer's Task card prints agent.task in full just
-       above this chat, so the floor would be a literal reprint one card apart —
-       the head-objective check alone cannot see that carrier. */
-    { role: "task", text: (drawerObjective(agent) || opts.taskCarried) ? "" : agent.task },
+    { role: "task", text: agent.task },
   ].map((turn) => {
     const sender = senderView(turn.text, ui);
     if (!sender) return turn;

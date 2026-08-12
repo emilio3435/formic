@@ -524,46 +524,37 @@ describe("agent drawer: condensed by default, and honest about its numbers", () 
     expect(textOf(nodes[0]!)).toMatch(/opus 4\.8/i);
   });
 
-  test("raw detail ships collapsed, so the drawer opens as a summary", () => {
+  test("raw detail ships in the unselected Evidence mode", () => {
     /* The drawer's job is to condense. Evidence — vitals, paths, routing,
        transcript — is the raw material behind the summary and must be opt-in;
        shipping it open turns the cockpit back into a data dump.
 
        Read through the disclosure contract rather than a class name: anything
        that declares aria-expanded, and any <details>, must start closed. */
-    const disclosures = nodes.filter(
-      (node) => node.nodeType === 1 && ("aria-expanded" in node.attributes || node.tagName === "details"),
-    );
+    const tabs = nodes.filter((node) => node.nodeType === 1 && node.attributes.role === "tab");
+    const chat = tabs.find((node) => textOf(node) === "Chat");
+    const evidence = tabs.find((node) => textOf(node) === "Evidence");
 
-    expect(disclosures.length).toBeGreaterThan(0);
-    for (const disclosure of disclosures) {
-      if (disclosure.tagName === "details") {
-        expect("open" in disclosure.attributes).toBe(false);
-      } else {
-        expect(disclosure.attributes["aria-expanded"]).toBe("false");
-      }
-    }
+    expect(tabs).toHaveLength(2);
+    expect(chat?.attributes["aria-selected"]).toBe("true");
+    expect(evidence?.attributes["aria-selected"]).toBe("false");
   });
 
-  test("a collapsed disclosure still says what it hides", () => {
+  test("the unselected Evidence mode still says what it reveals", () => {
     /* Collapsed must not mean unlabelled. The drawer's disclosures moved from
        native details/summary to aria-expanded buttons ("the feed IS the
        transcript" — the foot's button expands the feed), so this reads the
        same contract on both mechanisms: every closed disclosure names what it
        will reveal, via its summary, its own text, or an aria-label. */
-    const collapsed = nodes.filter(
-      (node) => node.nodeType === 1 && (
-        (node.tagName === "details" && !("open" in node.attributes))
-        || node.attributes["aria-expanded"] === "false"
-      ),
+    const evidence = nodes.find(
+      (node) => node.nodeType === 1
+        && node.attributes.role === "tab"
+        && node.attributes["aria-selected"] === "false",
     );
 
-    expect(collapsed.length).toBeGreaterThan(0);
-    for (const disclosure of collapsed) {
-      const summary = walk(disclosure).find((node) => node.nodeType === 1 && node.tagName === "summary");
-      const label = summary ? textOf(summary) : (disclosure.attributes["aria-label"] ?? textOf(disclosure));
-      expect(String(label).trim().length).toBeGreaterThan(0);
-    }
+    expect(evidence).not.toBeUndefined();
+    expect(label(evidence!)).toBe("Evidence");
+    expect(evidence?.attributes["aria-controls"]).toBe("drawer-evidence-panel");
   });
 
   test("the two token magnitudes it reports are labelled apart", () => {

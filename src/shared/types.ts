@@ -368,9 +368,6 @@ export interface AgentSnapshot {
   model?: string;
   effort?: string;
   task?: string;
-  /** The source task as collected, present ONLY when a refined sidecar summary
-      replaced a real source task — the drawer's route back to the original. */
-  rawTask?: string;
   status: AgentStatus;
   statusReason: string;
   activity?: ActivityState;

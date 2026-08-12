@@ -4232,18 +4232,25 @@ describe("agent drawer — Document · Desk", () => {
     expect(text).not.toContain("session total");
   });
 
-  test("the objective surfaces the task only when it is not a restatement", () => {
-    /* Task moved out of Operate and onto the head, because it is the one field
-       that says WHICH lane this is: on the live board 19 of 22 active agents
-       share a display name while their tasks differ. It must still stay silent
-       when it merely echoes the message. */
-    const echoed = agent({ lastHumanMessage: "rebuild the collector", task: "Rebuild the collector." });
-    const distinct = agent({ lastHumanMessage: "rebuild the collector", task: "Port the SEM forecast rate limiter", model: "claude-opus-4-8" });
-    expect(M.taskMeaningfullyDifferent(echoed)).toBe(false);
-    expect(M.taskMeaningfullyDifferent(distinct)).toBe(true);
-    expect(M.drawerObjective(echoed)).toBe("");
-    expect(M.drawerObjective(distinct)).toContain("Port the SEM forecast rate limiter");
-    // And the role/model meta row is gone: model was a third printing.
+  test("provider task text remains a conversation floor, never a header widget", () => {
+    const selected = agent({
+      lastHumanMessage: "rebuild the collector",
+      lastUserMessage: "",
+      lastAgentMessage: "",
+      task: "Port the SEM forecast rate limiter",
+      model: "claude-opus-4-8",
+    });
+    const pane = newNode("div");
+    withDom(() => M.renderAgentDrawer(pane, {
+      kind: "agent",
+      agent: selected,
+      program: { id: "p", name: "P", agents: [selected] },
+    }));
+    expect(byClass(pane, "drawer-task-summary")).toBeNull();
+    expect(textOf(byClass(pane, "drawer-session-header"))).not.toContain("Port the SEM forecast");
+    expect(textOf(byClass(pane, "drawer-chat-scroll"))).toContain("Port the SEM forecast");
+    expect(M.drawerObjective).toBeUndefined();
+    expect(M.taskMeaningfullyDifferent).toBeUndefined();
     expect(source).not.toContain('class: "operate-meta"');
   });
 });
@@ -4260,17 +4267,9 @@ describe("RHSP command header consolidation", () => {
     return pane;
   });
 
-  test("one command header owns identity, task, state, and operational facts", () => {
-    const rawTask = [
-      "From: orchestrator-1",
-      "To: lane-fe-2",
-      "Branch: fix/rhsp-command-header",
-      "",
-      "Replace the redundant drawer header. Keep the full brief available.",
-    ].join("\n");
+  test("one command header owns identity, state, and operational facts", () => {
     const drawer = renderDrawer({
       task: "Replace the redundant drawer header",
-      rawTask,
       role: "orchestrator",
       identity: { base: "Admin Hub UX Updates V3 - Highlight Row" },
       model: "sol 5.6",
@@ -4287,17 +4286,14 @@ describe("RHSP command header consolidation", () => {
 
     const header = byClass(drawer, "drawer-session-header");
     expect(header).not.toBeNull();
-    expect(byClass(header, "drawer-task-summary")).not.toBeNull();
-    expect(byClass(header, "drawer-task-objective")).not.toBeNull();
-    expect(byClass(header, "drawer-task-brief")?.tagName).toBe("details");
-    expect(allByClass(drawer, "drawer-task-objective")).toHaveLength(1);
+    expect(byClass(header, "drawer-task-summary")).toBeNull();
     expect(byClass(drawer, "drawer-header-vitals")).toBeNull();
     expect(byClass(drawer, "drawer-chat-task")).toBeNull();
 
     const headerText = textOf(header).replace(/\s+/g, " ");
     expect(headerText).toContain("Orchestrator · Home");
-    expect(headerText).toContain("Task");
-    expect(headerText).toContain("Replace the redundant drawer header");
+    expect(headerText).not.toContain("Task");
+    expect(headerText).not.toContain("Replace the redundant drawer header");
     expect(textOf(byClass(header, "drawer-session-run"))).toBe("Codex / sol 5.6");
     expect(byClass(header, "drawer-session-state")).toBeNull();
     expect(byClass(header, "status-line")).toBeNull();
@@ -4315,10 +4311,9 @@ describe("RHSP command header consolidation", () => {
     expect(gauge?.attributes?.["aria-valuenow"]).toBe("28");
     expect(gauge?.attributes?.["aria-label"]).toBe("Context used: 28%");
     expect(textOf(byClass(header, "drawer-session-usage"))).toBe("Session2.2M");
-    const sessionDetails = byClass(header, "drawer-session-details");
-    expect(sessionDetails?.tagName).toBe("details");
-    expect(textOf(byClass(sessionDetails, "drawer-session-details-summary"))).toBe("Session details");
-    expect(byClass(sessionDetails, "drawer-session-facts")).not.toBeNull();
+    const facts = byClass(header, "drawer-session-facts");
+    expect(byClass(header, "drawer-session-details")).toBeNull();
+    expect(facts?.parent).toBe(header);
 
     const doc = byClass(drawer, "drawer-doc");
     expect(doc?.attributes?.["aria-label"]).toBe("Conversation");
@@ -7058,19 +7053,16 @@ describe("FE-B: harness-backed client behavior", () => {
       .not.toContain("needs-you");
   });
 
-  /* Regression caught in a browser screenshot: the drawer rendered the task as
-     the head objective AND as a Thread turn, six lines apart. The task is a
-     floor for the case where nothing else carries the session's prose — not a
-     fixture that prints alongside the head. */
-  test("(2b) the task never prints as both the objective and a Thread turn", () => {
+  test("(2b) provider task is the final deduplicated conversation candidate", () => {
     const both = agent({ task: "Port the SEM forecast rate limiter", lastUserMessage: "start with the buckets", lastAgentMessage: "done" });
-    expect(M.drawerObjective(both)).toContain("Port the SEM forecast");
-    expect(textOf(withDom(() => M.renderChat(both)))).not.toContain("Port the SEM forecast");
+    const rendered = textOf(withDom(() => M.renderChat(both)));
+    expect(rendered.match(/Port the SEM forecast/g)).toHaveLength(1);
 
-    // With no turns at all the floor still holds: the drawer cannot go empty.
+    // With no turns at all the floor still holds, and an exact turn duplicate wins once.
     const bare = agent({ task: "Port the SEM forecast rate limiter", lastUserMessage: "", lastAgentMessage: "", lastHumanMessage: "Port the SEM forecast rate limiter" });
-    expect(M.drawerObjective(bare)).toBe("");
     expect(textOf(withDom(() => M.renderChat(bare)))).toContain("Port the SEM forecast");
+    const duplicate = agent({ task: "Port the SEM forecast rate limiter", lastUserMessage: "Port the SEM forecast rate limiter", lastAgentMessage: "" });
+    expect(textOf(withDom(() => M.renderChat(duplicate))).match(/Port the SEM forecast/g)).toHaveLength(1);
   });
 
   /* Cockpit audit §5 and §11: widgets that render their empty state instead of
@@ -10689,7 +10681,7 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
     expect(requiredSlice(styles, /\n\.pane-list \{[^}]*\}/, ".pane-list")).not.toMatch(/overflow-y\s*:/);
   });
 
-  test("(2) Task+Chat and Evidence consume one bounded content region", () => {
+  test("(2) Conversation and Evidence consume one bounded content region", () => {
     /* The pane, not the desk's intrinsic content, owns height. Wide inspectors
        use one bounded row; narrow inspectors switch between two in-flow regions
        without taking permanent transcript height. The document itself
@@ -10713,9 +10705,7 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
     expect(styles).not.toMatch(/\.drawer-chat \{[^}]*height: 68vh/);
   });
 
-  test("role and Task meet in the command header, never in Evidence", () => {
-    /* Identity and intent belong together at the top. Evidence is reserved for
-       provenance instead of repeating the role as a badge. */
+  test("role stays in the command header while provider task stays in Conversation", () => {
     const selected = agent({ task: "Ship the thing", role: "orchestrator" });
     const program = { id: "p", name: "P", agents: [selected] };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -10727,9 +10717,10 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
     expect(byClass(drawer, "drawer-role-badge")).toBeNull();
     const header = byClass(drawer, "drawer-session-header");
     expect(textOf(byClass(header, "drawer-session-eyebrow"))).toContain("Orchestrator");
-    expect(textOf(byClass(header, "drawer-task-objective"))).toBe("Ship the thing");
+    expect(byClass(header, "drawer-task-summary")).toBeNull();
+    expect(textOf(header)).not.toContain("Ship the thing");
+    expect(textOf(byClass(drawer, "drawer-chat-scroll"))).toContain("Ship the thing");
     expect(byClass(drawer, "evidence-role")).toBeNull();
-    // Honest empty face: same Task label, explicit empty copy, no brief.
     const bare = agent({ task: "", role: "orchestrator" });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const bareDrawer: any = withDom(() => {
@@ -10737,92 +10728,17 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
       M.renderAgentDrawer(pane, { kind: "agent", agent: bare, program: { id: "p", name: "P", agents: [bare] } });
       return pane;
     });
-    const bareTask = byClass(bareDrawer, "drawer-task-summary");
-    expect(bareTask).not.toBeNull();
-    expect(textOf(byClass(bareTask, "drawer-task-objective"))).toBe("No task recorded");
-    expect(byClass(bareTask, "drawer-task-objective")?.className.split(/\s+/)).toContain("is-empty");
-    expect(byClass(bareTask, "drawer-task-brief")).toBeNull();
+    expect(byClass(bareDrawer, "drawer-task-summary")).toBeNull();
     expect(byClass(bareDrawer, "drawer-role-badge")).toBeNull();
   });
 
-  test("Task widget anatomy: objective + meta + closed Full brief from one DOM", () => {
-    /* One anatomy for every envelope shape. Face shows prose only; headers
-       become a META line; the raw envelope folds behind a closed disclosure.
-       rawTask present → closed face is the refined task, brief is the original. */
-    const handoff = [
-      "[from orchestrator-1 run 578d9487-dceb-4034-b4f1-97a74ae247fd]",
-      "Date: 2026-08-09",
-      "From: orchestrator-1",
-      "To: lane-fe-2",
-      "Branch: chore/docker-local-ci",
-      "",
-      "Take over the drawer task widget. Keep the scrollport inside Full brief.",
-    ].join("\n");
-    const program = { id: "p", name: "P", agents: [] as unknown[] };
-
-    const renderTask = (overrides: Record<string, unknown>) => withDom(() => {
-      const a = agent(overrides);
-      program.agents = [a];
-      const pane = newNode("div");
-      M.renderAgentDrawer(pane, { kind: "agent", agent: a, program });
-      return byClass(pane, "drawer-task-summary");
-    });
-
-    // Kickoff prose → first sentence on the face; no invented meta; brief holds the rest.
-    const kickoff = renderTask({
-      task: "Redesign the filter bar so tab counts follow the working set. Then wire the aria-live region.",
-    });
-    expect(kickoff).not.toBeNull();
-    expect(textOf(byClass(kickoff, "drawer-task-objective"))).toBe(
-      "Redesign the filter bar so tab counts follow the working set.",
-    );
-    expect(byClass(kickoff, "drawer-task-meta")).toBeNull();
-    expect(byClass(kickoff, "drawer-task-full")).toBeNull();
-    const kickBrief = byClass(kickoff, "drawer-task-brief");
-    expect(kickBrief).not.toBeNull();
-    expect(kickBrief?.tagName).toBe("details");
-    expect("open" in (kickBrief?.attributes || {})).toBe(false);
-    expect(textOf(byClass(kickBrief, "drawer-task-brief-summary"))).toBe("Full brief");
-    expect(textOf(byClass(kickBrief, "drawer-task-brief-body"))).toContain("Then wire the aria-live region.");
-
-    // Handoff headers → META line; hex ids stay out of the face.
-    const dump = renderTask({ task: handoff });
-    expect(textOf(byClass(dump, "drawer-task-objective"))).toBe("Take over the drawer task widget.");
-    expect(textOf(byClass(dump, "drawer-task-objective"))).not.toMatch(/[0-9a-f]{8}-/);
-    expect(textOf(byClass(dump, "drawer-task-meta"))).toBe(
-      "orchestrator-1 → lane-fe-2 · 2026-08-09 · chore/docker-local-ci",
-    );
-    expect(textOf(byClass(dump, "drawer-task-brief-body"))).toContain("Date: 2026-08-09");
-
-    // rawTask present: face = refined task; Full brief = original envelope.
-    const refined = renderTask({
-      task: "Redesigning the drawer Task widget",
-      rawTask: handoff,
-    });
-    expect(textOf(byClass(refined, "drawer-task-objective"))).toBe("Redesigning the drawer Task widget");
-    expect(textOf(byClass(refined, "drawer-task-meta"))).toContain("orchestrator-1 → lane-fe-2");
-    expect(textOf(byClass(refined, "drawer-task-brief-body"))).toBe(handoff);
-
-    // Image-only placeholders: honest empty face; brief still holds the raw.
-    const images = renderTask({ task: '<image name="shot-1440.png"> <image name="shot-390.png">' });
-    expect(textOf(byClass(images, "drawer-task-objective"))).toBe("No task recorded");
-    expect(byClass(images, "drawer-task-objective")?.className.split(/\s+/)).toContain("is-empty");
-    expect(byClass(images, "drawer-task-objective")?.attributes?.title).toBe(
-      "No prose task was recorded for this lane",
-    );
-    expect(textOf(byClass(images, "drawer-task-brief-body"))).toContain("<image");
-
-    // One-liner equal to its face → no disclosure.
-    const one = renderTask({ task: "Fix the flaky cursor collector" });
-    expect(textOf(byClass(one, "drawer-task-objective"))).toBe("Fix the flaky cursor collector");
-    expect(byClass(one, "drawer-task-brief")).toBeNull();
-
-    // Scroll discipline (amended): no widget height cap; only the open brief body scrolls.
-    expect(styles).not.toContain(".drawer-chat-task");
-    expect(styles).toMatch(/\.drawer-task-brief-body \{[^}]*max-height:\s*18rem/);
-    expect(styles).toMatch(/\.drawer-task-brief-body \{[^}]*overflow-y:\s*auto/);
-    expect(styles).toMatch(/\.drawer-task-objective \{[^}]*-webkit-line-clamp:\s*2/);
-    expect(styles).not.toMatch(/\.drawer-task-full\s*\{/);
+  test("the retired Task widget leaves no DOM, parser, or style contract", () => {
+    expect(source).not.toContain("parseTaskEnvelope");
+    expect(source).not.toContain("drawer-task-summary");
+    expect(source).not.toContain("drawer-task-brief");
+    expect(styles).not.toContain("drawer-task-summary");
+    expect(styles).not.toContain("drawer-task-brief");
+    expect(html).not.toContain("Full brief");
   });
 
   test("RHSP-B: chat feed owns the document column; one transcript chrome surface", () => {
@@ -10857,16 +10773,17 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
     });
     expect(byClass(drawer, "drawer-transcript")).toBeNull();
     expect(byClass(drawer, "drawer-chat-scroll")).not.toBeNull();
-    // Task moved to the command header; Conversation contains no duplicate title.
+    // Conversation contains no duplicate Task or Transcript chrome.
     const doc = byClass(drawer, "drawer-doc");
     const titles = findAll(doc, (n: any) => n.className && String(n.className).split(/\s+/).includes("section-title"))
       .map((n: any) => textOf(n).replace(/\s+/g, " ").trim());
     expect(titles.filter((t: string) => /task/i.test(t))).toHaveLength(0);
     expect(titles.filter((t: string) => /transcript/i.test(t))).toHaveLength(0);
-    expect(allByClass(drawer, "drawer-task-objective")).toHaveLength(1);
+    expect(allByClass(drawer, "drawer-task-objective")).toHaveLength(0);
+    expect(textOf(byClass(drawer, "drawer-chat-scroll"))).toContain("Ship the feed height fix");
   });
 
-  test("RHSP-A: a turn-less cursor drawer still paints Task, quiet feed, and dock", () => {
+  test("RHSP-A: a turn-less cursor drawer still paints a quiet feed and dock", () => {
     /* Live defect 2026-08-09: unique-cwd Cursor rows publish controlState
        "linked" while Send is disabled. quarantineBrief(linked) is null, and
        renderControlBanner read .title off it — the drawer died after the head
@@ -10903,8 +10820,7 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
       M.renderAgentDrawer(pane, { kind: "agent", agent: cursor, program });
       return pane;
     });
-    expect(byClass(drawer, "drawer-task-summary")).not.toBeNull();
-    expect(textOf(byClass(drawer, "drawer-task-objective"))).toBe("No task recorded");
+    expect(byClass(drawer, "drawer-task-summary")).toBeNull();
     expect(byClass(drawer, "drawer-chat")).not.toBeNull();
     expect(byClass(drawer, "drawer-controls-strip")).not.toBeNull();
     expect(textOf(byClass(drawer, "drawer-chat-scroll"))).toContain(

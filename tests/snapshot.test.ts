@@ -2633,18 +2633,6 @@ describe("session kind is published with provenance, and evidence beats prose", 
     expect(agentIn(snapshot, "codex:exec-a").sessionKindSource).toBe("launch-evidence");
   });
 
-  test("the exact task-refiner codex exec session remains ordinary automation", () => {
-    const snapshot = buildFrom(collected({
-      id: "codex:task-refiner",
-      sourceSessionId: "task-refiner",
-      launch: { entrypoint: "codex_exec", promptSource: "exec" },
-      task: "You are Task refiner for Ant Hill. Given agent codex:worker, summarize the task.",
-    }));
-    const agent = agentIn(snapshot, "codex:task-refiner");
-    expect(agent.sessionKind).toBe("automation");
-    expect(agent.sessionKindSource).toBe("launch-evidence");
-  });
-
   test("a codex tui session is observed work", () => {
     const snapshot = buildFrom(collected({
       id: "codex:tui-w",

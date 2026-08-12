@@ -3057,37 +3057,6 @@ body.feed-frozen .programs { opacity: 0.62; }
   vertical-align: baseline;
   display: inline-block;
 }
-.drawer-task-summary {
-  display: grid;
-  gap: 0.3rem;
-  max-width: 78ch;
-  padding: 0.05rem 0 0.1rem;
-}
-.drawer-task-label {
-  font: 500 11.5px/1.2 var(--font-mono);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-.drawer-task-objective {
-  margin: 0;
-  font-size: 15.5px;
-  line-height: 1.45;
-  color: var(--ink);
-  font-weight: 500;
-  overflow-wrap: anywhere;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.drawer-task-objective.is-empty { font-style: italic; color: var(--faint-strong); }
-.drawer-task-meta { margin: 0; font: 500 12.5px/1.4 var(--font-mono); color: var(--muted); overflow-wrap: anywhere; }
-.drawer-task-brief { margin: 0; width: fit-content; }
-.drawer-task-brief-summary { cursor: pointer; user-select: none; font: 500 12px/1.35 var(--font-mono); color: var(--slate); list-style: none; text-decoration: underline; text-underline-offset: 2px; }
-.drawer-task-brief-summary::-webkit-details-marker { display: none; }
-.drawer-task-brief-summary:hover { color: var(--ink); }
-.drawer-task-brief-body { margin: 6px 0 0; font: 400 12.5px/1.5 var(--font-mono); color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; overflow-y: auto; max-height: 18rem; }
 .drawer-session-facts {
   grid-column: 1 / -1;
   display: grid;
@@ -5328,8 +5297,7 @@ body.feed-frozen .programs { opacity: 0.62; }
 .repo-pr:hover,
 .dw-chip:hover,
 .dw-backlink:hover b,
-.dw-roster-row:hover .dw-roster-name,
-.drawer-task-brief-summary { color: var(--color-interactive); }
+.dw-roster-row:hover .dw-roster-name { color: var(--color-interactive); }
 .settings-input { border-color: var(--color-border-default); background: var(--color-surface-card); color: var(--color-text-primary); }
 .settings-actions,
 .settings-local { border-color: var(--color-border-subtle); }
