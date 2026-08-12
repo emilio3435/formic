@@ -231,7 +231,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
      contract exists to remove. Measured on the live board 2026-08-04: 805 of 821
      sessions shared a name with at least one other, so this pass is the
      difference between a board of 51 names and a board of 821. */
-  const named = sources.filter(
+  const named = authoritativeSources.filter(
     (source): source is CollectedAgent & { identity: AgentIdentity } => Boolean(source.identity),
   );
   /* An authored title, where one has been written down, outranks everything the
@@ -286,7 +286,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
   const childCounts = new Map<string, number>();
   const parentById = new Map<string, string>();
   const lineageAgreementById = new Map<string, LineageAgreement>();
-  for (const source of sources) {
+  for (const source of authoritativeSources) {
     const declared = declaredById.get(source.id);
     const nativeParentId = source.parentSourceSessionId
       ? `${source.provider}:${source.parentSourceSessionId}`

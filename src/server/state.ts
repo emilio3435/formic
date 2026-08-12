@@ -90,6 +90,8 @@ const DEFAULT_COLLECTORS: HubCollectors = {
 };
 
 const MIN_REFRESH_WATCHDOG_MS = 12_000;
+const MIN_CONTROL_AGGREGATE_TIMEOUT_MS = 10_000;
+const PROVIDER_FINALIZATION_ALLOWANCE_MS = 1_000;
 
 async function readBoundedTranscriptTail(
   path: string,
@@ -466,17 +468,13 @@ export class HubState {
       this.#refreshingCmux = false;
     }
     if (options.cmux) this.#cmuxRequested = true;
-    const providerWaitMs = this.settingsReader?.().providerWaitMs ?? DEFAULT_PROVIDER_WAIT_MS;
-    const watchdogMs = Math.max(MIN_REFRESH_WATCHDOG_MS, providerWaitMs + 2_000);
     const generation = ++this.#refreshGeneration;
-    const refresh = this.#drainRefreshes(generation, providerWaitMs).finally(() => {
+    const refresh = this.#drainRefreshes(generation).finally(() => {
       if (this.#refreshing !== refresh) return;
       this.#refreshing = undefined;
       this.#refreshStartedAtMs = undefined;
       this.#refreshWatchdogMs = undefined;
     });
-    this.#refreshStartedAtMs = Date.now();
-    this.#refreshWatchdogMs = watchdogMs;
     this.#refreshing = refresh;
     return refresh;
   }
@@ -491,15 +489,19 @@ export class HubState {
     return generation !== this.#refreshGeneration;
   }
 
-  async #drainRefreshes(generation: number, providerWaitMs: number): Promise<HubSnapshot> {
+  async #drainRefreshes(generation: number): Promise<HubSnapshot> {
     let snapshot = this.#snapshot;
     do {
       if (this.#superseded(generation)) return this.#snapshot;
       const cmux = this.#cmuxRequested;
       this.#cmuxRequested = false;
       this.#refreshingCmux = cmux;
+      const settings = this.settingsReader?.();
+      const providerWaitMs = settings?.providerWaitMs ?? DEFAULT_PROVIDER_WAIT_MS;
+      this.#refreshStartedAtMs = Date.now();
+      this.#refreshWatchdogMs = Math.max(MIN_REFRESH_WATCHDOG_MS, providerWaitMs + 2_000);
       try {
-        snapshot = await this.#performRefresh({ cmux }, generation, providerWaitMs);
+        snapshot = await this.#performRefresh({ cmux }, generation, providerWaitMs, settings);
       } finally {
         // Never clear a flag the pass that replaced this one is relying on.
         if (!this.#superseded(generation)) this.#refreshingCmux = false;
@@ -539,6 +541,7 @@ export class HubState {
     options: { cmux?: boolean },
     generation: number,
     providerWaitMs: number,
+    settings: HubSettings | undefined,
   ): Promise<HubSnapshot> {
     const cmuxAttemptAt = options.cmux ? new Date().toISOString() : undefined;
     /* From the union, not a second list. This WAS a literal, and the literal
@@ -547,7 +550,6 @@ export class HubState {
        the source unhealthy — with a green suite, because nothing tested that
        every collected provider survives the refresh. */
     const providers: Provider[] = [...PROVIDERS];
-    const settings = this.settingsReader?.();
     this.#scanWindowHours = settings?.scanWindowHours ?? this.#scanWindowHours;
     const windowMs = Math.max(1, this.#scanWindowHours) * 60 * 60 * 1_000 || DEFAULT_SESSION_WINDOW_MS;
     /* Read every refresh, not at construction: a settings POST triggers a
@@ -562,6 +564,7 @@ export class HubState {
     type NotificationsResult = Awaited<ReturnType<HubCollectors["notifications"]>>;
     type IdentityResult = Awaited<ReturnType<HubCollectors["enrichIdentity"]>>;
     let sessionsResult: SessionsResult | undefined;
+    const providerSettledAtMs: Partial<Record<Provider, number>> = {};
     let lastKnownAgents: CollectedAgent[] = [];
     const lastKnownSourceReasons: Partial<Record<Provider, string>> = {};
     let cmuxResult: CmuxResult | undefined;
@@ -571,24 +574,38 @@ export class HubState {
     let notificationsResult: NotificationsResult | undefined;
     let identityResult: IdentityResult | undefined;
     const collectionErrors: string[] = [];
+    let controlDeadlineExpired = false;
     const capture = async <T>(
       label: string,
       work: Promise<T>,
       assign: (value: T) => void,
     ): Promise<void> => {
       try {
-        assign(await work);
+        const value = await work;
+        if (!controlDeadlineExpired) assign(value);
       } catch (error) {
-        collectionErrors.push(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+        if (!controlDeadlineExpired) {
+          collectionErrors.push(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+        }
       }
     };
-    const aggregateTimeoutMs = this.refreshAggregateTimeoutMs ?? providerWaitMs;
-    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-    const deadlineReached = new Promise<void>((resolve) => {
-      deadlineTimer = setTimeout(resolve, aggregateTimeoutMs);
+    const providerTimeoutMs = this.refreshAggregateTimeoutMs ?? providerWaitMs;
+    const controlTimeoutMs = this.refreshAggregateTimeoutMs
+      ?? Math.max(MIN_CONTROL_AGGREGATE_TIMEOUT_MS, providerWaitMs + PROVIDER_FINALIZATION_ALLOWANCE_MS);
+    let providerDeadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    const providerDeadlineReached = new Promise<void>((resolve) => {
+      providerDeadlineTimer = setTimeout(resolve, providerTimeoutMs);
+    });
+    let controlDeadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    const controlDeadlineReached = new Promise<void>((resolve) => {
+      controlDeadlineTimer = setTimeout(() => {
+        controlDeadlineExpired = true;
+        resolve();
+      }, controlTimeoutMs);
     });
     const providerCollection = this.collectors.sessionProvider && this.collectors.finalizeSessions
       ? (async () => {
+          const configKey = `${windowMs}:${thresholds?.freshMs ?? "default"}:${thresholds?.quietMs ?? "default"}`;
           const selection = await this.#providerSettlement.settle(
             providers,
             async (provider) => {
@@ -601,21 +618,29 @@ export class HubState {
                 };
               }
             },
-            { waitMs: providerWaitMs, wait: () => deadlineReached },
+            { waitMs: providerTimeoutMs, configKey, wait: () => providerDeadlineReached },
           );
+          Object.assign(providerSettledAtMs, selection.settledAtMs);
           const selected = Object.fromEntries(providers.map((provider) => {
             const current = selection.current[provider];
             if (current) return [provider, current];
             const seconds = providerWaitMs / 1_000;
             const label = `${provider[0]!.toUpperCase()}${provider.slice(1)}`;
             const fallback = selection.lastKnown[provider];
+            const hasFallbackRows = (fallback?.value.length ?? 0) > 0;
             const reason = `${label} collection exceeded the ${seconds}s provider wait; `
-              + (fallback ? `showing last-known ${label} sessions.` : `no last-known ${label} sessions are available.`);
-            if (fallback) lastKnownSourceReasons[provider] = reason;
+              + (hasFallbackRows ? `showing last-known ${label} sessions.` : `no last-known ${label} sessions are available.`);
+            if (hasFallbackRows) lastKnownSourceReasons[provider] = reason;
             return [provider, { value: [], errors: [reason] }];
           })) as SessionProviderResults;
-          sessionsResult = this.collectors.finalizeSessions!(selected, homedir());
-          lastKnownAgents = providers.flatMap((provider) => selection.lastKnown[provider]?.value ?? []);
+          try {
+            sessionsResult = this.collectors.finalizeSessions!(selected, homedir());
+            lastKnownAgents = providers.flatMap((provider) => selection.lastKnown[provider]?.value ?? []);
+          } catch (error) {
+            collectionErrors.push(
+              `session collection failed: provider fleet finalization failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
         })()
       : capture("session collection failed", this.collectors.sessions(homedir(), windowMs, thresholds), (value) => {
           sessionsResult = value;
@@ -685,20 +710,25 @@ export class HubState {
     });
     await Promise.race([
       aggregate,
-      deadlineReached,
+      controlDeadlineReached,
     ]);
     if (this.collectors.sessionProvider && this.collectors.finalizeSessions) {
+      /* Coordinator settlement is independently bounded by the earlier
+         provider deadline, which is never longer than this control deadline.
+         Awaiting it here therefore cannot turn a hung provider into an
+         unbounded control pass; it only lets the selected fleet finalizer run. */
       await providerCollection;
       /* Let the aggregate's completion continuation run when providers were
          the only work. A provider timeout is already reported by that source;
          it is not also an aggregate failure. */
       await Promise.resolve();
     }
-    if (aggregateSettled && deadlineTimer) clearTimeout(deadlineTimer);
+    if (providerDeadlineTimer) clearTimeout(providerDeadlineTimer);
+    if (aggregateSettled && controlDeadlineTimer) clearTimeout(controlDeadlineTimer);
     /* Collection is done; from here every line writes. If the watchdog gave up
        on this pass while it was collecting, stop before the first write. */
     if (this.#superseded(generation)) return this.#snapshot;
-    const deadlineError = `collector aggregate exceeded ${aggregateTimeoutMs}ms deadline`;
+    const deadlineError = `collector aggregate exceeded ${controlTimeoutMs}ms deadline`;
     if (!aggregateSettled) {
       collectionErrors.push(deadlineError);
       console.error(`[HubState] ${deadlineError}; publishing partial snapshot`);
@@ -748,7 +778,12 @@ export class HubState {
     for (const provider of providers) {
       const source = sessions[provider];
       this.#sourceHealth[provider] = source.errors.length === 0
-        ? { healthy: true, lastHealthyAt: collectedAt }
+        ? {
+            healthy: true,
+            lastHealthyAt: providerSettledAtMs[provider] === undefined
+              ? collectedAt
+              : new Date(providerSettledAtMs[provider]!).toISOString(),
+          }
         : { healthy: false, lastHealthyAt: this.#sourceHealth[provider].lastHealthyAt };
     }
     const collectedAgents = providers.flatMap((provider) => sessions[provider].value);

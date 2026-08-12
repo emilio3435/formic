@@ -1134,6 +1134,217 @@ describe("cmux collection time truth", () => {
     unsubscribe();
   });
 
+  test("an empty prior success does not claim last-known rows after provider timeout", async () => {
+    let pass = 0;
+    const never = new Promise<never>(() => {});
+    const collectors: HubCollectors = {
+      sessions: async () => emptySessions(),
+      sessionProvider: async (provider) => pass === 0
+        ? { value: [], errors: [], absent: provider === "codex" }
+        : provider === "codex" ? never : { value: [], errors: [] },
+      finalizeSessions: (results) => results,
+      cmux: async () => ({ value: [], errors: [] }),
+      notifications: async () => ({ value: [], errors: [] }),
+      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+    };
+    const state = new HubState(recordingRunner([]), { has: () => false, archive: async () => {} }, [], {
+      collectors,
+      refreshAggregateTimeoutMs: 5,
+      settingsReader: () => normalizeSettings(undefined),
+    });
+    await state.refresh();
+    pass = 1;
+
+    const degraded = await state.refresh();
+    expect(degraded.programs.flatMap(({ agents }) => agents)).toEqual([]);
+    expect(degraded.controlHealth.errors.join(" ")).toContain("no last-known Codex sessions are available");
+    expect(degraded.controlHealth.errors.join(" ")).not.toContain("showing last-known Codex sessions");
+    expect(degraded.totals.sourceHealth?.absent).toBe(0);
+  });
+
+  test("a throwing provider finalizer degrades session truth without rejecting the refresh", async () => {
+    const collectors: HubCollectors = {
+      sessions: async () => emptySessions(),
+      sessionProvider: async () => ({ value: [], errors: [] }),
+      finalizeSessions: () => { throw new Error("fleet finalizer exploded"); },
+      cmux: async () => ({ value: [], errors: [] }),
+      notifications: async () => ({ value: [], errors: [] }),
+      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+    };
+    const state = new HubState(recordingRunner([]), { has: () => false, archive: async () => {} }, [], {
+      collectors,
+      refreshAggregateTimeoutMs: 20,
+      settingsReader: () => normalizeSettings(undefined),
+    });
+
+    const snapshot = await state.refresh();
+    expect(snapshot.controlHealth.errors.join(" ")).toContain("fleet finalizer exploded");
+    expect(snapshot.totals.sourceHealth?.healthy).toBe(0);
+  });
+
+  test("a queued cmux pass resets watchdog age and observes the shared scan as fresh", async () => {
+    let nowMs = 1_000;
+    const now = spyOn(Date, "now").mockImplementation(() => nowMs);
+    let resolveProvider!: (value: { value: CollectedAgent[]; errors: string[] }) => void;
+    const provider = new Promise<{ value: CollectedAgent[]; errors: string[] }>((resolve) => {
+      resolveProvider = resolve;
+    });
+    let markCmuxStarted!: () => void;
+    const cmuxStarted = new Promise<void>((resolve) => { markCmuxStarted = resolve; });
+    let scans = 0;
+    const source = routingRaceSource({ displayName: "shared fresh scan" });
+    const collectors: HubCollectors = {
+      sessions: async () => emptySessions(),
+      sessionProvider: async (providerName) => {
+        if (providerName !== "codex") return { value: [], errors: [] };
+        scans += 1;
+        return provider;
+      },
+      finalizeSessions: (results) => results,
+      cmux: async () => { markCmuxStarted(); return { value: [routingRaceSurface("NEW")], errors: [] }; },
+      notifications: async () => ({ value: [], errors: [] }),
+      enrichIdentity: async (surfaces) => healthyRoutingRaceIdentity(surfaces),
+    };
+    const state = new HubState(recordingRunner([]), { has: () => false, archive: async () => {} }, [], {
+      collectors,
+      refreshAggregateTimeoutMs: 5,
+      settingsReader: () => normalizeSettings(undefined),
+    });
+    const first = state.refresh();
+    void state.refresh({ cmux: true });
+    nowMs = 13_500;
+    await cmuxStarted;
+    nowMs = 13_501;
+    void state.refresh();
+    resolveProvider({ value: [source], errors: [] });
+
+    const snapshot = await first;
+    expect(scans).toBe(1);
+    expect(routingRaceAgent(snapshot)?.sourceFreshness).toBeUndefined();
+    expect(routingRaceAgent(snapshot)?.target).toMatchObject({
+      resolution: "exact", surfaceId: "SURFACE-NEW",
+    });
+    now.mockRestore();
+  });
+
+  test("provider cutoff does not shorten the control-plane collection deadline", async () => {
+    const source = routingRaceSource({ displayName: "fast provider" });
+    const collectors: HubCollectors = {
+      sessions: async () => emptySessions(),
+      sessionProvider: async (provider) => ({ value: provider === "codex" ? [source] : [], errors: [] }),
+      finalizeSessions: (results) => results,
+      cmux: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 3_100));
+        return { value: [routingRaceSurface("NEW")], errors: [] };
+      },
+      notifications: async () => ({ value: [], errors: [] }),
+      enrichIdentity: async (surfaces) => healthyRoutingRaceIdentity(surfaces),
+    };
+    const state = new HubState(recordingRunner([]), { has: () => false, archive: async () => {} }, [], {
+      collectors,
+      settingsReader: () => ({ ...normalizeSettings(undefined), providerWaitMs: 3_000 }),
+    });
+
+    const snapshot = await state.refresh({ cmux: true });
+    expect(routingRaceAgent(snapshot)?.target).toMatchObject({ resolution: "exact", surfaceId: "SURFACE-NEW" });
+    expect(snapshot.controlHealth.cmuxReachable).toBeTrue();
+  });
+
+  test("source health records when a late provider scan settled, not when it was consumed", async () => {
+    let nowMs = 1_000;
+    const now = spyOn(Date, "now").mockImplementation(() => nowMs);
+    let resolveProvider!: (value: { value: CollectedAgent[]; errors: string[] }) => void;
+    const provider = new Promise<{ value: CollectedAgent[]; errors: string[] }>((resolve) => {
+      resolveProvider = resolve;
+    });
+    const collectors: HubCollectors = {
+      sessions: async () => emptySessions(),
+      sessionProvider: async (providerName) => providerName === "codex"
+        ? provider
+        : { value: [], errors: [] },
+      finalizeSessions: (results) => results,
+      cmux: async () => ({ value: [], errors: [] }),
+      notifications: async () => ({ value: [], errors: [] }),
+      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+    };
+    const state = new HubState(recordingRunner([]), { has: () => false, archive: async () => {} }, [], {
+      collectors,
+      refreshAggregateTimeoutMs: 5,
+      settingsReader: () => normalizeSettings(undefined),
+    });
+    await state.refresh();
+    nowMs = 2_000;
+    resolveProvider({ value: [routingRaceSource()], errors: [] });
+    for (let turn = 0; turn < 5; turn += 1) await Promise.resolve();
+    nowMs = 9_000;
+
+    const snapshot = await state.refresh();
+    expect(snapshot.totals.sourceHealth?.byProvider?.codex?.lastHealthyAt)
+      .toBe(new Date(2_000).toISOString());
+    now.mockRestore();
+  });
+
+  test("a queued pass re-reads settings and never adopts a shared old-config scan as current", async () => {
+    let settings: ReturnType<typeof normalizeSettings> = {
+      ...normalizeSettings(undefined),
+      providerWaitMs: 15_000 as const,
+      scanWindowHours: 36,
+      activityFreshMinutes: 5,
+      activityQuietMinutes: 30,
+    };
+    let resolveOld!: (value: { value: CollectedAgent[]; errors: string[] }) => void;
+    const oldScan = new Promise<{ value: CollectedAgent[]; errors: string[] }>((resolve) => {
+      resolveOld = resolve;
+    });
+    const calls: { windowMs: number; freshMs?: number; quietMs?: number }[] = [];
+    let codexCalls = 0;
+    let markCmuxStarted!: () => void;
+    const cmuxStarted = new Promise<void>((resolve) => { markCmuxStarted = resolve; });
+    const current = routingRaceSource({ displayName: "new config" });
+    const collectors: HubCollectors = {
+      sessions: async () => emptySessions(),
+      sessionProvider: async (provider, _home, windowMs, thresholds) => {
+        if (provider !== "codex") return { value: [], errors: [] };
+        calls.push({ windowMs: windowMs ?? 0, freshMs: thresholds?.freshMs, quietMs: thresholds?.quietMs });
+        codexCalls += 1;
+        return codexCalls === 1 ? oldScan : { value: [current], errors: [] };
+      },
+      finalizeSessions: (results) => results,
+      cmux: async () => { markCmuxStarted(); return { value: [], errors: [] }; },
+      notifications: async () => ({ value: [], errors: [] }),
+      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+    };
+    const state = new HubState(recordingRunner([]), { has: () => false, archive: async () => {} }, [], {
+      collectors,
+      refreshAggregateTimeoutMs: 5,
+      settingsReader: () => settings,
+    });
+    const drained = state.refresh();
+    void state.refresh({ cmux: true });
+    settings = {
+      ...settings,
+      providerWaitMs: 3_000,
+      scanWindowHours: 1,
+      activityFreshMinutes: 2,
+      activityQuietMinutes: 10,
+    };
+    await cmuxStarted;
+    resolveOld({ value: [routingRaceSource({ displayName: "old config" })], errors: [] });
+
+    const changed = await drained;
+    expect(changed.programs.flatMap(({ agents }) => agents).find(({ id }) => id === current.id)?.sourceFreshness)
+      .toBe("last-known");
+    expect(codexCalls).toBe(1);
+
+    const recovered = await state.refresh();
+    expect(recovered.programs.flatMap(({ agents }) => agents).find(({ id }) => id === current.id)?.displayName)
+      .toBe("new config");
+    expect(calls).toEqual([
+      { windowMs: 36 * 60 * 60 * 1_000, freshMs: 5 * 60_000, quietMs: 30 * 60_000 },
+      { windowMs: 60 * 60 * 1_000, freshMs: 2 * 60_000, quietMs: 10 * 60_000 },
+    ]);
+  });
+
   test("observed sessions survive later scans as ended history and never count as live", async () => {
     const source: CollectedAgent = {
       id: "codex:durable-history",

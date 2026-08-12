@@ -19,12 +19,95 @@ async function flushSettlements() {
 }
 
 describe("provider settlement", () => {
+  test("concurrent generations sharing one scan each observe its fresh settlement", async () => {
+    const coordinator = new ProviderSettlementCoordinator<"p", string>(() => true);
+    const pending = deferred<string>();
+    let scans = 0;
+    const scan = async () => {
+      scans += 1;
+      return pending.promise;
+    };
+
+    const first = coordinator.settle(["p"], scan, { waitMs: 7_500 });
+    const second = coordinator.settle(["p"], scan, { waitMs: 7_500 });
+    await flushSettlements();
+    pending.resolve("fresh");
+
+    expect(await first).toMatchObject({ current: { p: "fresh" }, timedOut: [] });
+    expect(await second).toMatchObject({ current: { p: "fresh" }, timedOut: [] });
+    expect(scans).toBe(1);
+  });
+
+  test("an old-config settlement cannot publish current under a new collection config", async () => {
+    const coordinator = new ProviderSettlementCoordinator<"p", string>(() => true);
+    const pending = deferred<string>();
+    let scans = 0;
+    const old = coordinator.settle(["p"], async () => {
+      scans += 1;
+      return pending.promise;
+    }, { waitMs: 7_500, configKey: "window=36h;fresh=5m;quiet=30m" });
+    await flushSettlements();
+
+    const cutoff = controlledCutoff();
+    const changed = coordinator.settle(["p"], async () => {
+      scans += 1;
+      return "new-config";
+    }, {
+      waitMs: 7_500,
+      configKey: "window=1h;fresh=2m;quiet=10m",
+      wait: cutoff.wait,
+    });
+    await flushSettlements();
+    pending.resolve("old-config");
+    await flushSettlements();
+    cutoff.release();
+
+    expect(await old).toMatchObject({ current: { p: "old-config" } });
+    expect(await changed).toMatchObject({ current: {}, timedOut: ["p"] });
+    expect(scans).toBe(1);
+
+    const recovered = await coordinator.settle(["p"], async () => {
+      scans += 1;
+      return "new-config";
+    }, { waitMs: 7_500, configKey: "window=1h;fresh=2m;quiet=10m" });
+    expect(recovered).toMatchObject({ current: { p: "new-config" }, timedOut: [] });
+    expect(scans).toBe(2);
+  });
+
+  test("late current evidence keeps its settlement time when consumed later", async () => {
+    let nowMs = 1_000;
+    const coordinator = new ProviderSettlementCoordinator<"p", string>(() => true);
+    const pending = deferred<string>();
+    const cutoff = controlledCutoff();
+    const timedOut = coordinator.settle(["p"], () => pending.promise, {
+      waitMs: 7_500,
+      configKey: "same",
+      now: () => nowMs,
+      wait: cutoff.wait,
+    });
+    await flushSettlements();
+    cutoff.release();
+    await timedOut;
+    nowMs = 2_000;
+    pending.resolve("late");
+    await flushSettlements();
+    nowMs = 9_000;
+
+    const consumed = await coordinator.settle(["p"], async () => "unused", {
+      waitMs: 7_500,
+      configKey: "same",
+      now: () => nowMs,
+    });
+    expect(consumed.current).toEqual({ p: "late" });
+    expect(consumed.settledAtMs).toEqual({ p: 2_000 });
+  });
+
   test("a slow provider cannot withhold current results and falls back to its last success", async () => {
     const coordinator = new ProviderSettlementCoordinator<Provider, string>(() => true);
     const initial = await coordinator.settle(["fast", "slow"], async (provider) => `${provider}-old`, {
       waitMs: 7_500,
     });
-    expect(initial).toEqual({
+    expect(initial).toMatchObject({
       current: { fast: "fast-old", slow: "slow-old" },
       lastKnown: {},
       timedOut: [],
@@ -40,7 +123,7 @@ describe("provider settlement", () => {
     await flushSettlements();
     cutoff.release();
 
-    expect(await settling).toEqual({
+    expect(await settling).toMatchObject({
       current: { fast: "fast-new" },
       lastKnown: { slow: "slow-old" },
       timedOut: ["slow"],
@@ -84,7 +167,7 @@ describe("provider settlement", () => {
 
     late.resolve("slow-late");
     await flushSettlements();
-    expect(frozen).toEqual({
+    expect(frozen).toMatchObject({
       current: { fast: "fast-new" },
       lastKnown: { slow: "slow-old" },
       timedOut: ["slow"],

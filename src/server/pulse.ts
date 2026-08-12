@@ -7,6 +7,7 @@ import type {
   HubSnapshot,
   PulseActivityBucket,
 } from "../shared/types";
+import { PROVIDERS } from "../shared/types";
 
 const BUCKET_MS = 5 * 60_000;
 
@@ -52,7 +53,7 @@ interface ActivityBucket {
 /** Every provider stale means session collection produced nothing at all, so an
     agent count taken from that snapshot is not a small number — it is no
     number. A partial failure still measures something and is left alone. */
-const PROVIDER_COUNT = 4;
+const PROVIDER_COUNT = PROVIDERS.length;
 
 export class PulseTracker {
   #observedSinceMs: number;

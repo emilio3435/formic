@@ -62,6 +62,40 @@ const uniqueSurface: CmuxSurface = {
 };
 
 describe("snapshot control safety and SSE deduplication", () => {
+  test("last-known lineage and names cannot change current role, name, or durable tags", () => {
+    const assignments: unknown[] = [];
+    const current = collected({
+      id: "codex:parent",
+      sourceSessionId: "parent",
+      identity: { name: "Shared", base: "Shared", source: "authored", authoredBy: "launch-env" },
+    });
+    const stale = collected({
+      id: "codex:aaaaaaaa",
+      sourceSessionId: "aaaaaaaa",
+      parentSourceSessionId: "parent",
+      identity: { name: "Shared", base: "Shared", source: "authored", authoredBy: "launch-env" },
+    });
+    const snapshot = buildSnapshot({
+      agents: [current],
+      lastKnownAgents: [stale],
+      lastKnownSourceReasons: { codex: "Codex timed out; showing last-known rows." },
+      surfaces: [],
+      archiveStore,
+      nameTagStore: {
+        rememberNameTags: async (next) => { assignments.push(...next); },
+      },
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    const parent = snapshot.programs.flatMap(({ agents }) => agents).find(({ id }) => id === current.id);
+
+    expect(parent).toMatchObject({
+      role: "agent",
+      roleSource: "inferred",
+      identity: { name: "Shared" },
+    });
+    expect(assignments).toEqual([]);
+  });
+
   test("last-known provider rows remain visible but cannot become live or authoritative", () => {
     const source = collected({
       id: "codex:last-known",
