@@ -171,6 +171,17 @@ describe("Evidence column exhibits", () => {
     expect(styles).toMatch(/\.exhibit-readout\s*\{[^}]*inset/);
     expect(styles).not.toMatch(/\.artifact-copy\s*\{[^}]*opacity\s*:\s*0/);
     expect(styles).not.toMatch(/\.artifact-copy\s*\{[^}]*visibility\s*:\s*hidden/);
+    const twoColDesk = styles.match(
+      /@container agent-drawer \(min-width: 46rem\) \{[\s\S]*?\.drawer-grid \.drawer-desk \{([^}]*)\}/,
+    )?.[1];
+    expect(twoColDesk).toBeTruthy();
+    expect(twoColDesk).not.toMatch(/\bborder\s*:/);
+    const sandDesk = styles.match(
+      /\n\.drawer-desk \{([^}]*overflow-y:\s*auto[^}]*--sand[^}]*)\}/,
+    )?.[1];
+    expect(sandDesk).toBeTruthy();
+    expect(sandDesk).not.toMatch(/\bborder\s*:/);
+    expect(styles).toMatch(/\.drawer-desk\s*\{[^}]*border-left:\s*2px\s+solid\s+var\(--ink\)/);
   });
 
   test("exhibit chrome classes are emitted by the client", () => {
