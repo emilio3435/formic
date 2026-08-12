@@ -10209,37 +10209,6 @@ function drawerSessionTag(agent, ui = state) {
   return visibleSessionTag(agent, boardIndex(ui));
 }
 
-/* The head said the same things twice, two lines apart, in different orders.
-   The title is not one shape: `agentName` returns an operator alias, else the
-   cmux terminal title, else `provider · folder` — so what it has already said
-   differs per agent, and a fixed deletion loses information in one shape while
-   fixing another. Both were verified in a browser rather than in the diff:
-
-     bare identity   h2 "Cursor · LaHormigaDormida"
-                     sub "LaHormigaDormida · Cursor · grok 4.5"   provider AND folder twice
-     aliased         h2 "RHS-6 BE payload · sol 5.6"
-                     sub "the-mountain-main · Codex · sol 5.6"    model twice, program only here
-
-   So the rule is subtractive, not a delete: this line says only what the title
-   has not. Compare against the title's own `·` segments and not a substring —
-   "main" is a substring of "the-mountain-main" and would silently drop a
-   program the title never named. */
-/* The placeholder guard this line used to carry itself now lives in
-   `modelShort`, which is the one function every model slot goes through — the
-   head, the roster row and the invocation table. It was here alone, so the head
-   omitted `<synthetic>` while the row two pixels behind it printed it. */
-function headSubParts(agent, program, titleText) {
-  const said = new Set(
-    String(titleText || "").split("·").map((part) => part.trim().toLowerCase()).filter(Boolean),
-  );
-  const unsaid = (value) => (value && !said.has(value.toLowerCase()) ? value : "");
-  return {
-    program: unsaid(programName(program)),
-    provider: unsaid(providerLabel(agent.provider)),
-    model: unsaid(modelShort(agent.model)),
-  };
-}
-
 function renderAgentDrawer(pane, view) {
   const { agent, program } = view;
   const outcome = deriveOutcome(agent);
