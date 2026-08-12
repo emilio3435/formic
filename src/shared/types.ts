@@ -395,6 +395,8 @@ export interface AgentSnapshot {
      fact about the board's reach, not about the session's ending, and folding
      the two is how "archived" came to mean four different things. */
   scope?: CollectionScope;
+  /** A timed-out provider's cached display row; absent for current source evidence. */
+  sourceFreshness?: "last-known";
   /** Which clean completion a source recorded, when it recorded one. */
   endEvidence?: EndEvidence;
   /* An unread cmux notification is waiting on this session. An OVERLAY: it adds
@@ -457,6 +459,8 @@ export interface AgentSnapshot {
       the whole workspace: the pane title is a claim about this session, the
       workspace title is only a claim about where it is parked. */
   surfaceTitle?: string;
+  /** Latest readable user/assistant prose with a directly associated source timestamp. */
+  lastHumanFacingAt?: string;
   /** Sanitized provider-aware prose for dense rows; null means no readable fallback survived. */
   lastHumanMessage: string | null;
   /** Latest sanitized human-legible USER request; null when none survived cleaning. */

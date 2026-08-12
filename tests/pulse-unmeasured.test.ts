@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { PulseTracker } from "../src/server/pulse";
 import { buildSnapshot } from "../src/server/snapshot";
 import type { CollectedAgent } from "../src/server/types";
-import type { HubSnapshot, Provider } from "../src/shared/types";
+import { PROVIDERS, type HubSnapshot, type Provider } from "../src/shared/types";
 // @ts-expect-error The dependency-free browser client intentionally has no declaration file.
 import { sparklineSegments } from "../src/web/dom-primitives.js";
 
@@ -24,7 +24,6 @@ import { sparklineSegments } from "../src/web/dom-primitives.js";
    `activeSessions` was not, which is the whole defect: the same bucket carried
    one field that could say "unknown" and one that could only say "zero". */
 
-const PROVIDERS: Provider[] = ["omp", "codex", "claude", "cursor"];
 const BUCKET_MS = 5 * 60_000;
 const T0 = Date.parse("2026-08-02T12:00:00.000Z");
 
@@ -105,6 +104,23 @@ describe("a bucket nobody could observe reports unknown, not zero", () => {
     }
 
     expect(tracker.report(T0 + 2 * BUCKET_MS).activity.buckets[0]!.activeSessions).toBe(1);
+  });
+
+  test("four stale providers still measure the two current providers; all six stale do not", () => {
+    const measured = new PulseTracker(async () => ({ available: false }) as never);
+    const staleFour = PROVIDERS.slice(0, 4);
+    measured.observe(buildSnapshot({
+      agents: [agent("prime:current", new Date(T0).toISOString())],
+      surfaces: [],
+      archiveStore: { has: () => false, archive: async () => {} },
+      now: new Date(T0),
+      sourceErrors: Object.fromEntries(staleFour.map((provider) => [provider, ["timed out"]])),
+    }), T0);
+    expect(measured.report(T0 + BUCKET_MS).activity.buckets[0]!.activeSessions).toBe(1);
+
+    const unmeasured = new PulseTracker(async () => ({ available: false }) as never);
+    unmeasured.observe(snapshot({ agents: [], stale: true, now: new Date(T0) }), T0);
+    expect(unmeasured.report(T0 + BUCKET_MS).activity.buckets[0]!.activeSessions).toBeNull();
   });
 
   test("one good look in a bucket is enough to make it measured", async () => {

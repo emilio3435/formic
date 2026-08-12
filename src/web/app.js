@@ -3028,6 +3028,25 @@ function settingsField(key, label, help, value, min, max, fkey = null) {
     el("span", { class: "settings-help", text: help }));
 }
 
+function providerWaitField(value) {
+  const input = el("select", {
+    class: "settings-input",
+    id: "setting-providerWaitMs",
+    dataset: { setting: "providerWaitMs", fkey: "provider-wait" },
+  }, ...[
+    [3000, "3 seconds"],
+    [5000, "5 seconds"],
+    [7500, "7.5 seconds"],
+    [10000, "10 seconds"],
+    [15000, "15 seconds"],
+  ].map(([waitMs, label]) => el("option", { value: String(waitMs), text: label })));
+  input.value = String(value);
+  return el("label", { class: "settings-field" },
+    el("span", { class: "settings-field-label", text: "Provider wait" }),
+    input,
+    el("span", { class: "settings-help", text: "How long each refresh waits for provider scans before showing last-known data as degraded." }));
+}
+
 function settingsValue(key, fallback) {
   const node = $("setting-" + key);
   const raw = node ? Number(node.value) : Number.NaN;
@@ -3766,6 +3785,7 @@ function renderSettingsPanel() {
       settingsField("scanWindowHours", "Scan window",
         "How far back collectors read transcripts. Sessions older than this move to History as 'no longer watched'. Hours, 1–168.",
         s.scanWindowHours ?? state.scanWindowHours ?? 36, 1, 168, "scan-window"),
+      providerWaitField(s.providerWaitMs ?? 7500),
       settingsField("historyRetentionDays", "Keep history for",
         "Finished sessions are kept this long. Lowering it permanently forgets older records. Days, 7–365.",
         s.historyRetentionDays ?? 30, 7, 365),
@@ -3806,6 +3826,7 @@ function renderSettingsPanel() {
             activityFreshMinutes: settingsValue("activityFreshMinutes", fresh),
             activityQuietMinutes: settingsValue("activityQuietMinutes", quiet),
             scanWindowHours: settingsValue("scanWindowHours", s.scanWindowHours ?? 36),
+            providerWaitMs: settingsValue("providerWaitMs", s.providerWaitMs ?? 7500),
             historyRetentionDays: settingsValue("historyRetentionDays", s.historyRetentionDays ?? 30),
             historyRecordLimit: settingsValue("historyRecordLimit", s.historyRecordLimit ?? 5000),
           });
@@ -3816,7 +3837,7 @@ function renderSettingsPanel() {
         onclick: () => {
           void postSettings({
             activityFreshMinutes: 3, activityQuietMinutes: 45, scanWindowHours: 36,
-            historyRetentionDays: 30, historyRecordLimit: 5000,
+            providerWaitMs: 7500, historyRetentionDays: 30, historyRecordLimit: 5000,
           });
         },
       }, "Reset all"),

@@ -85,6 +85,13 @@ async function handleAgentFocus(agentId: string, dependencies: AgentLinkDependen
   if (index < 0) return error(404, "AGENT_NOT_FOUND", "The agent is not present in the current snapshot.");
 
   const agent = agents[index]!;
+  if (agent.sourceFreshness === "last-known") {
+    return error(
+      409,
+      "CONTROL_DISABLED",
+      "This provider did not finish the current refresh; last-known rows cannot authorize terminal controls.",
+    );
+  }
   if (isRetired(agent) || hookRecordFor(agent.provider, agent.sourceSessionId)?.agentLifecycle === "ended") {
     const path = transcriptPath(agent);
     return path

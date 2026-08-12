@@ -82,6 +82,7 @@ export interface AttentionClassEvidence {
   activity?: ActivityState;
   lifecycle?: LifecycleState;
   scope?: CollectionScope;
+  sourceFreshness?: "last-known";
   taskState?: TaskState;
   taskStateAt?: string;
   hookLifecycle?: HookLifecycle;
@@ -113,6 +114,7 @@ export function attentionClassFor(evidence: AttentionClassEvidence): AttentionCl
     evidence.activity === "ended"
     || evidence.lifecycle === "finished"
     || evidence.scope === "retained"
+    || evidence.sourceFreshness === "last-known"
   ) return undefined;
   if (hookInputWantsHuman(evidence)) return "blocking";
   const attentionClass = attentionClassForKind(evidence.attentionSignal?.kind);

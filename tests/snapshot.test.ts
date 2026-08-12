@@ -62,6 +62,109 @@ const uniqueSurface: CmuxSurface = {
 };
 
 describe("snapshot control safety and SSE deduplication", () => {
+  test("last-known lineage and names cannot change current role, name, or durable tags", () => {
+    const assignments: unknown[] = [];
+    const current = collected({
+      id: "codex:parent",
+      sourceSessionId: "parent",
+      identity: { name: "Shared", base: "Shared", source: "authored", authoredBy: "launch-env" },
+    });
+    const stale = collected({
+      id: "codex:aaaaaaaa",
+      sourceSessionId: "aaaaaaaa",
+      parentSourceSessionId: "parent",
+      identity: { name: "Shared", base: "Shared", source: "authored", authoredBy: "launch-env" },
+    });
+    const snapshot = buildSnapshot({
+      agents: [current],
+      lastKnownAgents: [stale],
+      lastKnownSourceReasons: { codex: "Codex timed out; showing last-known rows." },
+      surfaces: [],
+      archiveStore,
+      nameTagStore: {
+        rememberNameTags: async (next) => { assignments.push(...next); },
+      },
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    const parent = snapshot.programs.flatMap(({ agents }) => agents).find(({ id }) => id === current.id);
+
+    expect(parent).toMatchObject({
+      role: "agent",
+      roleSource: "inferred",
+      identity: { name: "Shared" },
+    });
+    expect(assignments).toEqual([]);
+  });
+
+  test("last-known provider rows remain visible but cannot become live or authoritative", () => {
+    const source = collected({
+      id: "codex:last-known",
+      sourceSessionId: "last-known",
+      processAlive: true,
+      processIds: [4242],
+      recordedTarget: { surfaceId: uniqueSurface.surfaceId },
+    });
+    const snapshot = buildSnapshot({
+      agents: [],
+      lastKnownAgents: [source],
+      lastKnownSourceReasons: {
+        codex: "Codex collection exceeded the 7.5s provider wait; showing last-known Codex sessions.",
+      },
+      surfaces: [{ ...uniqueSurface, sourceSessionIds: [source.sourceSessionId] }],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    const published = snapshot.programs.flatMap(({ agents }) => agents)[0];
+
+    expect(published).toMatchObject({
+      id: source.id,
+      sourceFreshness: "last-known",
+      status: "stale",
+      activity: "unknown",
+      lifecycle: "unverified",
+      processState: "unknown",
+      target: { resolution: "missing" },
+      statusReason: expect.stringContaining("showing last-known Codex sessions"),
+    });
+    expect(Object.fromEntries(published?.controls.map(({ action, enabled }) => [action, enabled]) ?? [])).toMatchObject({
+      focus: false,
+      instruct: false,
+      interrupt: false,
+      archive: true,
+    });
+    expect(snapshot.totals.live).toBe(0);
+    expect(snapshot.totals.working).toBe(0);
+    expect(snapshot.totals.attention).toBe(0);
+    expect(snapshot.totals.retained).toBe(0);
+    expect(snapshot.totals.consumption).toBeUndefined();
+  });
+
+  test("operator archive intent wins over a cached last-known provider row", () => {
+    const source = collected({ id: "codex:archived-cache", sourceSessionId: "archived-cache" });
+    const archivedStore: ArchiveStore = {
+      has: (agentId) => agentId === source.id,
+      archive: async () => {},
+      archivedAgents: () => [{ ...source, archivedAt: "2026-07-21T23:00:10.000Z" }],
+    };
+    const snapshot = buildSnapshot({
+      agents: [],
+      lastKnownAgents: [{ ...source, updatedAt: "2026-07-21T23:00:20.000Z" }],
+      lastKnownSourceReasons: { codex: "Codex timed out; showing last-known Codex sessions." },
+      surfaces: [],
+      archiveStore: archivedStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    const published = snapshot.programs.flatMap(({ agents }) => agents)[0];
+
+    expect(published).toMatchObject({
+      id: source.id,
+      scope: "retained",
+      lifecycle: "finished",
+    });
+    expect(published?.sourceFreshness).toBeUndefined();
+    expect(snapshot.totals.retained).toBe(1);
+  });
+
   test("CWD-GROUP-1 launch repository groups an exact-linked home-cwd agent without weakening the link", () => {
     const source = collected({
       cwd: HOME_DIR,
@@ -395,6 +498,81 @@ describe("snapshot control safety and SSE deduplication", () => {
 
     expect(withMessage.programs[0]?.agents[0]?.lastHumanMessage).toBe("Readable provider prose.");
     expect(absent.programs[0]?.agents[0]?.lastHumanMessage).toBeNull();
+  });
+
+  test("orders equal-priority rows by human prose, never internal source activity", () => {
+    const snapshot = buildSnapshot({
+      agents: [
+        collected({ id: "codex:older-message", sourceSessionId: "older-message", lastHumanFacingAt: "2026-07-21T22:00:00.000Z", updatedAt: "2026-07-21T23:00:29.000Z" }),
+        collected({ id: "codex:newer-message", sourceSessionId: "newer-message", lastHumanFacingAt: "2026-07-21T22:30:00.000Z", updatedAt: "2026-07-21T23:00:01.000Z" }),
+      ],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.programs[0]?.agents.map(({ id }) => id)).toEqual([
+      "codex:newer-message",
+      "codex:older-message",
+    ]);
+    expect(snapshot.programs[0]?.agents[0]?.lastHumanFacingAt).toBe("2026-07-21T22:30:00.000Z");
+  });
+
+  test("keeps equal and unavailable human clocks stable without updatedAt fallback", () => {
+    const snapshot = buildSnapshot({
+      agents: [
+        collected({ id: "codex:absent-first", sourceSessionId: "absent-first", lastHumanFacingAt: undefined, updatedAt: "2026-07-21T23:00:29.000Z" }),
+        collected({ id: "codex:equal-first", sourceSessionId: "equal-first", lastHumanFacingAt: "2026-07-21T22:00:00.000Z", updatedAt: "2026-07-21T23:00:01.000Z" }),
+        collected({ id: "codex:absent-second", sourceSessionId: "absent-second", lastHumanFacingAt: undefined, updatedAt: "2026-07-21T23:00:01.000Z" }),
+        collected({ id: "codex:equal-second", sourceSessionId: "equal-second", lastHumanFacingAt: "2026-07-21T22:00:00.000Z", updatedAt: "2026-07-21T23:00:29.000Z" }),
+      ],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.programs[0]?.agents.map(({ id }) => id)).toEqual([
+      "codex:equal-first",
+      "codex:equal-second",
+      "codex:absent-first",
+      "codex:absent-second",
+    ]);
+  });
+
+  test("keeps operational priority ahead of a newer human message", () => {
+    const snapshot = buildSnapshot({
+      agents: [
+        collected({ id: "codex:working", sourceSessionId: "working", lastHumanFacingAt: "2026-07-21T22:00:00.000Z" }),
+        collected({
+          id: "codex:finished",
+          sourceSessionId: "finished",
+          status: "archived",
+          endEvidence: "session-exit",
+          transcriptEndedCleanly: true,
+          lastHumanFacingAt: "2026-07-21T22:59:00.000Z",
+        }),
+      ],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.programs[0]?.agents.map(({ id }) => id)).toEqual([
+      "codex:working",
+      "codex:finished",
+    ]);
+  });
+
+  test("a genuine human-message clock change produces a new fingerprint", () => {
+    const build = (lastHumanFacingAt: string) => buildSnapshot({
+      agents: [collected({ lastHumanFacingAt })],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshotFingerprint(build("2026-07-21T22:00:00.000Z")))
+      .not.toBe(snapshotFingerprint(build("2026-07-21T22:01:00.000Z")));
   });
 
   test("the linked pane's own title is published, separately from its workspace's", () => {

@@ -6,6 +6,11 @@ import { resolveAgentName } from "./naming";
 import { MAX_HEARTBEAT_TAIL_CHARS, capTranscriptTail } from "./types";
 import { MODEL_CONFIG } from "./model-config";
 import { claudeContextWindow } from "./collectors";
+import {
+  extractLastHumanFacingAt,
+  readableHumanMessage,
+  type HumanMessageCandidate,
+} from "./human-message";
 
 const PRIME_HEARTBEAT_MONITOR_SESSION_ID = "ant-heartbeat-monitor";
 
@@ -34,6 +39,7 @@ export function createPrimeParser(): IncrementalParser {
   let providerInside: string | undefined; // meta/xai etc — not used for harness
   let task: string | undefined;
   let tail: string | undefined;
+  let lastHumanFacingAt: string | undefined;
   let messages = 0;
   let lastUsage: { input?: number; output?: number; cachedInput?: number; total?: number } | undefined;
   let sessionTotal = 0;
@@ -70,6 +76,21 @@ export function createPrimeParser(): IncrementalParser {
       }
       const msg = (row as any).message as Record<string, unknown> | undefined;
       if (!msg) continue;
+      if (msg.role === "user" || msg.role === "assistant") {
+        const humanTimestamp = [row.timestamp, msg.timestamp]
+          .find((value) => typeof value === "string" && Number.isFinite(Date.parse(value)));
+        const candidate: HumanMessageCandidate = {
+          role: msg.role,
+          content: msg.content,
+          timestamp: humanTimestamp,
+        };
+        if (readableHumanMessage("prime", candidate.content)) {
+          const candidateAt = extractLastHumanFacingAt("prime", [candidate]);
+          if (candidateAt && (!lastHumanFacingAt || candidateAt > lastHumanFacingAt)) {
+            lastHumanFacingAt = candidateAt;
+          }
+        }
+      }
       // capture model from message if not yet set
       if (typeof msg.model === "string" && !model) model = msg.model;
       // capture usage for token accounting
@@ -152,6 +173,7 @@ export function createPrimeParser(): IncrementalParser {
       startedAt: startedAt ?? fallback,
       updatedAt: updatedAt ?? fallback,
       tokens,
+      lastHumanFacingAt,
       transcriptTail: capTranscriptTail(tail),
       humanMessages: [],
       statusReason: "Prime agent — harness prime, agent " + agentModel,

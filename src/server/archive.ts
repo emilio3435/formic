@@ -307,6 +307,7 @@ function archiveCopy(
     threadDepth: agent.threadDepth,
     nickname: agent.nickname,
     lastHumanMessage: agent.lastHumanMessage,
+    lastHumanFacingAt: agent.lastHumanFacingAt,
     lastUserMessage: agent.lastUserMessage,
     lastAgentMessage: agent.lastAgentMessage,
     /* Measured on the live board after the restart: 362 agents, 269 of them

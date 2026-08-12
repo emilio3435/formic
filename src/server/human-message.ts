@@ -6,6 +6,8 @@ export interface HumanMessageCandidate {
   role: "assistant" | "user";
   content: unknown;
   isMeta?: boolean;
+  /** Provider source time directly attached to this message record. */
+  timestamp?: unknown;
 }
 
 /* Cursor (and any harness that embeds transport metadata in message text)
@@ -133,6 +135,20 @@ export function readableClosing(provider: Provider, content: unknown): string | 
 export function readableHumanMessage(provider: Provider, content: unknown): string | undefined {
   const text = textParts(provider, content).join("\n");
   return readableText(text);
+}
+
+export function extractLastHumanFacingAt(
+  provider: Provider,
+  candidates: readonly HumanMessageCandidate[],
+): string | undefined {
+  let latest: string | undefined;
+  for (const candidate of candidates) {
+    if (candidate.isMeta || !readableHumanMessage(provider, candidate.content)) continue;
+    if (typeof candidate.timestamp !== "string" || !Number.isFinite(Date.parse(candidate.timestamp))) continue;
+    const timestamp = new Date(candidate.timestamp).toISOString();
+    if (!latest || timestamp > latest) latest = timestamp;
+  }
+  return latest;
 }
 
 export function extractLastHumanMessage(

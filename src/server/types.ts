@@ -94,6 +94,8 @@ export interface CollectedAgent {
   parentSourceSessionId?: string;
   threadDepth?: number;
   nickname?: string;
+  /** Latest readable user/assistant prose with a directly associated source timestamp. */
+  lastHumanFacingAt?: string;
   lastHumanMessage?: string | null;
   lastUserMessage?: string | null;
   lastAgentMessage?: string | null;

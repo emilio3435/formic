@@ -10,6 +10,7 @@ import {
   NUMERIC_SETTING_KEYS,
   NUMERIC_SETTINGS,
   normalizeSettings,
+  PROVIDER_WAIT_OPTIONS_MS,
   SETTINGS_VERSION,
 } from "../src/server/settings";
 
@@ -185,6 +186,7 @@ describe("settings v2: every tunable number validates at both edges", () => {
       scanWindowHours: 36,
       historyRetentionDays: 30,
       historyRecordLimit: 5000,
+      providerWaitMs: 7500,
       defaultView: DEFAULT_VIEW,
       showReviewWorkers: false,
     });
@@ -279,6 +281,26 @@ describe("settings v2: a v1 file keeps the one decision it recorded", () => {
 });
 
 describe("settings v2: the API accepts subsets and names what it refused", () => {
+  test("provider wait defaults safely, round-trips only exact options, and rejects arbitrary intervals", async () => {
+    expect(normalizeSettings(undefined).providerWaitMs).toBe(7_500);
+    expect(normalizeSettings({ providerWaitMs: 6_000 }).providerWaitMs).toBe(7_500);
+
+    const store = await JsonSettingsStore.open("/tmp/anthill-provider-wait.json", memoryFiles().ops);
+    for (const value of PROVIDER_WAIT_OPTIONS_MS) {
+      const response = await handleSettingsRequest(post({ providerWaitMs: String(value) }), store);
+      expect(response.status, `providerWaitMs ${value} was rejected`).toBe(200);
+      expect(store.get().providerWaitMs).toBe(value);
+    }
+
+    for (const value of [2_999, 6_000, 7_500.1, 15_001, "nope"]) {
+      const before = store.get().providerWaitMs;
+      const response = await handleSettingsRequest(post({ providerWaitMs: value }), store);
+      expect(response.status, `providerWaitMs ${String(value)} was accepted`).toBe(400);
+      expect(JSON.stringify(await response.json())).toContain("providerWaitMs");
+      expect(store.get().providerWaitMs).toBe(before);
+    }
+  });
+
   test("showReviewWorkers defaults false, round-trips booleans, and rejects other types", async () => {
     const store = await JsonSettingsStore.open("/tmp/anthill-review-workers.json", memoryFiles().ops);
     const initial = await handleSettingsRequest(

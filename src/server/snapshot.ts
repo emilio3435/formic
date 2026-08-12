@@ -91,6 +91,9 @@ function pathIsWithin(path: string, root: string): boolean {
 
 export interface SnapshotInput {
   agents: readonly CollectedAgent[];
+  /** Cached provider rows shown only when that provider misses this refresh's cutoff. */
+  lastKnownAgents?: readonly CollectedAgent[];
+  lastKnownSourceReasons?: Partial<Record<Provider, string>>;
   /* An authored title for an agent id, when one has been written down.
      Optional: every caller without it — and there are many in tests — keeps the
      derived names, which is also what the board shows before the first naming
@@ -177,7 +180,12 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
   const programs = new Map<string, ProgramSnapshot>();
   const newestById = new Map<string, CollectedAgent>();
   const archivedAgents = input.archiveStore.archivedAgents?.() ?? [];
-  for (const agent of [...archivedAgents, ...input.agents]) {
+  const currentIds = new Set(input.agents.map((agent) => agent.id));
+  const lastKnownAgents = (input.lastKnownAgents ?? []).filter(
+    (agent) => !currentIds.has(agent.id) && !input.archiveStore.has(agent.id),
+  );
+  const lastKnownIds = new Set(lastKnownAgents.map((agent) => agent.id));
+  for (const agent of [...archivedAgents, ...lastKnownAgents, ...input.agents]) {
     const existing = newestById.get(agent.id);
     if (!existing || agent.updatedAt >= existing.updatedAt) newestById.set(agent.id, agent);
   }
@@ -194,9 +202,17 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
   const attentionCoverage = emptyAttentionCoverage();
   const sources = [...newestById.values()];
   const sourcesById = new Map(sources.map((source) => [source.id, source]));
-  const targetsById = new Map(
-    sources.map((source) => [source.id, resolveAgentTarget(source, input.surfaces, sources)]),
-  );
+  const authoritativeSources = sources.filter((source) => !lastKnownIds.has(source.id));
+  const targetsById = new Map(sources.map((source) => [
+    source.id,
+    lastKnownIds.has(source.id)
+      ? {
+          resolution: "missing" as const,
+          reason: input.lastKnownSourceReasons?.[source.provider]
+            ?? "This provider did not finish the current refresh; terminal controls are unavailable.",
+        }
+      : resolveAgentTarget(source, input.surfaces, authoritativeSources),
+  ]));
   const envByWorkspace = new Map(
     (input.workspaceEnvs ?? []).map((workspace) => [workspace.workspaceId, workspace.variables]),
   );
@@ -215,7 +231,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
      contract exists to remove. Measured on the live board 2026-08-04: 805 of 821
      sessions shared a name with at least one other, so this pass is the
      difference between a board of 51 names and a board of 821. */
-  const named = sources.filter(
+  const named = authoritativeSources.filter(
     (source): source is CollectedAgent & { identity: AgentIdentity } => Boolean(source.identity),
   );
   /* An authored title, where one has been written down, outranks everything the
@@ -270,7 +286,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
   const childCounts = new Map<string, number>();
   const parentById = new Map<string, string>();
   const lineageAgreementById = new Map<string, LineageAgreement>();
-  for (const source of sources) {
+  for (const source of authoritativeSources) {
     const declared = declaredById.get(source.id);
     const nativeParentId = source.parentSourceSessionId
       ? `${source.provider}:${source.parentSourceSessionId}`
@@ -296,13 +312,24 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
   );
   for (const source of sources) {
     const target = targetsById.get(source.id)!;
+    const lastKnown = lastKnownIds.has(source.id);
     const declared = declaredById.get(source.id);
     const senderVerified = input.senderTranscriptTails
       ? senderVerificationFor(source, input.senderTranscriptTails)
       : undefined;
     let identityTrace: IdentityTrace | undefined;
     const readIdentityTrace = (): IdentityTrace => {
-      identityTrace ??= resolveAgentTargetWithTrace(source, input.surfaces, sources).trace;
+      identityTrace ??= lastKnown
+        ? {
+            steps: [{
+              tier: "session",
+              outcome: "skipped",
+              detail: "Provider evidence is last-known, so current routing was not evaluated.",
+            }],
+            resolution: "missing",
+            reason: target.reason,
+          }
+        : resolveAgentTargetWithTrace(source, input.surfaces, authoritativeSources).trace;
       return identityTrace;
     };
     const surface = target.surfaceId
@@ -339,7 +366,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
           ...(sidebarMatchesRepo && sidebar?.branch ? { branch: sidebar.branch } : {}),
         }
       : undefined;
-    const notification = target.surfaceId
+    const notification = !lastKnown && target.surfaceId
       ? [...(input.notifications ?? [])]
           .filter((candidate) => {
             if (candidate.surfaceId !== target.surfaceId) return false;
@@ -396,32 +423,39 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       ? summarizeNotification(notification.title, notification.subtitle)
       : undefined;
     const updatedAtMs = Date.parse(source.updatedAt);
-    const scope: CollectionScope = collectedIds.has(source.id) ? "observed" : "retained";
+    const scope: CollectionScope = collectedIds.has(source.id) || lastKnown ? "observed" : "retained";
     const operatorArchived = input.archiveStore.has(source.id);
     const endEvidence = declared?.succeededBy ? "superseded" as const : source.endEvidence;
     const lifecycleSource = endEvidence === source.endEvidence
       ? source
       : { ...source, endEvidence };
-    const verdict = lifecycleFor(lifecycleSource, {
-      operatorArchived,
-      scope,
-      nowMs,
-      thresholds: input.thresholds,
-      /* Only the sessions this scan actually read. A retained record left the
-         scan window, so the live process table says nothing about it — offering
-         the roster as evidence there would re-end the whole filing cabinet on
-         grounds that never applied to it. */
-      processRosterComplete: scope === "observed" ? input.processRosterComplete : undefined,
-      /* Records written before this contract carry no verdict of their own. The
-         one thing still knowable about them is whether a human filed them, so
-         that is what a legacy operator archive freezes as; everything else
-         reads as aged-out, which is exactly what it is. */
-      persisted: source.lifecycle
-        ? { lifecycle: source.lifecycle, provenance: source.provenance }
-        : operatorArchived
-          ? { lifecycle: "finished", provenance: "operator-archive" }
-          : undefined,
-    });
+    const verdict = lastKnown
+      ? {
+          lifecycle: "unverified" as const,
+          provenance: "no-evidence" as const,
+          reason: input.lastKnownSourceReasons?.[source.provider]
+            ?? "This provider did not finish the current refresh; showing last-known data.",
+        }
+      : lifecycleFor(lifecycleSource, {
+          operatorArchived,
+          scope,
+          nowMs,
+          thresholds: input.thresholds,
+          /* Only the sessions this scan actually read. A retained record left the
+             scan window, so the live process table says nothing about it — offering
+             the roster as evidence there would re-end the whole filing cabinet on
+             grounds that never applied to it. */
+          processRosterComplete: scope === "observed" ? input.processRosterComplete : undefined,
+          /* Records written before this contract carry no verdict of their own. The
+             one thing still knowable about them is whether a human filed them, so
+             that is what a legacy operator archive freezes as; everything else
+             reads as aged-out, which is exactly what it is. */
+          persisted: source.lifecycle
+            ? { lifecycle: source.lifecycle, provenance: source.provenance }
+            : operatorArchived
+              ? { lifecycle: "finished", provenance: "operator-archive" }
+              : undefined,
+        });
     /* Every word below is now a reading of ONE verdict. `activity` and `status`
        are translations of it into the two older vocabularies, not second
        opinions about it — which is what they were, and why the board could call
@@ -431,7 +465,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     const terminal = finished || retained;
     const snapshotStatus = statusForLifecycle(verdict.lifecycle, scope);
     const activity = activityForLifecycle(verdict.lifecycle, scope);
-    const processState = retained ? undefined : processStateFor(source);
+    const processState = lastKnown ? "unknown" as const : retained ? undefined : processStateFor(source);
     const initialRefusal = transmitRefusal({ target, processState, archived: terminal });
     const refusal = initialRefusal?.code === "UNSAFE_TARGET"
       ? transmitRefusal({
@@ -462,9 +496,9 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     const elapsedEndMs = terminal && Number.isFinite(updatedAtMs)
       ? Math.min(nowMs, updatedAtMs)
       : nowMs;
-    const outcome = outcomeFor(source, terminal, Boolean(notification));
-    const controlState = operatorControlState(target, terminal);
-    const contextPct = contextPctFor(source);
+    const outcome = lastKnown ? "healthy" as const : outcomeFor(source, terminal, Boolean(notification));
+    const controlState = lastKnown ? "observed-only" as const : operatorControlState(target, terminal);
+    const contextPct = lastKnown ? undefined : contextPctFor(source);
     const role = roleFor2(source, {
       declaredRole: declared?.role,
       observedChildren: childCounts.get(source.id) ?? 0,
@@ -473,7 +507,9 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     const kind = archivedKind.sessionKind && archivedKind.sessionKindSource
       ? { sessionKind: archivedKind.sessionKind, sessionKindSource: archivedKind.sessionKindSource }
       : sessionKindFor({ launch: source.launch, task: source.task });
-    const snapshotStatusReason = retained
+    const snapshotStatusReason = lastKnown
+      ? verdict.reason
+      : retained
       ? verdict.reason
       : notificationSummary
         ? `Unread cmux notification: ${notificationSummary}`
@@ -489,12 +525,24 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
        stale 2.23MB), and the largest session on this machine has 1,575 calls.
        It is served on demand from
        /api/debug/session-calls, where the cost is paid by whoever asks. */
+    const displaySource = lastKnown
+      ? (({
+          processIds: _processIds,
+          processStarts: _processStarts,
+          processAlive: _processAlive,
+          recordedTarget: _recordedTarget,
+          lineage: _lineage,
+          hookLifecycle: _hookLifecycle,
+          hookLifecycleAt: _hookLifecycleAt,
+          ...safe
+        }) => safe)(source)
+      : source;
     const {
       callSizes: _callSizes,
       processedSnapshots: _processedSnapshots,
       launch: _launch,
       ...publishable
-    } = source;
+    } = displaySource;
     let refinedTask: string | undefined;
     if (!terminal) try {
       const encoded = source.id.replace(/[:\/\\]/g, "_");
@@ -526,6 +574,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       lifecycle: verdict.lifecycle,
       provenance: verdict.provenance,
       scope,
+      ...(lastKnown ? { sourceFreshness: "last-known" as const } : {}),
       endEvidence,
       ...(declared?.taskState && declared.taskStateAt
         ? {
@@ -538,7 +587,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
          from the same evidence. Only where it is true and only on observed
          rows, so it costs nothing on the ~660 retained records it can never
          apply to. */
-      ...(scope === "observed" && input.processRosterComplete ? { processRosterComplete: true } : {}),
+      ...(scope === "observed" && !lastKnown && input.processRosterComplete ? { processRosterComplete: true } : {}),
       ...(notification ? { attention: true } : {}),
       processState,
       outcome,
@@ -552,7 +601,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       ...(sidebarMatchesRepo && sidebar?.pullRequestUrls.length
         ? { pullRequestUrls: sidebar.pullRequestUrls }
         : {}),
-      ...recordAttention(attentionCoverage, {
+      ...(lastKnown ? {} : recordAttention(attentionCoverage, {
         transcriptTail: source.transcriptTail,
         // Straight from cmux, never recovered from the rendered marker: an agent
         // that writes "[Attention] …" into its own transcript must not be able
@@ -569,7 +618,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
         hookLifecycleAt: source.hookLifecycleAt,
         nowMs,
         stalledActiveMinutes: input.stalledActiveMinutes,
-      }, outcome, controlState),
+      }, outcome, controlState)),
       parentAgentId: parentById.get(source.id),
       succeededBy: declared?.succeededBy,
       supersedes: declared?.supersedes,
@@ -579,6 +628,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       /* Only when a human plausibly typed it — cmux titles every pane, and its
          own defaults must not arrive on the board wearing a rename's authority. */
       surfaceTitle: paneRename(surface?.title, surface?.cwd),
+      lastHumanFacingAt: source.lastHumanFacingAt,
       lastUserMessage: source.lastUserMessage,
       ...(senderVerified === undefined ? {} : { senderVerified }),
       lastAgentMessage: source.lastAgentMessage,
@@ -633,9 +683,16 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
   const orderedPrograms = [...programs.values()]
     .map((program) => ({
       ...program,
-      agents: program.agents.sort((left, right) =>
-        agentSortRank(left) - agentSortRank(right) || right.updatedAt.localeCompare(left.updatedAt),
-      ),
+      agents: program.agents.sort((left, right) => {
+        const rank = agentSortRank(left) - agentSortRank(right);
+        if (rank) return rank;
+        if (left.lastHumanFacingAt && right.lastHumanFacingAt) {
+          return right.lastHumanFacingAt.localeCompare(left.lastHumanFacingAt);
+        }
+        if (left.lastHumanFacingAt) return -1;
+        if (right.lastHumanFacingAt) return 1;
+        return 0;
+      }),
     }))
     .map((program) => ({ ...program, rollup: rollupFor(program.agents) }))
     .sort((left, right) =>
@@ -648,7 +705,9 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
      these gates on scope, because a retained record that reads "waiting" is
      describing what it was doing when the board last saw it, not what it is
      doing now — counting it live is the resurrection hole. */
-  const observedAgents = allAgents.filter((agent) => agent.scope !== "retained");
+  const observedAgents = allAgents.filter(
+    (agent) => agent.scope !== "retained" && agent.sourceFreshness !== "last-known",
+  );
   const scanWindowKnown = typeof input.scanWindowHours === "number"
     && Number.isFinite(input.scanWindowHours)
     && input.scanWindowHours > 0;
@@ -671,9 +730,9 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     unverified: countLifecycle("unverified"),
     finished: countLifecycle("finished"),
   };
-  const retained = allAgents.length - observedAgents.length;
-  const liveAgents = allAgents.filter((agent) => agent.activity === "working" || agent.activity === "idle");
-  const workingAgents = allAgents.filter((agent) => agent.activity === "working");
+  const retained = allAgents.filter((agent) => agent.scope === "retained").length;
+  const liveAgents = observedAgents.filter((agent) => agent.activity === "working" || agent.activity === "idle");
+  const workingAgents = observedAgents.filter((agent) => agent.activity === "working");
   const tokenValues = workingAgents
     .map((agent) => agent.tokens.total)
     .filter((value): value is number => typeof value === "number")
@@ -815,8 +874,8 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
         ...(consumptionValues.length < observedAgents.length ? { consumptionIsFloor: true } : {}),
       }),
       tokens: tokenValues.length ? tokenValues.reduce((total, value) => total + value, 0) : undefined,
-      working: allAgents.filter((agent) => agent.activity === "working").length,
-      idle: allAgents.filter((agent) => agent.activity === "idle").length,
+      working: observedAgents.filter((agent) => agent.activity === "working").length,
+      idle: observedAgents.filter((agent) => agent.activity === "idle").length,
       ended: allAgents.filter((agent) => agent.activity === "ended").length,
       byLifecycle,
       retained,

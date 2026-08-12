@@ -4,6 +4,11 @@ import type { IncrementalParser, ParseMetadata } from "./collectors";
 import type { TokenUsage } from "../shared/types";
 import { resolveAgentName } from "./naming";
 import { MODEL_CONFIG } from "./model-config";
+import {
+  extractLastHumanFacingAt,
+  readableHumanMessage,
+  type HumanMessageCandidate,
+} from "./human-message";
 
 /* Factory (droid) sessions.
 
@@ -88,6 +93,7 @@ export function createFactoryParser(): IncrementalParser {
   let updatedAt: string | undefined;
   let firstUserText: string | undefined;
   let lastAssistantText: string | undefined;
+  let lastHumanFacingAt: string | undefined;
   let messages = 0;
 
   const append = (rows: readonly Record<string, unknown>[]): void => {
@@ -107,6 +113,20 @@ export function createFactoryParser(): IncrementalParser {
       updatedAt = new Date(stamp).toISOString();
     }
     const message = (row.message ?? {}) as Record<string, unknown>;
+    if (message.role === "user" || message.role === "assistant") {
+      const candidate: HumanMessageCandidate = {
+        role: message.role,
+        content: message.content,
+        timestamp: row.timestamp,
+      };
+      const readable = readableHumanMessage("factory", candidate.content);
+      if (readable) {
+        const candidateAt = extractLastHumanFacingAt("factory", [candidate]);
+        if (candidateAt && (!lastHumanFacingAt || candidateAt > lastHumanFacingAt)) {
+          lastHumanFacingAt = candidateAt;
+        }
+      }
+    }
     const body = contentText(message.content);
     if (!body) continue;
     if (message.role === "user") firstUserText ??= body;
@@ -187,6 +207,7 @@ export function createFactoryParser(): IncrementalParser {
     startedAt,
     updatedAt: updatedAt ?? fallbackStamp,
     tokens,
+    lastHumanFacingAt,
     transcriptTail: lastAssistantText?.slice(-800),
     artifacts: meta.sourcePath ? [{ label: "Factory transcript", path: meta.sourcePath }] : [],
     gates: [],

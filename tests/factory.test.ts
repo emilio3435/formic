@@ -32,6 +32,37 @@ const message = (role: string, text: string, at = "2026-08-04T11:59:00.000Z") =>
 const transcript = (...lines: string[]) => lines.join("\n");
 
 describe("a Factory session becomes an agent", () => {
+  test("human-facing recency ignores later reasoning and tool output", () => {
+    const agent = parseFactoryJsonl(transcript(
+      start(),
+      message("user", "Please inspect Factory.", "2026-08-04T11:50:00.000Z"),
+      message("assistant", "Factory is ready.", "2026-08-04T11:51:00.000Z"),
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-08-04T11:52:00.000Z",
+        message: { role: "assistant", content: [{ type: "reasoning", text: "internal" }, { type: "tool_result", text: "ok" }] },
+      }),
+      JSON.stringify({ type: "message", message: { role: "assistant", content: "Readable, but without source time." } }),
+    ), meta);
+
+    expect(agent?.lastHumanFacingAt).toBe("2026-08-04T11:51:00.000Z");
+    expect(agent?.updatedAt).toBe("2026-08-04T11:52:00.000Z");
+  });
+
+  test("qualifies an array text message through the shared sanitizer", () => {
+    const agent = parseFactoryJsonl(transcript(
+      start(),
+      JSON.stringify({
+        type: "message",
+        timestamp: "2026-08-04T11:51:00.000Z",
+        message: { role: "assistant", content: [{ type: "output_text", text: "Factory is ready." }] },
+      }),
+    ), meta);
+
+    expect(agent?.lastHumanFacingAt).toBe("2026-08-04T11:51:00.000Z");
+    expect(agent?.transcriptTail).toBe("Factory is ready.");
+  });
+
   test("id, cwd and timing come off the transcript", () => {
     const agent = parseFactoryJsonl(
       transcript(start(), message("user", "go", "2026-08-04T11:50:00.000Z"), message("assistant", "done")),
