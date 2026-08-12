@@ -24,9 +24,11 @@ import {
   refreshActions,
 } from "./action-log.js";
 import {
+  chatFeedStateNode,
   loadTranscript,
   normalizeTranscript,
   renderTranscriptFeedLead,
+  toolActivityNode,
   transcriptLineNode,
   transcriptWindow,
   TRANSCRIPT_RENDER_CAP,
@@ -1537,7 +1539,7 @@ globalThis.TheAntHill = {
   // they are declared below it, so listing them here would be a TDZ error.
   snapshotFreshness, connLabelText, connVerdictFor, reconnectPlan, fallbackPollDue, eventSnapshot,
   feedAlarm, clocksFrozen, feedFrozen, elapsedTickText, staleControlNote, feedAlarmNode, tickClocks,
-  renderCommandDock, renderDockTool,
+  renderCommandDock, renderDockTool, composerCanSend, resizeComposer,
   // The TRANSCRIPT_* limits stay out for the same TDZ reason as CONN_LABELS:
   // they are `const`s declared below this block. Assert the behavior instead.
   transcriptUrl, clampTranscriptLimit, nextTranscriptLimit, normalizeTranscript,
@@ -9473,6 +9475,10 @@ function inspectorPaintSig(sel, view, ui) {
     ui.renameError || "",
     ui.labelsLoading ? "1" : "0",
     ui.labelLoadError || "",
+    // Narrow drawers switch the visible in-flow panel from Chat to Evidence.
+    // This is also the only state changed by a cached "View Evidence" click,
+    // so it must invalidate the drawer even when identity data is unchanged.
+    ui.evidenceOpen ? "evidence" : "chat",
     // On-demand terminal evidence: nothing else in the drawer moves when it
     // lands, so without this the fetched surfaces would never reach the screen.
     agent && identity.agentId === agent.id
@@ -10379,7 +10385,11 @@ function renderAgentDrawer(pane, view) {
               el("summary", { class: "drawer-task-brief-summary" }, "Full brief"),
               el("pre", { class: "drawer-task-brief-body", text: fullTask }))
           : null),
-      hasFacts ? facts : null),
+      hasFacts
+        ? el("details", { class: "drawer-session-details" },
+            el("summary", { class: "drawer-session-details-summary" }, "Session details"),
+            facts)
+        : null),
     el("div", { class: "verdict-side" }, closeButton())));
 
   const attentionBlock = renderAttentionBlock(agent);
@@ -10396,6 +10406,15 @@ function renderAgentDrawer(pane, view) {
   // task card.
   const chatBody = renderChatFeedBody(agent, state, { taskCarried: Boolean(fullTask) });
   const chatLead = renderTranscriptFeedLead(agent, state);
+  const chatAlarm = feedAlarm(state.conn, state.snap && state.snap.generatedAt);
+  const chatFreshness = chatAlarm
+    ? chatFeedStateNode(
+        chatAlarm.kind === "offline" ? "unavailable" : "stale",
+        chatAlarm.kind === "offline" ? "offline" : "warning",
+        chatAlarm.headline,
+        chatAlarm.detail,
+      )
+    : null;
   /* Mini chat window. The left column is Task on top and a chat APP below it —
      and the feed IS the transcript: bubbles edge to edge, auto-loaded on open
      (selectEntity starts the fetch), with
@@ -10408,33 +10427,45 @@ function renderAgentDrawer(pane, view) {
      role="log" + tabindex make the feed itself a named, keyboard-reachable
      scroll region. */
   const chatScroll = el("div", { id: "drawer-chat-feed", class: "drawer-chat-scroll", role: "log", tabindex: "0", "aria-label": "Conversation" },
+    chatFreshness,
     chatLead,
     chatBody);
+  const jumpToLatest = el("button", {
+    type: "button",
+    class: "btn chat-jump-latest",
+    dataset: { fkey: "chat-latest:" + agent.id },
+  }, "Jump to latest");
+  jumpToLatest.hidden = true;
+  chatScroll.append(jumpToLatest);
   const chatBox = el("div", { class: "drawer-chat" }, chatScroll);
   /* role="region" is load-bearing: aria-label on a role-less <div> is dropped
      by every major AT — a generic element has no accessible name. */
   const doc = el("div", { class: "drawer-doc", role: "region", "aria-label": "Conversation" }, chatBox);
+  doc.id = "drawer-chat-panel";
 
-  /* Controls stay in the pane footer, so a taller routing explanation reserves
-     its own row instead of competing with or clipping the feed. */
+  /* The controls act on this conversation, so the complete dock belongs to the
+     chat box: feed first, controls last, inside one visible boundary. */
   const dock = renderCommandDock(agent, control);
   dock.classList.add("drawer-controls-strip");
   const banner = renderControlBanner(agent, control);
   if (banner) dock.insertBefore(banner, dock.firstChild);
+  chatBox.append(dock);
   /* Chat convention: open pinned to the newest turn; keep the operator's place
      across repaints only while they have deliberately scrolled up. The fake
      test document has no layout, so scrollHeight gates the whole behaviour. */
   const _chatKey = "chat:" + agent.id;
-  const feedOwnsScroll = typeof window === "undefined"
-    || typeof window.matchMedia !== "function"
-    || window.matchMedia("(min-width: 861px)").matches;
-  if (feedOwnsScroll) {
-    chatScroll.onscroll = () => {
-      _chatScrollMemo.key = _chatKey;
-      _chatScrollMemo.top = chatScroll.scrollTop;
-      _chatScrollMemo.atBottom = chatScroll.scrollHeight - chatScroll.scrollTop - chatScroll.clientHeight < 8;
-    };
-  }
+  const syncChatScroll = () => {
+    const atBottom = chatScroll.scrollHeight - chatScroll.scrollTop - chatScroll.clientHeight < 8;
+    _chatScrollMemo.key = _chatKey;
+    _chatScrollMemo.top = chatScroll.scrollTop;
+    _chatScrollMemo.atBottom = atBottom;
+    jumpToLatest.hidden = atBottom;
+  };
+  chatScroll.onscroll = syncChatScroll;
+  jumpToLatest.addEventListener("click", () => {
+    chatScroll.scrollTop = chatScroll.scrollHeight;
+    syncChatScroll();
+  });
   /* Leaving the widget COMMITS the position (operator directive): pointer out
      or focus out writes this agent's place into the per-agent store, so a
      reopen resumes the read instead of re-pinning. An at-bottom reader saves
@@ -10442,48 +10473,82 @@ function renderAgentDrawer(pane, view) {
      freeze them mid-history as the feed grows. selectEntity/closeInspector
      also commit on the way out, covering click-outs the events cannot see. */
   const commitChatScroll = () => saveChatScrollFrom(chatScroll, agent.id);
-  if (feedOwnsScroll) {
-    chatBox.onmouseleave = commitChatScroll;
-    chatBox.onfocusout = commitChatScroll;
-  }
+  chatBox.onmouseleave = commitChatScroll;
+  chatBox.onfocusout = commitChatScroll;
 
   // Evidence is a permanent desk only when the inspector itself is wide enough.
-  // The same DOM becomes an on-demand overlay when the docked pane is narrow;
-  // CSS container queries choose the presentation from pane width, not viewport
-  // width, without changing the evidence or scroll-restoration owner.
+  // Narrow panes switch the same in-flow region between Chat and Evidence;
+  // container queries choose from pane width without changing either scroll owner.
   const evidenceExpanded = Boolean(state.evidenceOpen);
   const desk = el("div", {
     class: "drawer-desk" + (evidenceExpanded ? " is-open" : ""),
     role: "region",
     "aria-label": "Evidence and lineage",
   });
-  const evidenceToggle = el("button", {
-    type: "button",
-    class: "drawer-section-head drawer-evidence-summary",
-    "aria-expanded": String(evidenceExpanded),
-    "aria-controls": "drawer-evidence-body",
-    onclick: () => {
-      const expanded = !desk.classList.contains("is-open");
-      state.evidenceOpen = expanded;
-      desk.classList.toggle("is-open", expanded);
-      evidenceToggle.setAttribute("aria-expanded", String(expanded));
-    },
-  },
-    el("span", { class: "section-title" }, icon("folder-open", { label: "" }), "Evidence"),
-    el("span", { class: "drawer-evidence-summary-action", "aria-hidden": "true" }));
-  desk.append(evidenceToggle);
+  desk.id = "drawer-evidence-panel";
   desk.append(el("div", { class: "drawer-section-head sticky-head drawer-evidence-head" },
-    el("h3", { class: "section-title" }, icon("folder-open", { label: "" }), "Evidence", el("span", { class: "rule", "aria-hidden": "true" }))));
+    el("span", { class: "drawer-evidence-mark", "aria-hidden": "true" }, icon("shield", { label: "" })),
+    el("div", { class: "drawer-evidence-title" },
+      el("span", { class: "drawer-evidence-kicker", text: "Session inspector" }),
+      el("h3", { class: "section-title" }, "Evidence"))));
   desk.append(el("div", { id: "drawer-evidence-body", class: "drawer-evidence-body" },
     renderEvidence(agent),
     renderLineageSpine(agent)));
 
-  const grid = el("div", { class: "drawer-grid" }, doc, desk);
-  pane.append(grid, dock);
+  let grid = null;
+  const setDrawerMode = (evidence, focus = true) => {
+    state.evidenceOpen = evidence;
+    grid.classList.toggle("is-evidence", evidence);
+    desk.classList.toggle("is-open", evidence);
+    chatMode.setAttribute("aria-selected", String(!evidence));
+    evidenceMode.setAttribute("aria-selected", String(evidence));
+    chatMode.setAttribute("tabindex", evidence ? "-1" : "0");
+    evidenceMode.setAttribute("tabindex", evidence ? "0" : "-1");
+    if (focus) (evidence ? evidenceMode : chatMode).focus?.();
+  };
+  const moveDrawerMode = (event, fromEvidence) => {
+    let evidence = null;
+    if (event.key === "Home") evidence = false;
+    else if (event.key === "End") evidence = true;
+    else if (["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp"].includes(event.key)) evidence = !fromEvidence;
+    if (evidence == null) return;
+    event.preventDefault();
+    setDrawerMode(evidence);
+  };
+  const chatMode = el("button", {
+    type: "button",
+    role: "tab",
+    class: "drawer-mode-tab",
+    "aria-controls": doc.id,
+    "aria-selected": String(!evidenceExpanded),
+    tabindex: evidenceExpanded ? "-1" : "0",
+    dataset: { fkey: "drawer-mode:" + agent.id + ":chat" },
+    onclick: () => setDrawerMode(false),
+    onkeydown: (event) => moveDrawerMode(event, false),
+  }, "Chat");
+  const evidenceMode = el("button", {
+    type: "button",
+    role: "tab",
+    class: "drawer-mode-tab",
+    "aria-controls": desk.id,
+    "aria-selected": String(evidenceExpanded),
+    tabindex: evidenceExpanded ? "0" : "-1",
+    dataset: { fkey: "drawer-mode:" + agent.id + ":evidence" },
+    onclick: () => setDrawerMode(true),
+    onkeydown: (event) => moveDrawerMode(event, true),
+  }, "Evidence");
+  const modeSwitch = el("div", {
+    class: "drawer-mode-switch",
+    role: "tablist",
+    "aria-label": "Drawer view",
+  }, chatMode, evidenceMode);
+  grid = el("div", { class: "drawer-grid" + (evidenceExpanded ? " is-evidence" : "") }, modeSwitch, doc, desk);
+  pane.append(grid);
 
-  if (feedOwnsScroll && typeof chatScroll.scrollHeight === "number") {
+  if (typeof chatScroll.scrollHeight === "number") {
     const plan = chatScrollPlan(agent.id, _chatKey, _chatScrollMemo, _chatScrollSaved);
     chatScroll.scrollTop = plan.mode === "bottom" ? chatScroll.scrollHeight : plan.top;
+    syncChatScroll();
   }
 }
 
@@ -10774,30 +10839,32 @@ function renderControlBanner(agent, control) {
      and died carry the risk of acting anyway, and `unproven` carries the reason
      a cwd match can reach the wrong agent. Those are the sentences that stop a
      retry, so they stay. */
+  const details = el("details", { class: "control-banner-details" },
+    el("summary", { class: "control-banner-why-toggle" }, "Why?"));
   if (brief.why && brief.cause !== "missing") {
-    copy.append(el("p", { class: "control-banner-why", text: brief.why }));
+    details.append(el("p", { class: "control-banner-why", text: brief.why }));
   }
-  copy.append(el("p", { class: "control-banner-next", text: brief.nextStep }));
+  details.append(el("p", { class: "control-banner-next", text: brief.nextStep }));
+  copy.append(details);
   copy.append(el("button", {
     type: "button",
     class: "control-banner-link",
     dataset: { fkey: "control-evidence:" + agent.id },
     onclick: () => {
-      /* The desk may be a collapsed on-demand disclosure when its pane is narrow.
-         Load the terminal trace, open that disclosure, and take the operator to
-         it; wide panes render the same node as the permanent desk column. */
+      /* Load the terminal trace, select Evidence in a narrow pane, and take the
+         operator to it; wide panes render the same node as a permanent column. */
+      state.evidenceOpen = true;
       if (state.identity.agentId !== agent.id) void loadIdentityEvidence(agent.id);
       else render();
       /* Optionally called throughout: the test harness's fake document
          implements no selector engine and its nodes have no scrollIntoView.
          Worst case is "nothing moves" — the desk is already visible. */
       const desk = document.querySelector?.(".drawer-desk");
-      state.evidenceOpen = true;
       desk?.classList?.add("is-open");
-      desk?.querySelector?.(".drawer-evidence-summary")?.setAttribute("aria-expanded", "true");
       desk?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+      document.querySelector?.(`[data-fkey="drawer-mode:${agent.id}:evidence"]`)?.focus?.();
     },
-  }, "See routing evidence →"));
+  }, "View Evidence"));
 
   return el("div", { class: "control-banner", role: "status" },
     icon(briefControl === "quarantined" ? "quarantine" : "observed"),
@@ -10816,6 +10883,26 @@ function closeButton() {
 /* ---------- inspector: command dock ---------- */
 
 const NEEDS_CONFIRM = new Set(["interrupt", "archive"]);
+
+function composerCanSend(routeReady, fresh, draft, busy) {
+  return Boolean(routeReady && fresh && !busy && String(draft || "").trim());
+}
+
+function singleLineInstructionDraft(draft) {
+  return String(draft || "").replace(/[\r\n]+/g, " ");
+}
+
+/* Keep the composer chat-sized until its content needs room, then grow it up to
+   a bounded transcript-safe height. The CSS `field-sizing` declaration covers
+   browsers that support it; this small DOM fallback keeps the same behavior in
+   the rest without owning draft state or changing submit semantics. */
+function resizeComposer(input) {
+  if (!input || !input.style || !Number.isFinite(input.scrollHeight)) return;
+  input.style.height = "auto";
+  const height = Math.max(44, Math.min(input.scrollHeight, 128));
+  input.style.height = height + "px";
+  input.style.overflowY = input.scrollHeight > 128 ? "auto" : "hidden";
+}
 
 function capability(agent, action) {
   return (agent.controls || []).find((c) => c.action === action);
@@ -10875,13 +10962,10 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
     dock.append(el("p", { class: "command-dock-stale", role: "status", text: staleControlNote(alarm) }));
   }
 
-  /* The action cluster rides the dock's header line, top right — where the
-     send hint sits — so every control the dock owns is one glance from Send
-     (operator directive: Focus, Interrupt and Archive together in that
-     corner). Same tools, same fkeys, same capability gates and the same
-     destructive-isolation disclosure when the safe controls are locked; only
-     the geography changed. The old Navigate/Operate/File kickers spent three
-     headings on four buttons. */
+  /* Focus and session management are supporting actions, not peers of Send.
+     Keep them together for discoverability, then place the cluster in the
+     quiet toolbar below the composer. Same tools, fkeys, capability gates and
+     destructive-isolation disclosure; only the visual hierarchy changes. */
   const unarchivable = Boolean(unarchiveCap && unarchiveCap.enabled);
   let cluster = null;
   if (focusCap || interruptCap || archiveCap || unarchivable) {
@@ -10900,20 +10984,9 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
     if (unarchivable) cluster.append(renderDockTool(agent, unarchiveCap, "unarchive", { held }));
   }
 
-  // One lock narrative: the control banner owns the reason. The dock meta only
-  // speaks when the link is live, and the send hint only when Send can send.
+  // One lock narrative: the control banner owns the reason. The secondary
+  // toolbar speaks only when the link is live or it has an action to offer.
   const showHint = Boolean(instructCap && instructCap.enabled) && !held;
-  if (linkedReady || showHint || cluster) {
-    const meta = el("div", { class: "command-dock-meta" });
-    meta.append(linkedReady
-      ? el("span", { class: "command-dock-ready", text: "Ready · linked" })
-      : el("span", { "aria-hidden": "true" }));
-    const corner = el("span", { class: "command-dock-corner" });
-    if (showHint) corner.append(el("span", { class: "command-dock-hint", text: "⌘↵ to send" }));
-    if (cluster) corner.append(cluster);
-    meta.append(corner);
-    dock.append(meta);
-  }
 
   const fb = state.feedback.get(agent.id);
   if (fb) {
@@ -10941,67 +11014,95 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
   if (instructCap) {
     const key = agent.id + ":instruct";
     const busy = state.pending.has(key);
-    const sendable = instructCap.enabled && !held;
-    const input = el("input", {
-      type: "text",
+    const routeReady = instructCap.enabled && control === "linked";
+    const sendable = routeReady && !held;
+    const savedDraft = state.drafts.get(agent.id) || "";
+    const initialDraft = singleLineInstructionDraft(savedDraft);
+    if (initialDraft !== savedDraft) state.drafts.set(agent.id, initialDraft);
+    let sendButton = null;
+    const syncSend = (draft) => {
+      const ready = composerCanSend(routeReady, !held, draft, busy);
+      if (!sendButton) return;
+      if (ready) sendButton.removeAttribute("disabled");
+      else sendButton.setAttribute("disabled", "");
+      sendButton.classList.toggle("primary", ready);
+    };
+    const input = el("textarea", {
+      rows: "1",
       placeholder: held
-        ? "⏳ Held until the feed catches up…"
+        ? "Waiting for a fresh snapshot…"
         : instructCap.enabled
-          ? "✦ Message this agent…  (⌘↵ to send)"
+          ? "Message this agent…"
           : (control === "quarantined"
-            ? "⚠️ Resolve identity conflict to instruct…"
-            : "— Instruction unavailable"),
+            ? "Resolve routing in Evidence before messaging…"
+            : "Messaging unavailable for this session"),
       disabled: sendable ? null : "",
-      value: state.drafts.get(agent.id) || "",
+      value: initialDraft,
       "aria-label": "Instruction for " + agentName(agent),
       dataset: { fkey: "draft:" + agent.id },
-      oninput: (e) => state.drafts.set(agent.id, e.target.value),
+      oninput: (e) => {
+        // The control API deliberately rejects CR/LF. Keep the wrapping,
+        // auto-growing textarea without letting pasted text create a draft the
+        // server cannot accept.
+        const draft = singleLineInstructionDraft(e.target.value);
+        if (draft !== e.target.value) e.target.value = draft;
+        state.drafts.set(agent.id, draft);
+        syncSend(draft);
+        resizeComposer(e.target);
+      },
       onkeydown: (e) => {
-        if (!(e.key === "Enter" && (e.metaKey || e.ctrlKey))) return;
+        if (e.isComposing || e.key !== "Enter") return;
         e.preventDefault();
+        if (e.shiftKey) return;
         const text = (state.drafts.get(agent.id) || "").trim();
-        if (!text || busy || !sendable) return;
-        sendControl(agent, "instruct", text);
+        if (!composerCanSend(routeReady, !held, text, busy)) return;
+        return sendControl(agent, "instruct", text);
       },
     });
+    sendButton = el("button", {
+      type: "submit",
+      class: "btn command-send" + (composerCanSend(routeReady, !held, initialDraft, busy) ? " primary" : ""),
+      disabled: composerCanSend(routeReady, !held, initialDraft, busy) ? null : "",
+      "aria-busy": busy ? "true" : null,
+      dataset: { fkey: "act:" + key },
+    }, busy ? "Sending…" : "Send");
     const communicate = dockGroup("Communicate");
-    communicate.append(el("form", {
+    const composer = el("form", {
       class: "command-composer",
       onsubmit: (e) => {
         e.preventDefault();
         const text = (state.drafts.get(agent.id) || "").trim();
-        if (!text || busy || !sendable) return;
+        if (!composerCanSend(routeReady, !held, text, busy)) return;
         sendControl(agent, "instruct", text);
       },
     },
       input,
-      el("button", {
-        type: "submit",
-        /* `primary` is a claim about emphasis and it was made unconditionally.
-           `.btn.primary` is declared AFTER `.btn:disabled` at equal specificity
-           (0,2,0), so the primary fill wins the cascade and a Send that cannot
-           send still rendered solid ink — the highest-emphasis element on the
-           panel, sitting beside a composer reading "Instruction unavailable"
-           and two dock tools the server had already refused. The panel said
-           "you cannot act" and showed a primary action in the same breath.
-
-           Measured against the server rather than guessed: `controlsFor` gates
-           instruct on `transmitRefusal`, and on the live board 724 of 731
-           agents come back instruct:false. So this was the normal rendering,
-           not an edge case.
-
-           Gated on `sendable` — the server's verdict — rather than by adding a
-           rule to out-specify `.btn.primary`. The class then means what it
-           says, `.btn:disabled` styles it the way the design system already
-           intends, and the shared button rules are left alone. NOT gated on
-           `busy`: a send in flight can act, so it keeps its emphasis and
-           `.btn[aria-busy]` dims it, which is the existing correct look. */
-        class: "btn command-send" + (sendable ? " primary" : ""),
-        disabled: sendable && !busy ? null : "",
-        "aria-busy": busy ? "true" : null,
-        dataset: { fkey: "act:" + key },
-      }, busy ? "Sending…" : "Send")));
+      /* Primary means actionable: safe route, fresh snapshot, non-empty draft,
+         and no send already in flight. */
+      sendButton);
+    communicate.append(composer);
     dock.append(communicate);
+
+    // The initial draft may already span lines. Measure again on the next frame,
+    // after the drawer has attached the returned dock and layout is available.
+    resizeComposer(input);
+    if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+      window.requestAnimationFrame(() => resizeComposer(input));
+    }
+  }
+
+  if (linkedReady || showHint || cluster) {
+    const secondary = el("div", {
+      class: "command-dock-secondary",
+      role: "group",
+      "aria-label": "Secondary session actions",
+    });
+    const context = el("span", { class: "command-dock-context" });
+    if (linkedReady) context.append(el("span", { class: "command-dock-ready", text: "Ready · linked" }));
+    if (showHint) context.append(el("span", { class: "command-dock-hint", text: "Enter to send · pasted line breaks become spaces" }));
+    secondary.append(context);
+    if (cluster) secondary.append(cluster);
+    dock.append(secondary);
   }
 
   return dock;
@@ -11296,7 +11397,7 @@ function renderChatTurn(role, text, sender = null) {
         title: "The claimed sender's own transcript does not contain this message. Treat the attribution as unproven and check the sender before acting on it.",
       }, icon("warning"), el("span", { text: "Sender unconfirmed" }))
       : null,
-    el("p", { class: "chat-turn-body", tabindex: "0", text }));
+    el("p", { class: "chat-turn-body", text }));
 }
 
 /* The sender as a NAME. `agent.id` is `provider:sourceSessionId` — durable, and
@@ -11436,53 +11537,111 @@ function renderChat(agent, ui = state, opts = {}) {
      same path with its own Copy button, and raw paths are exactly what "evidence
      stays collapsed as the place for raw detail" means. */
 
-  if (!panel.childNodes.length) {
-    panel.append(el("p", { class: "chat-feed-empty inspector-note", text: "No readable turns recorded for this session yet." }));
+  if (!panel.childNodes.length && !opts.suppressEmptyState) {
+    panel.append(chatFeedStateNode(
+      "empty", "scroll-text", "No readable turns yet",
+      "No readable turns recorded for this session yet.",
+    ));
   }
   return panel;
 }
 
-/* One transcript line as a chat bubble. The meta line is the 12px mono strip:
+/* Consecutive transcript speech from one role/sender as a chat bubble. The meta line is the 12px mono strip:
    who spoke — the resolved sender when the line carries a producer envelope,
    the role label otherwise — and when, relative. The sender-verdict semantics
    are renderChatTurn's, unchanged: the mark states the server's finding on the
    ONE text it actually checked (senderClaimText), and an absent verdict marks
    nothing at all. */
-function chatBubbleNode(line, agent, ui = state) {
-  const sender = senderView(line.text, ui);
-  const unconfirmed = sender && agent.senderVerified === false && line.text === senderClaimText(agent);
-  return el("div", { class: "chat-msg", dataset: { role: line.role } },
+function chatMessageGroupKey(line) {
+  const sender = parseSenderHeader(line.text);
+  return line.role + ":" + (sender ? sender.agentId + ":" + sender.runId : "direct");
+}
+
+function chatMessageGroupNode(lines, agent, ui = state) {
+  const first = lines[0];
+  const sender = senderView(first.text, ui);
+  const unconfirmed = sender && agent.senderVerified === false
+    && lines.some((line) => line.text === senderClaimText(agent));
+  const bubble = el("div", { class: "chat-msg", dataset: { role: first.role } },
     el("div", { class: "chat-msg-meta" },
-      el("span", { class: "chat-msg-role", text: sender ? sender.name : (TRANSCRIPT_ROLE_LABELS[line.role] || line.role) }),
-      sender ? el("span", { class: "chat-msg-run", text: "run " + sender.runId }) : null,
-      line.at ? el("span", { class: "chat-msg-at", title: line.at, text: agoText(line.at) }) : null),
+      el("span", { class: "chat-msg-role", text: sender ? sender.name : (TRANSCRIPT_ROLE_LABELS[first.role] || first.role) }),
+      sender ? el("span", { class: "chat-msg-run", text: "run " + sender.runId }) : null),
     unconfirmed
       ? el("div", {
         class: "sender-unconfirmed",
         title: "The claimed sender's own transcript does not contain this message. Treat the attribution as unproven and check the sender before acting on it.",
       }, icon("warning"), el("span", { text: "Sender unconfirmed" }))
-      : null,
-    // UNTRUSTED. textContent via el({ text }) — never innerHTML.
-    el("p", { class: "chat-msg-body", tabindex: "0", text: sender ? withoutSenderHeader(line.text) : line.text }));
+      : null);
+  for (const line of lines) {
+    const lineSender = senderView(line.text, ui);
+    bubble.append(el("div", { class: "chat-msg-content" },
+      // UNTRUSTED. textContent via el({ text }) — never innerHTML.
+      el("p", { class: "chat-msg-body", text: lineSender ? withoutSenderHeader(line.text) : line.text }),
+      line.at ? el("time", { class: "chat-msg-at", datetime: line.at, title: line.at, text: agoText(line.at) }) : null));
+  }
+  return bubble;
 }
 
+function chatBubbleNode(line, agent, ui = state) {
+  return chatMessageGroupNode([line], agent, ui);
+}
+
+/* A loaded transcript object can survive many unrelated dashboard repaints.
+   Remember which payload already entered so rebuilding the drawer never
+   replays the conversation's entrance motion. */
+const enteredTranscriptPayloads = new WeakSet();
+
 /* The feed's one body. The transcript, when it is held for THIS agent, rendered
-   as bubbles — user/assistant speak; tool, system and unknown turns stay quiet
-   .tr-line rows between them. Otherwise the preview thread (renderChat) stands
+   as grouped speech bubbles and grouped tool activity; system and unknown turns
+   stay quiet .tr-line rows between them. Otherwise the preview thread (renderChat) stands
    in: loading, errored, or a session with no record yet. renderChat survives
    ONLY as that fallback, which is what makes "every message appears exactly
    once" true by construction — the drawer never holds both renderers' output. */
 function renderChatFeedBody(agent, ui = state, opts = {}) {
   const view = (ui && ui.transcript) || {};
-  const lines = view.agentId === agent.id && view.data && view.data.lines.length
+  const held = view.agentId === agent.id;
+  const lines = held && view.data && view.data.lines.length
     ? transcriptWindow(view.data.lines).shown
     : null;
-  if (!lines) return renderChat(agent, ui, opts);
+  if (!lines) return renderChat(agent, ui, {
+    ...opts,
+    suppressEmptyState: held && Boolean(view.loading || view.error || view.data),
+  });
+  const shouldAnimateEntry = typeof view.data === "object"
+    && view.data !== null
+    && !enteredTranscriptPayloads.has(view.data);
   const body = el("div", { class: "chat-feed" });
-  for (const line of lines) {
-    body.append(line.role === "user" || line.role === "assistant"
-      ? chatBubbleNode(line, agent, ui)
-      : transcriptLineNode(line));
+  for (let i = 0; i < lines.length;) {
+    const line = lines[i];
+    if (line.role === "user" || line.role === "assistant") {
+      const key = chatMessageGroupKey(line);
+      const group = [line];
+      while (i + group.length < lines.length) {
+        const next = lines[i + group.length];
+        if ((next.role !== "user" && next.role !== "assistant") || chatMessageGroupKey(next) !== key) break;
+        group.push(next);
+      }
+      body.append(chatMessageGroupNode(group, agent, ui));
+      i += group.length;
+      continue;
+    }
+    if (line.role === "tool") {
+      const group = [line];
+      while (i + group.length < lines.length && lines[i + group.length].role === "tool") {
+        group.push(lines[i + group.length]);
+      }
+      body.append(toolActivityNode(group));
+      i += group.length;
+      continue;
+    }
+    // System warnings and unknown provider events stay standalone.
+    body.append(transcriptLineNode(line));
+    i += 1;
+  }
+  if (shouldAnimateEntry) {
+    const entry = body.childNodes[body.childNodes.length - 1];
+    entry?.classList?.add("chat-entry");
+    enteredTranscriptPayloads.add(view.data);
   }
   return body;
 }
@@ -11737,7 +11896,7 @@ function renderSurfaceEvidence(agent, ui = state) {
 
 
 function renderEvidence(agent, ui = state) {
-  const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
+  const panel = el("div", { class: "inspector-panel evidence-inspector-panel", role: "tabpanel" });
   const grid = el("dl", { class: "detail-grid" });
 
   // — Where: Workspace / Repo / Git — deduped, 14px icons per Evidence row (Design A) —
@@ -11747,16 +11906,28 @@ function renderEvidence(agent, ui = state) {
   const _samePath = _cwd && _repoPath && _cwd === _repoPath;
   const _surfaceCwd = agent.target && typeof agent.target.surfaceCwd === "string" ? agent.target.surfaceCwd.trim() : "";
   const _sameSurfacePath = _cwd && _surfaceCwd && _cwd === _surfaceCwd;
+  const pathLine = (iconName, value, label, copyValue = value, extra = null) => el("span", { class: "evidence-path-line" },
+    icon(iconName, { label: "" }),
+    el("code", { title: value, text: value }),
+    extra,
+    copyValue ? el("button", {
+      type: "button",
+      class: "artifact-copy evidence-path-copy",
+      title: "Copy " + label + " path",
+      "aria-label": "Copy " + label + " path",
+      dataset: { fkey: `copy-path:${agent.id}:${label}` },
+      onclick: () => copyText(copyValue),
+    }, icon("copy")) : null);
   if (_samePath) {
-    dtdd(grid, "Workspace", el("span", { class: "evidence-path-line" }, icon("folder-open", { label: "" }), el("code", { text: _cwd }), el("span", { class: "badge", text: "folder = repo" })), { hint: "Working folder and repository are the same path — collapsed to one line." });
+    dtdd(grid, "Workspace", pathLine("folder-open", _cwd, "Workspace", _cwd, el("span", { class: "badge", text: "folder = repo" })), { hint: "Working folder and repository are the same path — collapsed to one line." });
   } else {
-    if (_cwd) dtdd(grid, "Workspace", el("span", { class: "evidence-path-line" }, icon("folder-open", { label: "" }), el("code", { text: _cwd })), { code: true });
+    if (_cwd) dtdd(grid, "Workspace", pathLine("folder-open", _cwd, "Workspace"), { code: true });
     const _repoLabel = _repoName || _repoPath;
-    if (_repoLabel) dtdd(grid, "Repository", el("span", { class: "evidence-path-line" }, icon("folder", { label: "" }), el("code", { text: _repoLabel })), { code: true });
+    if (_repoLabel) dtdd(grid, "Repository", pathLine("folder", _repoLabel, "Repository", _repoPath || _repoLabel), { code: true });
   }
-  if (!_samePath && agent.launchCwd && agent.launchCwd !== _cwd) dtdd(grid, "Launch folder", el("span", { class: "evidence-path-line" }, icon("folder-open", { label: "" }), el("code", { text: agent.launchCwd })), { code: true });
+  if (!_samePath && agent.launchCwd && agent.launchCwd !== _cwd) dtdd(grid, "Launch folder", pathLine("folder-open", agent.launchCwd, "Launch folder"), { code: true });
   if (!_sameSurfacePath) {
-    dtdd(grid, "Terminal shell folder", _surfaceCwd ? el("span", { class: "evidence-path-line" }, icon("terminal", { label: "" }), el("code", { text: _surfaceCwd })) : null, { code: true });
+    dtdd(grid, "Terminal shell folder", _surfaceCwd ? pathLine("terminal", _surfaceCwd, "Terminal shell folder") : null, { code: true });
   }
 
   const _gitLight = !agent.git ? "⚪" : agent.git.dirty ? "🟡" : "🟢";
@@ -11785,18 +11956,19 @@ function renderEvidence(agent, ui = state) {
   if (grid.childNodes.length) {
     grid.dataset.evidenceSection = "paths & usage";
     const pathsHead = el("h3", { class: "section-title", dataset: { evidenceSection: "paths & usage" } }, icon("folder-open", { label: "" }), "Paths & Usage", el("span", { class: "rule", "aria-hidden": "true" }));
-    panel.append(pathsHead, grid);
+    const pathsSection = el("section", { class: "evidence-section evidence-section--paths" }, pathsHead, grid);
     if (_sameSurfacePath) {
-      panel.append(el("p", {
+      pathsSection.append(el("p", {
         class: "directory-relation-note",
         text: "Workspace and terminal report the same folder. This is directory evidence only and does not authorize controls.",
       }));
     } else if (agent.target && agent.target.cwdRelation === "different") {
-      panel.append(el("p", {
+      pathsSection.append(el("p", {
         class: "directory-relation-note",
         text: "Claude’s tool session and the terminal shell maintain separate working directories. This does not change the exact cmux link.",
       }));
     }
+    panel.append(pathsSection);
   }
 
   /* Where the row diet's four chips went. They were on every row, and on a
@@ -11809,19 +11981,20 @@ function renderEvidence(agent, ui = state) {
   if (facts) {
     facts.dataset.evidenceSection = "row facts";
     const factsHead = el("h3", { class: "section-title", dataset: { evidenceSection: "row facts" } }, icon("activity", { label: "" }), "Row facts", el("span", { class: "rule", "aria-hidden": "true" }));
-    panel.append(factsHead, facts);
+    panel.append(el("section", { class: "evidence-section evidence-section--facts" }, factsHead, facts));
   }
 
   const identity = renderIdentityBlock(agent);
   if (identity) {
     identity.dataset.evidenceSection = "identity";
+    identity.classList.add("evidence-section", "evidence-section--identity");
     panel.append(identity);
   }
 
   // Names blank field removed — empty pill looks broken, settings affordance not evidence (content crit §3.6)
 
   if (agent.artifacts && agent.artifacts.length) {
-    panel.append(
+    panel.append(el("section", { class: "evidence-section evidence-section--artifacts" },
       el("h3", { class: "section-title", dataset: { evidenceSection: "artifacts" } }, icon("paperclip", { label: "" }), "Artifacts", el("span", { class: "rule", "aria-hidden": "true" })),
       el("ul", { class: "artifact-list" },
         agent.artifacts.map((a) => el("li", {},
@@ -11833,13 +12006,17 @@ function renderEvidence(agent, ui = state) {
             "aria-label": "Copy " + (a.kind === "transcript" ? "transcript" : "artifact") + " path",
             dataset: { fkey: `copy:${agent.id}:${a.path}` },
             onclick: () => copyText(a.path),
-          }, icon("copy"))))));
+          }, icon("copy")))))));
   }
 
   // Transcript lives in Chat tab (Full Task + Transcript expandable) — not duplicated in Evidence (content crit §3.3/§3.4 triple redundancy)
 
   if (!panel.childNodes.length) {
-    panel.append(el("p", { class: "inspector-note", text: "No evidence fields reported for this session." }));
+    panel.append(el("div", { class: "evidence-empty" },
+      el("span", { class: "evidence-empty-mark", "aria-hidden": "true" }, icon("file-text", { label: "" })),
+      el("div", {},
+        el("strong", { text: "No evidence reported" }),
+        el("p", { class: "inspector-note", text: "No evidence fields reported for this session." }))));
   }
   return panel;
 }

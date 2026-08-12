@@ -157,7 +157,7 @@ export const state = {
      an agent — so closing a program or finding drawer destroyed the focused
      Close button and dropped a keyboard operator on <body>. */
   selectionOrigin: null,
-  evidenceOpen: false,     // Legacy: only the call-free renderEvidenceShelf reads it; kept until that dead shelf is retired.
+  evidenceOpen: false,     // Narrow agent drawers show Evidence in place of Chat when selected.
   // Terminal-level identity evidence for the open drawer. The pids, commands
   // and open-file matches that say "ttys082 has both of these sessions open"
   // live on CmuxSurface, which /api/snapshot does not carry — so they are

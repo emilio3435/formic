@@ -850,8 +850,8 @@ export function sourceAgentName(agent) {
 export function staleControlNote(alarm) {
   if (!alarm) return "";
   return alarm.kind === "offline"
-    ? "Held — the server is unreachable, so there is no safe route to this session."
-    : "Held — the board is " + fmtElapsed(alarm.ageMs) + " out of date. Refresh before sending.";
+    ? "Snapshot unavailable · Controls held — the server is unreachable. Waiting for a fresh snapshot before sending."
+    : "Snapshot stale · Controls held — the board is " + fmtElapsed(alarm.ageMs) + " out of date. Waiting for a fresh snapshot before sending.";
 }
 
 state.aliases = state.labels;

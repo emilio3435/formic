@@ -2550,103 +2550,89 @@ body.feed-frozen .programs { opacity: 0.62; }
    strip until it is asked for. */
 /* Document + Desk — the shelf's two-track corpse (1fr/2.75rem + 0.8fr)
    made the only prose surface compete with a dashed shrine. The Document now
-   keeps full reading measure until the inspector itself can afford the 65/35
-   desk; narrow panes expose the same Evidence through an on-demand overlay. */
+   keeps full reading measure until the inspector itself can afford a bounded
+   desk; narrow panes expose the same Evidence as an explicit in-flow mode. */
 /* At desktop interaction sizes the inspector's own width, not the viewport,
    decides whether Evidence fits beside the transcript. A narrow dock keeps the
-   document full-width and reduces Evidence to its overlay trigger. */
+   document full-width and exposes Chat/Evidence as explicit in-flow modes. */
 .drawer-grid {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   gap: var(--space-4);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
-@media (min-width: 861px) {
+.drawer-mode-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-column: 1;
+  grid-row: 1;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--sand);
+}
+.drawer-mode-tab {
+  min-height: 40px;
+  border: 0;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: transparent;
+  color: var(--muted);
+  font: 600 13px/1 var(--font-ui);
+  cursor: pointer;
+}
+.drawer-mode-tab[aria-selected="true"] {
+  background: var(--raise);
+  color: var(--color-interactive);
+  box-shadow: var(--shadow-sm);
+}
+.drawer-grid .drawer-doc,
+.drawer-grid .drawer-desk {
+  min-width: 0;
+  grid-column: 1;
+  grid-row: 2;
+}
+.drawer-grid:not(.is-evidence) .drawer-desk { display: none; }
+.drawer-grid.is-evidence .drawer-doc { display: none; }
+@container agent-drawer (min-width: 46rem) {
   .drawer-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) clamp(280px, 35%, 320px);
     grid-template-rows: minmax(0, 1fr);
     gap: 16px 18px;
     align-items: stretch;
-    min-height: 0;
-    position: relative;
   }
-  .drawer-grid .drawer-doc,
-  .drawer-grid .drawer-desk {
-    min-width: 0;
-  }
+  .drawer-mode-switch { display: none; }
   .drawer-grid .drawer-doc {
     grid-column: 1 / 2;
     grid-row: 1 / 2;
+    display: grid;
   }
   .drawer-grid .drawer-desk {
-    position: absolute;
-    z-index: 2;
-    top: 1rem;
-    right: var(--inspector-pad-x);
-    max-width: calc(100% - (2 * var(--inspector-pad-x)));
-    max-height: calc(100% - 2rem);
-  }
-  .drawer-grid .drawer-desk.is-open {
-    right: var(--inspector-pad-x);
-    bottom: 1rem;
-    left: var(--inspector-pad-x);
-    max-width: none;
-    max-height: none;
-    border: 1px solid var(--line-strong);
-    border-radius: var(--radius-sm);
-    background: var(--raise);
-    box-shadow: var(--shadow-lift);
-  }
-}
-@container agent-drawer (min-width: 46rem) {
-  .drawer-grid {
-    grid-template-columns: minmax(0, 65fr) minmax(0, 35fr);
-    grid-template-rows: minmax(0, 1fr);
-  }
-  .drawer-grid .drawer-doc {
-    grid-column: 1 / 2;
-    grid-row: 1 / 2;
-  }
-  .drawer-grid .drawer-desk {
-    position: static;
-    z-index: auto;
     grid-column: 2 / 3;
     grid-row: 1 / 2;
     max-width: none;
     max-height: none;
-    border: 0;
-    border-radius: 0;
-    background: transparent;
+    border: 1px solid color-mix(in srgb, var(--slate) 28%, var(--line));
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--slate) 4%, var(--sand));
     box-shadow: none;
   }
-  .drawer-grid .drawer-desk.is-open {
-    inset: auto;
-    max-width: none;
-    max-height: none;
-    border: 0;
-    border-radius: 0;
-    background: transparent;
-    box-shadow: none;
-  }
-}
-@media (max-width: 860px) {
-  .drawer-grid {
-    display: flex;
-    flex-direction: column;
-  }
+  .drawer-grid:not(.is-evidence) .drawer-desk,
+  .drawer-grid.is-evidence .drawer-desk { display: block; }
+  .drawer-grid.is-evidence .drawer-doc { display: grid; }
 }
 
 .drawer-chat { display: flex; flex-direction: column; gap: var(--space-3); }
-.drawer-controls-strip {
+.drawer-chat > .drawer-controls-strip {
   position: static;
   z-index: 3;
   margin: 0;
-  padding: 10px var(--inspector-pad-x) 12px;
+  padding: 10px 12px max(12px, env(safe-area-inset-bottom));
   background: var(--surface);
   border-top: 1px solid var(--line-strong);
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
   box-shadow: 0 -4px 12px rgba(23, 33, 43, 0.06);
 }
 .shelf-section {
@@ -3112,6 +3098,16 @@ body.feed-frozen .programs { opacity: 0.62; }
   padding: 0.65rem 0 0;
   border-top: 1px solid var(--line);
 }
+.drawer-session-details { margin: 0; }
+.drawer-session-details-summary {
+  cursor: pointer;
+  color: var(--color-text-link);
+  font: 500 12px/1.35 var(--font-mono);
+}
+@container agent-drawer (min-width: 46rem) {
+  .drawer-session-details-summary { display: none; }
+  .drawer-session-details:not([open]) > .drawer-session-facts { display: flex; }
+}
 .drawer-session-fact { display: grid; grid-template-columns: auto auto; align-items: center; gap: 0.45rem; min-width: 0; }
 .drawer-session-fact dt { font: 500 10.5px/1.2 var(--font-mono); letter-spacing: 0.065em; text-transform: uppercase; color: var(--faint-strong); }
 .drawer-session-fact dd { margin: 0; font: 500 13px/1.35 var(--font-mono); color: var(--ink); font-variant-numeric: tabular-nums; }
@@ -3227,6 +3223,13 @@ body.feed-frozen .programs { opacity: 0.62; }
   color: var(--failed); font: inherit; font-weight: 600;
 }
 .control-banner-link:hover { text-decoration: underline; }
+.control-banner-details { margin-top: 0.35rem; }
+.control-banner-why-toggle {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--color-text-link);
+  font-weight: 600;
+}
 /* The banner now carries the reason resolution refused and the operator's next
    move; both are quiet body copy under the verdict sentence, never a second
    alarm. `why` is resolver-authored text, so it wraps rather than truncates. */
@@ -3271,14 +3274,13 @@ body.feed-frozen .programs { opacity: 0.62; }
 /* Agent shell: one owner per row.
 
      header                           auto
-     transcript + evidence       minmax(0, 1fr)
-     explanation + controls          auto
+     chat + evidence             minmax(0, 1fr)
 
-   Desktop/tablet scroll inside transcript/evidence; mobile scrolls the single
-   drawer body. The pane and footer never become competing scroll containers. */
+   Chat owns its controls inside the content row. Transcript and Evidence own
+   their independent scroll regions; the pane itself never competes with them. */
 .pane-inspector.dw-agent {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr);
   container: agent-drawer / inline-size;
   min-height: 0;
   overflow: hidden;
@@ -3298,10 +3300,10 @@ body.feed-frozen .programs { opacity: 0.62; }
   width: auto;
   max-width: none;
   margin: 0;
-  padding: 0.5rem var(--inspector-pad-x);
+  padding: 0.5rem var(--inspector-pad-x) max(0.5rem, env(safe-area-inset-bottom));
   border-top: 1px solid var(--line);
-  /* Opaque, deliberately. This is a real shell footer in the pane grid, so the
-     content row ends before controls begin and nothing can pass behind it. */
+  /* Opaque, deliberately. The dock is the chat box's final row, so transcript
+     content ends before controls begin and nothing can pass behind it. */
   background: var(--raise);
   box-shadow: 0 -12px 28px -22px rgba(18, 24, 32, 0.4);
   display: flex; flex-direction: column; gap: 0.25rem;
@@ -3309,10 +3311,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 /* Linked dock: a moss hairline marks the live control link; the lock story
    stays with the control banner, so the dock never repeats it. */
 .command-dock--linked { border-top-color: color-mix(in srgb, var(--moss) 55%, var(--line)); }
-.command-dock-meta {
-  display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
-  font-size: 11.5px; color: var(--faint-strong);
-}
 .command-dock-ready { color: var(--moss); font-weight: 600; }
 .command-dock-hint { color: var(--faint-strong); }
 /* A held dock is visibly held: the reason reads first, and the controls under it
@@ -3327,31 +3325,99 @@ body.feed-frozen .programs { opacity: 0.62; }
 }
 .dock-tool.is-held { opacity: 0.55; }
 .command-composer {
-  display: grid; grid-template-columns: 1fr auto; gap: 0.4rem; align-items: stretch;
+  display: flex;
+  align-items: flex-end;
+  gap: 0.45rem;
+  min-width: 0;
+  padding: 0.3rem;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: 1.5rem;
+  box-shadow: 0 8px 24px -20px rgba(18, 24, 32, 0.7);
+  transition: border-color 150ms ease, box-shadow 150ms ease, background-color 150ms ease;
 }
-.command-composer input {
-  width: 100%; min-height: 40px; padding: 0.5rem 0.7rem; font: inherit; font-size: 13.5px;
-  color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
+.command-composer:focus-within {
+  border-color: var(--color-interactive);
+  box-shadow: var(--color-focus-ring), 0 10px 26px -20px rgba(18, 24, 32, 0.7);
 }
-.command-composer input::placeholder { color: var(--faint-strong); }
-.command-composer input:disabled {
-  color: var(--faint-strong); background: var(--sand); border-color: var(--line);
+.command-composer textarea {
+  box-sizing: border-box;
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  max-height: 8rem;
+  padding: 0.7rem 0.75rem;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.45;
+  resize: none;
+  field-sizing: content;
+  overflow-y: hidden;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  border-radius: 1.15rem;
 }
-.command-composer input:focus-visible { outline: 2px solid var(--color-interactive); outline-offset: 1px; box-shadow: var(--color-focus-ring); }
-.command-send { min-width: 4.5rem; }
+.command-composer textarea::placeholder { color: var(--faint-strong); }
+.command-composer textarea:disabled {
+  color: var(--faint-strong); background: transparent;
+}
+.command-composer textarea:focus-visible {
+  outline: 1px solid var(--color-interactive);
+  outline-offset: -2px;
+  box-shadow: none;
+}
+.command-send {
+  align-self: flex-end;
+  min-width: 5.25rem;
+  min-height: 44px;
+  padding-inline: 1.05rem;
+  border-radius: 999px;
+  font-weight: 600;
+  transition: transform 120ms ease, box-shadow 150ms ease, background-color 150ms ease;
+}
+.command-send.primary { box-shadow: 0 7px 16px -8px color-mix(in srgb, var(--color-brand-control) 72%, transparent); }
+.command-send.primary:hover:not(:disabled) { transform: translateY(-1px); }
+.command-send.primary:active:not(:disabled) { transform: translateY(0); }
 .dock-group { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
+.command-dock > .dock-group { gap: 0; }
+.command-dock > .dock-group > .dock-group-label {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
 .dock-group-label {
   font: 500 9px/1.3 var(--font-mono);
   letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--faint-strong);
 }
-/* The corner: hint + action cluster on the dock's header line, top right —
-   one glance from Send. The cluster reads as one segmented control: a single
-   bordered pill, tools separated by hairlines, so three verbs take the visual
-   weight of one chip instead of three floating buttons over three headings. */
-.command-dock-corner { display: flex; align-items: center; gap: 0.6rem; margin-left: auto; }
+/* Navigation and session management sit below the primary composer. The
+   hairline, smaller type and transparent controls make this read as a utility
+   toolbar rather than a second call-to-action row. */
+.command-dock-secondary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  min-height: 44px;
+  padding-top: 0.2rem;
+  border-top: 1px solid var(--line);
+  font-size: 11.5px;
+  color: var(--faint-strong);
+}
+.command-dock-context { display: flex; align-items: center; gap: 0.55rem; min-width: 0; }
+.command-dock-ready::before {
+  content: "";
+  display: inline-block;
+  width: 0.42rem;
+  height: 0.42rem;
+  margin-right: 0.35rem;
+  border-radius: 50%;
+  background: currentColor;
+  vertical-align: 0.05rem;
+}
 .command-dock-cluster {
   display: inline-flex; align-items: center; gap: 0.1rem;
   border: 0;
@@ -3359,8 +3425,8 @@ body.feed-frozen .programs { opacity: 0.62; }
   overflow: visible;
 }
 .command-dock-cluster .dock-tool {
-  min-height: 32px; padding: 0.25rem 0.55rem;
-  border-radius: var(--radius-sm);
+  min-height: 44px; padding: 0.25rem 0.55rem;
+  border-radius: 999px;
   border: 0;
 }
 .command-dock-cluster > :first-child,
@@ -3390,10 +3456,10 @@ body.feed-frozen .programs { opacity: 0.62; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  min-height: 32px;
+  width: 44px;
+  min-height: 44px;
   padding: 0;
-  border-radius: var(--radius-sm);
+  border-radius: 999px;
   cursor: pointer;
   color: var(--faint-strong);
   list-style: none;
@@ -3685,7 +3751,7 @@ body.feed-frozen .programs { opacity: 0.62; }
      on the board on a phone. */
   .notify-act, .notify-row-acts .dock-tool, .verdict-cleanup, .filter-chip, .program-details,
   .artifact-copy, .command-dock-more > summary, .command-dock-cluster .dock-tool,
-  .command-composer input, .rename-form input { min-height: 44px; }
+  .command-composer textarea, .rename-form input { min-height: 44px; }
   .artifact-copy, .command-dock-more > summary { width: 44px; }
 }
 
@@ -3709,6 +3775,10 @@ body.feed-frozen .programs { opacity: 0.62; }
   .readings-stack { flex: 1 1 auto; border-left: 0; border-top: 1px solid var(--line-strong); }
   .health-tldr-lane { flex: 1 1 auto; }
   .rail-inner.is-no-tldr .readings-grid { grid-template-columns: 1fr 1fr; }
+}
+
+@media (max-width: 639px) {
+  .command-dock-hint { display: none; }
 }
 
 @media (max-width: 720px) {
@@ -4651,7 +4721,15 @@ body.feed-frozen .programs { opacity: 0.62; }
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
 }
+.evidence-path-line code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.evidence-path-copy { flex: none; margin-left: auto; }
 .git-line { display: flex; align-items: center; gap: 6px; }
 .git-dirty, .git-clean { font: 500 11px var(--font-mono); }
 .git-clean { color: var(--moss); }
@@ -4699,6 +4777,17 @@ body.feed-frozen .programs { opacity: 0.62; }
   min-height: 0;
 }
 .drawer-chat-scroll:focus-visible { outline: 2px solid var(--color-interactive); outline-offset: -2px; box-shadow: var(--color-focus-ring); }
+.chat-jump-latest {
+  position: sticky;
+  bottom: 0;
+  align-self: center;
+  min-height: 36px;
+  padding-inline: 0.8rem;
+  border-radius: 999px;
+  background: var(--raise);
+  box-shadow: var(--shadow-sm);
+  z-index: 1;
+}
 /* ---------- bubble feed ----------
    The feed is the transcript, read like a messenger: iMessage heuristics
    carry the WHO without a label — the operator's sends are the filled slate
@@ -4725,7 +4814,10 @@ body.feed-frozen .programs { opacity: 0.62; }
 .chat-msg-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; font: 500 12px/1.2 var(--font-mono); color: var(--muted); }
 .chat-msg[data-role="assistant"] .chat-msg-role { color: var(--moss); }
 .chat-msg-at, .chat-msg-run { color: var(--faint-strong); font-weight: 500; }
-.chat-msg-body { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-msg-content { display: grid; gap: 2px; }
+.chat-msg-content + .chat-msg-content { margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--line); }
+.chat-msg-body { margin: 0; font-size: 14px; line-height: 1.5; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-msg-content .chat-msg-at { font: 500 10.5px/1.2 var(--font-mono); }
 /* White ink on the filled bubble, meta a step quieter — same hierarchy the
    agent side gets from --muted/--faint-strong, translated to the dark ground. */
 .chat-msg[data-role="user"] .chat-msg-body { color: var(--color-text-on-inverse); }
@@ -4736,6 +4828,163 @@ body.feed-frozen .programs { opacity: 0.62; }
 /* The verdict mark must survive the dark ground it can land on. */
 .chat-msg[data-role="user"] .sender-unconfirmed { background: var(--raise); }
 .chat-feed .tr-line { opacity: 0.85; }
+.chat-tool-group {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+}
+.chat-tool-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-inline: 3px;
+  color: var(--faint-strong);
+  font: 500 10.5px/1.3 var(--font-mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.chat-tool-group-head .ico { width: 13px; height: 13px; }
+.chat-tool-count {
+  min-width: 18px;
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.chat-tool-timeline {
+  position: relative;
+  display: grid;
+  gap: 6px;
+  padding-left: 18px;
+}
+.chat-tool-timeline::before {
+  content: "";
+  position: absolute;
+  top: 14px;
+  bottom: 14px;
+  left: 7px;
+  width: 1px;
+  background: var(--line-strong);
+}
+.chat-tool-card {
+  position: relative;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--sand) 48%, var(--raise));
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--ink) 4%, transparent);
+}
+.chat-tool-card::before {
+  content: "";
+  position: absolute;
+  top: 14px;
+  left: -15px;
+  width: 7px;
+  height: 7px;
+  border: 2px solid var(--raise);
+  border-radius: 50%;
+  background: var(--line-strong);
+  box-shadow: 0 0 0 1px var(--line-strong);
+}
+.chat-tool-card[data-status="good"]::before { background: var(--moss); box-shadow: 0 0 0 1px var(--moss); }
+.chat-tool-card[data-status="bad"]::before { background: var(--bad); box-shadow: 0 0 0 1px var(--bad); }
+.chat-tool-card[data-status="live"]::before { background: var(--slate); box-shadow: 0 0 0 1px var(--slate); }
+.chat-tool-summary {
+  min-width: 0;
+  min-height: 38px;
+  padding: 7px 8px;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  list-style: none;
+}
+.chat-tool-summary::-webkit-details-marker { display: none; }
+.chat-tool-node {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--raise);
+  color: var(--faint-strong);
+}
+.chat-tool-node .ico { width: 13px; height: 13px; }
+.chat-tool-card-copy { min-width: 0; display: grid; gap: 3px; }
+.chat-tool-title {
+  overflow: hidden;
+  color: var(--ink);
+  font: 500 11.5px/1.35 var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-tool-meta {
+  min-height: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  color: var(--faint-strong);
+  font: 500 9.5px/1.25 var(--font-mono);
+}
+.chat-tool-status,
+.chat-tool-duration {
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--raise);
+}
+.chat-tool-status.is-good { border-color: color-mix(in srgb, var(--moss) 32%, var(--line)); color: var(--moss); }
+.chat-tool-status.is-bad { border-color: color-mix(in srgb, var(--bad) 32%, var(--line)); color: var(--bad); }
+.chat-tool-status.is-live { border-color: color-mix(in srgb, var(--slate) 32%, var(--line)); color: var(--slate); }
+.chat-tool-disclosure { display: grid; place-items: center; color: var(--faint-strong); transition: transform 140ms ease; }
+.chat-tool-disclosure .ico { width: 14px; height: 14px; }
+.chat-tool-card[open] .chat-tool-disclosure { transform: rotate(90deg); }
+.chat-tool-output {
+  margin: 0 8px 8px 37px;
+  padding-top: 7px;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 4px;
+}
+.chat-tool-output-label {
+  color: var(--faint-strong);
+  font: 500 9px/1.3 var(--font-mono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.chat-tool-output pre {
+  max-height: 12rem;
+  margin: 0;
+  padding: 8px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--raise);
+  color: var(--body);
+  font: 500 10.5px/1.5 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .chat-entry.chat-msg { animation: chat-message-enter 160ms ease-out both; }
+  .chat-entry.chat-tool-group { animation: chat-tool-enter 160ms ease-out both; }
+  .chat-tool-card[open] .chat-tool-output { animation: chat-tool-reveal 140ms ease-out both; }
+}
+@keyframes chat-message-enter {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes chat-tool-enter {
+  from { opacity: 0; transform: translateX(-3px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes chat-tool-reveal {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 /* Exceptional transcript state and the one manual history action lead the
    scroll region instead of reserving a footer row. */
 .chat-feed-lead {
@@ -4744,7 +4993,56 @@ body.feed-frozen .programs { opacity: 0.62; }
   font: 500 11px/1.4 var(--font-mono);
   color: var(--muted);
 }
-.transcript-inline-error .transcript-inline-status { color: var(--bad); }
+.chat-feed-state {
+  align-self: stretch;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 10px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--sand);
+}
+.chat-feed-state-mark {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--muted);
+  background: var(--raise);
+}
+.chat-feed-state-mark .ico { width: 17px; height: 17px; }
+.chat-feed-state-copy { min-width: 0; }
+.chat-feed-state-title {
+  display: block;
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+.chat-feed-state-detail {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.chat-feed-state .transcript-inline-action { display: inline-block; margin-top: 5px; }
+.chat-feed-state[data-state="loading"] .chat-feed-state-mark { color: var(--slate); }
+.chat-feed-state[data-state="stale"] {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--amber) 36%, var(--line));
+  background: var(--amber-wash);
+}
+.chat-feed-state[data-state="stale"] .chat-feed-state-mark { color: var(--amber); }
+.chat-feed-state[data-state="unavailable"] {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--ember) 32%, var(--line));
+  background: var(--ember-wash);
+}
+.chat-feed-state[data-state="unavailable"] .chat-feed-state-mark { color: var(--ember); }
 .transcript-inline-action {
   appearance: none;
   border: 0;
@@ -4763,7 +5061,7 @@ body.feed-frozen .programs { opacity: 0.62; }
 }
 .drawer-doc {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
   overflow: hidden;
   gap: var(--space-3);
@@ -4772,36 +5070,89 @@ body.feed-frozen .programs { opacity: 0.62; }
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
+  border: 1px solid color-mix(in srgb, var(--slate) 28%, var(--line));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--slate) 4%, var(--sand));
 }
-.drawer-evidence-summary {
+.drawer-evidence-head {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  justify-content: stretch;
+  gap: 9px;
+  z-index: 1;
+  margin: 0;
+  padding: 11px 12px;
+  border-bottom-color: color-mix(in srgb, var(--slate) 24%, var(--line));
+  background: color-mix(in srgb, var(--slate) 8%, var(--raise));
+}
+.drawer-evidence-mark {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid color-mix(in srgb, var(--slate) 28%, var(--line));
+  border-radius: 7px;
+  color: var(--slate);
+  background: var(--raise);
+}
+.drawer-evidence-mark .ico { width: 16px; height: 16px; }
+.drawer-evidence-title { min-width: 0; }
+.drawer-evidence-kicker {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--faint-strong);
+  font: 500 9.5px/1.2 var(--font-mono);
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+.drawer-evidence-head .section-title { color: var(--ink); font-size: 15px; }
+.drawer-evidence-body { display: block; padding: 10px; }
+.evidence-inspector-panel { display: grid; gap: 9px; }
+.evidence-section {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--slate) 16%, var(--line));
+  border-radius: 7px;
+  background: var(--raise);
+}
+.evidence-section > .section-title {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  min-height: 40px;
-  padding: 0.4rem 0.65rem;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
+  gap: 6px;
+  margin: 0 0 9px;
+  color: var(--ink);
+  font-size: 12.5px;
+}
+.evidence-section > .section-title .ico { color: var(--slate); }
+.evidence-section > .section-title .rule { display: none; }
+.evidence-section .detail-grid { gap: 7px; }
+.evidence-section .detail-grid dt:not(:first-child) {
+  margin-top: 3px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.evidence-section .directory-relation-note { margin-bottom: 0; }
+.identity-block.evidence-section { margin-top: 0; }
+.evidence-empty {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 12px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 7px;
   background: var(--raise);
-  cursor: pointer;
-  list-style: none;
 }
-.drawer-evidence-summary::-webkit-details-marker { display: none; }
-.drawer-evidence-summary-action {
-  margin-left: auto;
-  color: var(--faint-strong);
-  font: 500 11px/1 var(--font-mono);
+.evidence-empty-mark {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 7px;
+  color: var(--slate);
+  background: color-mix(in srgb, var(--slate) 9%, var(--raise));
 }
-.drawer-evidence-summary-action::before { content: "Show"; }
-.drawer-desk.is-open .drawer-evidence-summary-action::before { content: "Hide"; }
-.drawer-evidence-head { display: none; }
-.drawer-evidence-body { display: none; }
-.drawer-desk.is-open .drawer-evidence-body { display: block; }
-
-@container agent-drawer (min-width: 46rem) {
-  .drawer-evidence-summary { display: none; }
-  .drawer-evidence-head { display: flex; }
-  .drawer-evidence-body { display: block; }
-}
+.evidence-empty strong { display: block; margin-bottom: 2px; font-size: 12.5px; }
 
 @media (min-width: 861px) {
   .drawer-grid .drawer-doc,
@@ -4809,34 +5160,34 @@ body.feed-frozen .programs { opacity: 0.62; }
   .drawer-grid .drawer-desk .drawer-section-head { top: 0; }
 }
 @media (max-width: 860px) {
-  /* The full sheet has one content scroller. Transcript and evidence expand in
-     normal flow; the shell footer stays in its reserved row. */
+  /* The fixed sheet keeps one bounded chat app and switches its second region
+     in-flow, so Evidence never borrows or covers the composer's boundary. */
   .pane-inspector.dw-agent > .drawer-grid {
-    overflow-y: auto;
-    overflow-x: hidden;
-    overscroll-behavior: contain;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    overflow: hidden;
   }
   .drawer-doc {
-    display: flex;
-    flex-direction: column;
-    flex: 0 0 auto;
-    overflow: visible;
+    display: grid;
+    grid-template-rows: minmax(0, 1fr);
+    min-height: 0;
+    overflow: hidden;
   }
   .drawer-chat {
-    display: flex;
-    flex-direction: column;
-    flex: 0 0 auto;
-    overflow: visible;
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) auto;
+    min-height: 0;
+    overflow: hidden;
   }
   .drawer-chat-scroll {
-    flex: none;
-    overflow: visible;
+    min-height: 0;
+    overflow-y: auto;
     overscroll-behavior: auto;
   }
   .drawer-desk {
-    flex: 0 0 auto;
-    overflow: visible;
-    overscroll-behavior: auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
   }
   .drawer-section-head { position: static; }
 }
@@ -4947,7 +5298,7 @@ body.feed-frozen .programs { opacity: 0.62; }
 .agent-rename:focus-visible,
 .shelf-evidence-rail:focus-visible,
 .strip-group-head:focus-visible,
-.command-composer input:focus-visible,
+.drawer-mode-tab:focus-visible,
 .drawer-chat-scroll:focus-visible { outline-color: var(--color-interactive); box-shadow: var(--color-focus-ring); }
 .tldr-proof-row:focus-visible,
 .tldr-card-repo:focus-visible,

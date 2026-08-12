@@ -75,14 +75,17 @@ interface Geometry {
   grid: Rect;
   doc: Rect;
   desk: Rect;
-  evidenceSummary: Rect;
+  firstChatMessage: Rect;
+  modeSwitch: Rect;
   evidenceBody: Rect;
-  evidenceSummaryDisplay: string;
+  modeSwitchDisplay: string;
   evidenceBodyDisplay: string;
+  docDisplay: string;
   chatFeedFootPresent: boolean;
   rects: Record<(typeof REQUIRED_SELECTORS)[number], Rect>;
   overflowY: Record<"pane" | "grid" | "doc" | "chat" | "feed" | "desk" | "paneList" | "opsStage", string>;
   declaredVerticalOwners: string[];
+  zIndex: Record<"desk" | "dock", string>;
   bodyOpenOverflowY: string;
   bodyClosedOverflowY: string;
   bodyOpen: boolean;
@@ -302,9 +305,13 @@ const MEASURE = `(() => {
     desk: pane.querySelector(".drawer-desk"),
   };
   for (const [name, node] of Object.entries(nodes)) if (!node) throw new Error("missing " + name);
-  const evidenceSummary = pane.querySelector(".drawer-evidence-summary");
+  const modeSwitch = pane.querySelector(".drawer-mode-switch");
   const evidenceBody = pane.querySelector(".drawer-evidence-body");
-  if (!evidenceSummary || !evidenceBody) throw new Error("evidence disclosure is missing");
+  const firstChatMessage = pane.querySelector(".chat-msg");
+  const dock = pane.querySelector(".drawer-controls-strip");
+  if (!modeSwitch || !evidenceBody || !firstChatMessage || !dock) {
+    throw new Error("chat or evidence mode is missing");
+  }
   const appBody = document.querySelector(".app-body");
   const opsStage = document.querySelector(".ops-stage");
   const paneList = document.querySelector(".pane-list");
@@ -325,7 +332,7 @@ const MEASURE = `(() => {
   const declaredVerticalOwners = Object.entries(nodes)
     .filter(([, node]) => ["auto", "scroll"].includes(getComputedStyle(node).overflowY))
     .map(([name]) => name);
-  const input = pane.querySelector(".command-composer input");
+  const input = pane.querySelector(".command-composer :is(input, textarea)");
   const buttons = {
     send: pane.querySelector('[data-fkey$=":instruct"]'),
     focus: pane.querySelector('[data-fkey$=":focus"]'),
@@ -362,14 +369,20 @@ const MEASURE = `(() => {
     grid: rect(g),
     doc: rect(nodes.doc.getBoundingClientRect()),
     desk: rect(nodes.desk.getBoundingClientRect()),
-    evidenceSummary: rect(evidenceSummary.getBoundingClientRect()),
+    firstChatMessage: rect(firstChatMessage.getBoundingClientRect()),
+    modeSwitch: rect(modeSwitch.getBoundingClientRect()),
     evidenceBody: rect(evidenceBody.getBoundingClientRect()),
-    evidenceSummaryDisplay: getComputedStyle(evidenceSummary).display,
-    evidenceBodyDisplay: getComputedStyle(evidenceBody).display,
+    modeSwitchDisplay: getComputedStyle(modeSwitch).display,
+    evidenceBodyDisplay: getComputedStyle(nodes.desk).display,
+    docDisplay: getComputedStyle(nodes.doc).display,
     chatFeedFootPresent: Boolean(pane.querySelector(".chat-feed-foot")),
     rects,
     overflowY,
     declaredVerticalOwners,
+    zIndex: {
+      desk: getComputedStyle(nodes.desk).zIndex,
+      dock: getComputedStyle(dock).zIndex,
+    },
     bodyOpenOverflowY,
     bodyClosedOverflowY,
     bodyOpen: document.body.classList.contains("inspector-open"),
@@ -566,7 +579,7 @@ beforeAll(async () => {
       const tall = browseJson<SiblingGeometry>(MEASURE_SIBLINGS);
       tallOpen.set(key(viewport.width, viewport.height), tall);
       console.log(`[RHSP siblings tall-open ${viewport.width}x${viewport.height}] ${JSON.stringify(tall)}`);
-      /* Restore quiet-open for the evidence-disclosure measurement path. */
+      /* Restore quiet-open for the evidence-mode measurement path. */
       browseJson<boolean>(INJECT_QUIET_OPEN);
       await Bun.sleep(350);
     }
@@ -584,12 +597,12 @@ beforeAll(async () => {
     }
 
     if (viewport.width === 1_100) {
-      /* quiet-closed above hid the pane; reopen before Evidence disclosure. */
+      /* quiet-closed above hid the pane; reopen before switching to Evidence. */
       browseJson<boolean>(INJECT_QUIET_OPEN);
       await Bun.sleep(350);
       browseJson<boolean>(`(() => {
-        const toggle = document.querySelector(".drawer-evidence-summary");
-        if (!(toggle instanceof HTMLButtonElement)) throw new Error("evidence toggle is not a button");
+        const toggle = document.querySelector('[data-fkey$=":evidence"]');
+        if (!(toggle instanceof HTMLButtonElement)) throw new Error("evidence mode is not a button");
         toggle.click();
         return JSON.stringify(true);
       })()`);
@@ -626,8 +639,13 @@ describe("the desktop RHSP reserves visible space for transcript and controls", 
       const g = measured.get(key(viewport.width, viewport.height)) as Geometry;
       expect(g.head.bottom).toBeLessThanOrEqual(g.grid.top + 0.5);
       expect(g.rects[".drawer-chat-scroll"].bottom)
+        .toBeLessThanOrEqual(g.rects[".drawer-controls-strip"].top + 0.5);
+      expect(g.rects[".drawer-controls-strip"].bottom)
         .toBeLessThanOrEqual(g.rects[".drawer-chat"].bottom + 0.5);
-      expect(g.grid.bottom).toBeLessThanOrEqual(g.rects[".drawer-controls-strip"].top + 0.5);
+      expect(Math.abs(g.rects[".drawer-controls-strip"].left - g.rects[".drawer-chat"].left))
+        .toBeLessThanOrEqual(1.5);
+      expect(Math.abs(g.rects[".drawer-controls-strip"].right - g.rects[".drawer-chat"].right))
+        .toBeLessThanOrEqual(1.5);
     });
 
     test(`${viewport.width}x${viewport.height}: unavailable controls are natively disabled`, () => {
@@ -655,36 +673,37 @@ describe("the desktop RHSP reserves visible space for transcript and controls", 
     expect(g.rects[".command-composer"].bottom).toBeLessThanOrEqual(g.viewportHeight + 0.5);
   });
 
-  test("Evidence follows inspector width: disclosed at 1100 and beside chat at 1357", () => {
+  test("Evidence follows inspector width: switched at 1100 and beside chat at 1357", () => {
     const narrow = measured.get("1100x862") as Geometry;
     expect(narrow.pane.width).toBeLessThan(736);
-    expect(Math.abs(narrow.doc.top - narrow.desk.top)).toBeLessThanOrEqual(0.5);
-    expect(narrow.desk.width).toBeLessThan(narrow.doc.width);
-    expect(narrow.desk.right).toBeLessThanOrEqual(narrow.doc.right + 0.5);
     expect(narrow.rects[".drawer-chat-scroll"].height).toBeGreaterThanOrEqual(96);
-    expect(narrow.evidenceSummaryDisplay).not.toBe("none");
+    expect(narrow.modeSwitchDisplay).not.toBe("none");
+    expect(narrow.docDisplay).not.toBe("none");
     expect(narrow.evidenceBodyDisplay).toBe("none");
+    expect(narrow.modeSwitch.bottom).toBeLessThanOrEqual(narrow.firstChatMessage.top + 0.5);
 
     const wide = measured.get("1357x738") as Geometry;
     expect(wide.pane.width).toBeGreaterThan(736);
     expect(wide.doc.right).toBeLessThanOrEqual(wide.desk.left + 0.5);
     expect(Math.abs(wide.doc.top - wide.desk.top)).toBeLessThanOrEqual(0.5);
-    expect(wide.evidenceSummaryDisplay).toBe("none");
+    expect(wide.modeSwitchDisplay).toBe("none");
     expect(wide.evidenceBodyDisplay).not.toBe("none");
+    expect(wide.desk.width).toBeGreaterThanOrEqual(280);
+    expect(wide.desk.width).toBeLessThanOrEqual(320.5);
     expect(wide.evidenceBody.height).toBeGreaterThan(0);
+    expect(Math.abs(wide.desk.bottom - wide.rects[".drawer-chat"].bottom)).toBeLessThanOrEqual(0.5);
   });
 
-  test("the narrow Evidence disclosure overlays without reflowing the transcript", () => {
-    const closed = measured.get("1100x862") as Geometry;
+  test("the narrow Evidence mode replaces Chat in-flow without leaving the grid", () => {
     const open = evidenceOpened.get("1100x862") as Geometry;
     expect(open.evidenceBodyDisplay).not.toBe("none");
+    expect(open.docDisplay).toBe("none");
     expect(open.evidenceBody.height).toBeGreaterThan(0);
-    expect(open.desk.left).toBeGreaterThanOrEqual(open.doc.left - 0.5);
-    expect(open.desk.right).toBeLessThanOrEqual(open.doc.right + 0.5);
+    expect(open.desk.left).toBeGreaterThanOrEqual(open.grid.left - 0.5);
+    expect(open.desk.right).toBeLessThanOrEqual(open.grid.right + 0.5);
     expect(open.desk.top).toBeGreaterThanOrEqual(open.grid.top - 0.5);
     expect(open.desk.bottom).toBeLessThanOrEqual(open.grid.bottom + 0.5);
-    expect(Math.abs(open.rects[".drawer-chat-scroll"].height - closed.rects[".drawer-chat-scroll"].height))
-      .toBeLessThanOrEqual(0.5);
+    expect(open.modeSwitchDisplay).not.toBe("none");
   });
 
   test("a loaded chat omits the duplicate count, path, and refresh footer", () => {
@@ -766,7 +785,7 @@ describe("desktop open RHSP owns the expanded band height", () => {
   });
 });
 
-describe("the mobile RHSP is a fixed sheet with one drawer-body scroller", () => {
+describe("the mobile RHSP is a fixed sheet with bounded Chat and Evidence modes", () => {
   test("390x844 keeps the fixed pane, header, composer, and footer on screen", () => {
     const g = measured.get("390x844") as Geometry;
     expect(g.panePosition).toBe("fixed");
@@ -778,14 +797,18 @@ describe("the mobile RHSP is a fixed sheet with one drawer-body scroller", () =>
     expect(g.docScrollWidth).toBeLessThanOrEqual(g.docClientWidth);
   });
 
-  test("390x844 assigns drawer-body scrolling only to .drawer-grid", () => {
+  test("390x844 keeps scrolling inside the chat feed and in-flow Evidence mode", () => {
     const g = measured.get("390x844") as Geometry;
-    expect(g.declaredVerticalOwners).toEqual(["grid"]);
-    expect(g.overflowY.grid).toBe("auto");
-    expect(g.overflowY.feed).toBe("visible");
-    expect(g.overflowY.desk).toBe("visible");
+    expect(g.declaredVerticalOwners).toEqual(["feed", "desk"]);
+    expect(g.overflowY.grid).toBe("hidden");
+    expect(g.overflowY.feed).toBe("auto");
+    expect(g.overflowY.desk).toBe("auto");
     expect(g.rects[".drawer-chat"].top).toBeLessThanOrEqual(g.rects[".drawer-chat-scroll"].top);
     expect(g.rects[".drawer-chat"].bottom).toBeGreaterThanOrEqual(g.rects[".drawer-chat-scroll"].bottom);
+    expect(g.modeSwitchDisplay).not.toBe("none");
+    expect(g.modeSwitch.bottom).toBeLessThanOrEqual(g.rects[".drawer-chat"].top + 0.5);
+    expect(Math.abs(g.rects[".drawer-controls-strip"].bottom - g.rects[".drawer-chat"].bottom))
+      .toBeLessThanOrEqual(1.5);
   });
 
   test("390x844 locks the document only while the full sheet is open", () => {
