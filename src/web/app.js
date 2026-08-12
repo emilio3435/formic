@@ -90,7 +90,6 @@ import {
   roleView,
   roleSourceView,
   parseSenderHeader,
-  parseTaskEnvelope,
   senderOf,
   senderClaimText,
   withoutSenderHeader,
@@ -1505,7 +1504,7 @@ globalThis.TheAntHill = {
   parseSenderHeader, senderOf, senderClaimText, withoutSenderHeader, roleSourceView, specialtyLabel,
   elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
   sourceAgentName, presentationLabelKey, agentLabelEligible, programName, sessionTag, ambiguousNames, landingRosterNames,
-  preferredRenameTarget, terminalSourceName, stripSpinnerFrame, terminalIdentity, terminalBreadcrumb, focusDestinationHint, focusButtonLabel, taskMeaningfullyDifferent,
+  preferredRenameTarget, terminalSourceName, stripSpinnerFrame, terminalIdentity, terminalBreadcrumb, focusDestinationHint, focusButtonLabel,
   quietSourceLine, fullSourceDetail, verdictGate, conciseText,
   renderAgentRow, renderAgentColumnHeader, renderSummaryWidget,
   renderProgramDrawer, programRollupLine, programRollupCells, programHeadRollup,
@@ -1528,7 +1527,7 @@ globalThis.TheAntHill = {
   healthRemedy, instrumentRemedy,
   parseInvestigationResult, routeFromBullet,
   serverUnreachableHint, usageBarTitle, renderUsageSeriesChart,
-  renderAgentDrawer, renderChat, dedupeTurns, drawerObjective, drawerSessionTag, renderEvidence, renderNamesDisclosure,
+  renderAgentDrawer, renderChat, dedupeTurns, drawerSessionTag, renderEvidence, renderNamesDisclosure,
   parseHeartbeatStructured, programForTldrRepo, deterministicRepoStats, tldrAttentionCount, fleetFallbackLine,
   heartbeatTldrAgent,
   renderHealthRail, renderHealthTldrLane, repoScopedReadings, tldrRepoOrder,
@@ -4765,8 +4764,8 @@ function renderTldrRepoLane(lane, parsed, agent, time, repoName, attentionCount)
       const isWaiting = !!ag.attentionSignal || ag.lifecycle === "waiting";
       const sig = isWaiting ? "needs-you" : ag.lifecycle === "working" ? "working" : "ok";
       const cls = tldrCardSignalClass(sig);
-      const rawTask = String(ag.task || ag.lastHumanMessage || ag.displayName || "").trim().split("\n")[0].trim();
-      let cleanTask = rawTask;
+      const sourceTask = String(ag.task || ag.lastHumanMessage || ag.displayName || "").trim().split("\n")[0].trim();
+      let cleanTask = sourceTask;
       const low = cleanTask.toLowerCase();
       if (low.startsWith("handoff:")) cleanTask = "handoff";
       else if (low.includes("chrome tabs") && low.includes("chrome extension")) cleanTask = "Chrome tab check";
@@ -4779,7 +4778,7 @@ function renderTldrRepoLane(lane, parsed, agent, time, repoName, attentionCount)
       if (!cleanTask) cleanTask = ag.displayName || "working";
       const blockerText = isWaiting ? (ag.attentionSignal?.kind || "needs you") : "";
       const label = blockerText && blockerText !== "all clear" ? `${cleanTask} → ${blockerText}` : cleanTask;
-      proof.append(el("div", { class: "tldr-proof-row " + cls, role: "listitem", title: rawTask },
+      proof.append(el("div", { class: "tldr-proof-row " + cls, role: "listitem", title: sourceTask },
         el("span", { class: "tldr-proof-rail", "aria-hidden": "true" }),
         el("span", { class: "tldr-proof-name", text: isWaiting ? "waiting" : "working" }),
         el("span", { class: "tldr-proof-body" }, ...tldrMarkupNodes(label)),
@@ -8607,8 +8606,7 @@ function renderSwarmAnchor(agent, depth, activeChildren, pinned = false, board =
 }
 
 function rowSummary(agent) {
-  // Row stability: Task is the stable identity, refined every 5m via sidecar (data/task-summaries/<id>.txt, LLM)
-  // written by scripts/ant-hill-task-refine.py — no chat spam, no transcriptTail flicker.
+  // Row stability: prefer the provider-recorded task over fast-changing transcript prose.
   // Header per-repo TL;DR lives in prime:ant-heartbeat-monitor transcriptTail (fleet-wide, repo-specific),
   // rendered by renderHealthTldrLane() — row keeps Task so the collapsed roster stays readable.
   // transcriptTail [TL;DR] is still surfaced in drawer Chat (renderChat) and header, not here.
@@ -8710,9 +8708,7 @@ function providerMark(agent) {
   return el("img", { class: "provider-mark" + (mark.raster ? " provider-mark-raster" : ""), src: mark.src, alt: label, title: label });
 }
 
-// Shared control vocabulary — the icon key + human state word for each access
-// state. The agent row folds Access into its aria-label; the drawer status line
-// renders it visibly (renderStatusLine), so both constants stay live.
+// Shared control vocabulary for row and control-surface state.
 const CONTROL_ICONS = { linked: "linked", quarantined: "quarantine", "observed-only": "observed" };
 
 /* What the Status cell should say, given the tab the operator is already in.
@@ -10058,13 +10054,25 @@ function fullSourceDetail(agent) {
 /* Ember-outline gate chip for the verdict head — names the blocker when the
    outcome is blocked. Indicator ink + outline, never a filled banner. */
 function verdictGate(agent, outcome) {
-  if (outcome !== "blocked") return null;
-  const gate = (agent.gates || []).find((g) => typeof g === "string" && g.trim());
-  const text = gate ? conciseText(gate, 64)
-    : agent.statusReason ? conciseText(agent.statusReason, 64)
-      : OUTCOME_LABELS.blocked;
-  return el("span", { class: "verdict-gate", title: agent.statusReason || gate || null },
-    icon("warning"), text);
+  const hazards = [];
+  for (const gate of agent.gates || []) {
+    if (typeof gate === "string" && gate.trim()) hazards.push(conciseText(gate.trim(), 64));
+  }
+  const liveness = livenessView(agent);
+  if (liveness?.key === "died") hazards.push("Process died");
+  if (deriveControlState(agent) === "quarantined") hazards.push("Control quarantined");
+  if (outcome !== "healthy" && hazards.length === 0) {
+    hazards.push(OUTCOME_LABELS[outcome] || outcome);
+  }
+  const unique = [...new Set(hazards)];
+  if (!unique.length) return null;
+  const detail = unique.join(" · ");
+  return el("span", {
+    class: "drawer-session-hazard",
+    title: detail,
+    "aria-label": (unique.length === 1 ? "Hazard: " : `Hazards (${unique.length}): `) + detail,
+    text: "!",
+  });
 }
 
 /* ---------- attention: acknowledge / dismiss / snooze ----------
@@ -10201,75 +10209,8 @@ function drawerSessionTag(agent, ui = state) {
   return visibleSessionTag(agent, boardIndex(ui));
 }
 
-/* Two texts that begin the same way are the same text to a reader, even when
-   neither contains the other. Containment alone is not enough here: the server
-   truncates long prose and appends an ellipsis, so `lastUserMessage` is
-   frequently a shortened `task` ending in a character the original never had —
-   which defeats includes() in both directions while looking identical on screen.
-   Verified in a browser: the head and the "You" turn printed the same wall of
-   prompt preamble six lines apart, and every containment check passed. */
-function sameOpening(a, b) {
-  const n = Math.min(a.length, b.length, 120);
-  return n >= 24 && a.slice(0, n) === b.slice(0, n);
-}
-
-/* The standing objective, promoted out of Operate.
-
-   `taskMeaningfullyDifferent` compares `task` against `lastHumanMessage`, which
-   was the right question while Operate rendered that field — but Thread renders
-   `lastUserMessage`, and on a live board the task is frequently byte-identical
-   to THAT instead. Verified in a browser rather than in the diff: the head
-   printed a wall of prompt preamble and the "You" turn printed the same wall
-   again, six lines apart. Comparing against the wrong neighbour reintroduced the
-   exact duplication this overhaul was commissioned to remove.
-
-   So compare against every turn Thread can actually paint. */
-function drawerObjective(agent) {
-  const task = String(agent.task || "").trim();
-  if (!task || !taskMeaningfullyDifferent(agent)) return "";
-  const norm = normalizeCompareText(task);
-  if (!norm) return "";
-  for (const other of [agent.lastUserMessage, agent.lastAgentMessage]) {
-    const cmp = normalizeCompareText(String(other || "").trim());
-    if (cmp && sameOpening(norm, cmp)) return "";
-  }
-  return conciseText(task, 140);
-}
-
-/* The head said the same things twice, two lines apart, in different orders.
-   The title is not one shape: `agentName` returns an operator alias, else the
-   cmux terminal title, else `provider · folder` — so what it has already said
-   differs per agent, and a fixed deletion loses information in one shape while
-   fixing another. Both were verified in a browser rather than in the diff:
-
-     bare identity   h2 "Cursor · LaHormigaDormida"
-                     sub "LaHormigaDormida · Cursor · grok 4.5"   provider AND folder twice
-     aliased         h2 "RHS-6 BE payload · sol 5.6"
-                     sub "the-mountain-main · Codex · sol 5.6"    model twice, program only here
-
-   So the rule is subtractive, not a delete: this line says only what the title
-   has not. Compare against the title's own `·` segments and not a substring —
-   "main" is a substring of "the-mountain-main" and would silently drop a
-   program the title never named. */
-/* The placeholder guard this line used to carry itself now lives in
-   `modelShort`, which is the one function every model slot goes through — the
-   head, the roster row and the invocation table. It was here alone, so the head
-   omitted `<synthetic>` while the row two pixels behind it printed it. */
-function headSubParts(agent, program, titleText) {
-  const said = new Set(
-    String(titleText || "").split("·").map((part) => part.trim().toLowerCase()).filter(Boolean),
-  );
-  const unsaid = (value) => (value && !said.has(value.toLowerCase()) ? value : "");
-  return {
-    program: unsaid(programName(program)),
-    provider: unsaid(providerLabel(agent.provider)),
-    model: unsaid(modelShort(agent.model)),
-  };
-}
-
 function renderAgentDrawer(pane, view) {
   const { agent, program } = view;
-  const activity = deriveActivity(agent);
   const outcome = deriveOutcome(agent);
   const control = deriveControlState(agent);
 
@@ -10306,22 +10247,6 @@ function renderAgentDrawer(pane, view) {
   const title = rowDisplayName(agent);
   const sourceLine = quietSourceLine(agent);
 
-  /* One task model, one rendering. The old head called drawerObjective while
-     the card below parsed rawTask separately, so two surfaces could disagree
-     about what the task was. Parse the full envelope once and let the command
-     header own both its concise face and its optional raw disclosure. */
-  const fullTask = String(agent.rawTask || agent.task || "").trim();
-  const parsedTask = parseTaskEnvelope(fullTask);
-  const taskObjective = agent.rawTask
-    ? withoutSenderHeader(String(agent.task || "")).trim()
-    : parsedTask.objective;
-  const taskMeta = [];
-  if (parsedTask.meta.from || parsedTask.meta.to)
-    taskMeta.push([parsedTask.meta.from, parsedTask.meta.to].filter(Boolean).join(" → "));
-  if (parsedTask.meta.date) taskMeta.push(parsedTask.meta.date);
-  if (parsedTask.meta.branch) taskMeta.push(parsedTask.meta.branch);
-  const showBrief = Boolean(fullTask) && fullTask !== taskObjective;
-
   const role = roleView(agent.role);
   const eyebrow = [role.key !== "agent" ? role.label : "", programName(program), sourceLine]
     .filter(Boolean).join(" · ");
@@ -10338,23 +10263,85 @@ function renderAgentDrawer(pane, view) {
   const runText = [harnessLabel, modelLabel]
     .filter((part) => part && !titleFacts.has(part.toLowerCase()))
     .join(" / ");
-  const runMark = (() => { try { return harnessMark(agent); } catch { return icon("box", { label: "" }); } })();
-  const modelMark = (() => { try { return agentMark(agent); } catch { return icon("cpu", { label: "" }); } })();
   const facts = el("dl", { class: "drawer-session-facts", "aria-label": "Session facts" });
   let hasFacts = false;
+  const activity = deriveActivity(agent);
+  const activityLabel = ACTIVITY_LABELS[activity] || activity;
+  const liveness = livenessView(agent);
+  const hazard = verdictGate(agent, outcome);
+  const statusReason = typeof agent.statusReason === "string" ? agent.statusReason.trim() : "";
+  if (activityLabel || agent.updatedAt || liveness || hazard) {
+    hasFacts = true;
+    const processValue = el("dd", {
+      class: "drawer-session-process",
+      role: "status",
+      "aria-label": [activityLabel, statusReason].filter(Boolean).join(". "),
+    });
+    if (activityLabel) {
+      processValue.append(el("span", {
+        class: "drawer-session-activity act-" + activity,
+        text: activityLabel,
+      }));
+    }
+    if (liveness?.key === "running") {
+      processValue.append(el("span", {
+        class: "drawer-process-dot status-line-liveness liveness-running",
+        title: liveness.detail,
+        "aria-label": liveness.label,
+      }));
+    } else if (liveness) {
+      processValue.append(el("span", {
+        class: "drawer-process-state status-line-liveness liveness-" + liveness.key,
+        title: liveness.detail,
+        text: liveness.label,
+      }));
+    }
+    if (agent.updatedAt) {
+      processValue.append(el("span", {
+        class: "drawer-session-age",
+        dataset: { ago: agent.updatedAt },
+        text: agoText(agent.updatedAt),
+      }));
+    }
+    if (statusReason && outcome !== "healthy") {
+      processValue.append(el("span", {
+        class: "drawer-session-reason",
+        title: statusReason,
+        text: conciseText(statusReason, 72),
+      }));
+    }
+    if (hazard) processValue.append(hazard);
+    facts.append(el("div", { class: "drawer-session-fact drawer-session-status" },
+      el("dt", { text: "Status" }), processValue));
+  }
   if (runText) {
     hasFacts = true;
     facts.append(el("div", { class: "drawer-session-fact drawer-session-run-fact" },
       el("dt", { text: "Run" }),
-      el("dd", { class: "drawer-session-run" }, runMark, modelMark, runText)));
+      el("dd", { class: "drawer-session-run" },
+        harnessAgentMarks(agent),
+        el("span", { class: "drawer-session-run-label", text: runText }))));
   }
   if (contextPct != null || contextMagnitude) {
     hasFacts = true;
+    const contextLabel = [
+      contextPct != null ? (contextPct === 0 ? "<1%" : contextPct + "%") : "",
+      contextMagnitude,
+    ].filter(Boolean).join(" · ");
+    const contextValue = el("dd", { class: "drawer-session-context-value", title: contextLabel },
+      contextPct != null
+        ? svgGauge(contextPct, "drawer-context-gauge", { label: `Context used: ${contextPct}%` })
+        : null,
+      el("span", { class: "drawer-session-context-reading" },
+        contextPct != null
+          ? el("span", { class: "drawer-session-context-pct", text: contextPct === 0 ? "<1%" : contextPct + "%" })
+          : null,
+        contextMagnitude
+          ? el("span", { class: "drawer-session-context-capacity", text: contextMagnitude })
+          : null));
     facts.append(el("div", { class: "drawer-session-fact drawer-session-context" },
       el("dt", { text: "Context" }),
-      el("dd", {}, contextPct != null ? (contextPct === 0 ? "<1%" : contextPct + "%") : null,
-        contextPct != null && contextMagnitude ? " · " : null,
-        contextMagnitude || null)));
+      contextValue));
   }
   if (sessionText) {
     hasFacts = true;
@@ -10370,27 +10357,9 @@ function renderAgentDrawer(pane, view) {
         /* Same value the subtraction below compares against — one call, so the
            two can never disagree about what the title said. */
         title,
-        tag ? el("span", { class: "inspector-tag mono", text: "#" + tag }) : null),
-      el("div", { class: "drawer-session-state" },
-        renderStatusLine(agent, activity, outcome, control),
-        verdictGate(agent, outcome)),
-      el("section", { class: "drawer-task-summary", "aria-labelledby": "drawer-task-label" },
-        el("span", { id: "drawer-task-label", class: "drawer-task-label", text: "Task" }),
-        taskObjective
-          ? el("p", { class: "drawer-task-objective", text: taskObjective })
-          : el("p", { class: "drawer-task-objective is-empty", title: "No prose task was recorded for this lane", text: "No task recorded" }),
-        taskMeta.length ? el("p", { class: "drawer-task-meta", text: taskMeta.join(" · ") }) : null,
-        showBrief
-          ? el("details", { class: "drawer-task-brief" },
-              el("summary", { class: "drawer-task-brief-summary" }, "Full brief"),
-              el("pre", { class: "drawer-task-brief-body", text: fullTask }))
-          : null),
-      hasFacts
-        ? el("details", { class: "drawer-session-details" },
-            el("summary", { class: "drawer-session-details-summary" }, "Session details"),
-            facts)
-        : null),
-    el("div", { class: "verdict-side" }, closeButton())));
+        tag ? el("span", { class: "inspector-tag mono", text: "#" + tag }) : null)),
+    el("div", { class: "verdict-side" }, closeButton()),
+    hasFacts ? facts : null));
 
   const attentionBlock = renderAttentionBlock(agent);
   if (attentionBlock) shellHead.append(attentionBlock);
@@ -10401,10 +10370,8 @@ function renderAgentDrawer(pane, view) {
      `activity === "ended"` dressed as advice. A directive that is the same
      sentence on nine agents out of ten is not a directive. */
 
-  // Document (conversation) + Desk (evidence). The command header above owns
-  // the task, so the left column begins with the transcript instead of a second
-  // task card.
-  const chatBody = renderChatFeedBody(agent, state, { taskCarried: Boolean(fullTask) });
+  // Document (conversation) + Desk (evidence).
+  const chatBody = renderChatFeedBody(agent, state);
   const chatLead = renderTranscriptFeedLead(agent, state);
   const chatAlarm = feedAlarm(state.conn, state.snap && state.snap.generatedAt);
   const chatFreshness = chatAlarm
@@ -10415,15 +10382,12 @@ function renderAgentDrawer(pane, view) {
         chatAlarm.detail,
       )
     : null;
-  /* Mini chat window. The left column is Task on top and a chat APP below it —
-     and the feed IS the transcript: bubbles edge to edge, auto-loaded on open
+  /* Mini chat window. The feed IS the transcript: bubbles edge to edge, auto-loaded on open
      (selectEntity starts the fetch), with
      renderChat's preview standing in only while the record is loading, errored,
      or absent. Exceptional state and the manual older-history action lead the
      feed rather than consuming a separate footer row. The feed is the one
-     deliberate inner scroller on the left; at ≥861px the box takes the column
-     height Task doesn't use (Task height is intrinsic — 2-line clamp + meta +
-     closed brief).
+     deliberate inner scroller on the left.
      role="log" + tabindex make the feed itself a named, keyboard-reachable
      scroll region. */
   const chatScroll = el("div", { id: "drawer-chat-feed", class: "drawer-chat-scroll", role: "log", tabindex: "0", "aria-label": "Conversation" },
@@ -10697,89 +10661,6 @@ function renderEvidenceShelf(agent) {
   body.classList.add("shelf-body");
   section.append(body);
   return section;
-}
-
-/* One line under the title, and it earns every word it prints.
-
-   It used to read "Working · Healthy · View only" on almost every agent. Measured
-   against the live board: `outcome` is `healthy` on 243/243, so that word carried
-   zero bits; `activity` is the word already printed on the row the operator just
-   clicked; and `control` is stated again, with its reason and its remedy, by
-   renderControlBanner directly below. Three items, no information.
-
-   What this line answers instead is the question the drawer could not answer at
-   all: "went quiet 20 minutes ago — dead, or thinking?" That is time-since-update
-   plus process liveness. `statusReason` is 100% populated on the wire and was
-   rendered on zero agents; it is the sentence that says which. */
-function renderStatusLine(agent, activity, outcome, control) {
-  /* The activity word is emitted ALWAYS and hidden by CSS only at the widths
-     where the roster row that carries it is actually beside the drawer. Below
-     1025px the drawer is a full-viewport sheet and the roster is completely
-     covered — measured, not assumed — so deleting the word outright left an
-     operator on a 1024px window unable to tell whether the session they were
-     reading was running or parked. It also never reached a screen reader at any
-     width, because the age text encoded activity only as a colour. */
-  const line = el("div", {
-    class: "status-line",
-    role: "status",
-    "aria-label": "Session status: " + (ACTIVITY_LABELS[activity] || activity),
-  });
-  line.append(el("span", {
-    class: "status-line-activity act-" + activity,
-    text: ACTIVITY_LABELS[activity] || activity,
-  }));
-  line.append(el("span", { class: "status-line-sep status-line-activity", "aria-hidden": "true", text: "·" }));
-
-  // Time since the source last moved — the live fact, not uptime. Uptime measured
-  // the wrong clock: it read 200h for an agent that had been silent for an hour.
-  if (agent.updatedAt) {
-    line.append(el("span", {
-      class: "status-line-live act-" + activity,
-      dataset: { ago: agent.updatedAt },
-      text: agoText(agent.updatedAt),
-    }));
-  }
-
-  /* statusReason only when it adds a fact the clock did not. On a working agent
-     it reads "Source activity within 3 minutes." directly beside "11s ago" —
-     the same observation at coarser precision, which is repeat information under
-     a different label. It earns its place on everything else, where it explains
-     a silence the clock can only measure ("No source activity in the last 45
-     minutes", "Archived by source or operator"). */
-  const reason = typeof agent.statusReason === "string" ? agent.statusReason.trim() : "";
-  if (reason && activity !== "working") {
-    line.append(el("span", { class: "status-line-sep", "aria-hidden": "true", text: "·" }));
-    line.append(el("span", { class: "status-line-item", text: conciseText(reason, 72) }));
-  }
-
-  /* Liveness is part of the same state sentence, not a second badge below it.
-     Some collectors already include the liveness words in statusReason (for
-     example "Quiet 20m · process live"). In that case the reason is the one
-     visible copy; otherwise append the provider-neutral liveness label here. */
-  const liveness = livenessView(agent);
-  const reasonText = normalizeCompareText(reason);
-  const livenessText = liveness ? normalizeCompareText(liveness.label) : "";
-  const reasonCarriesLiveness = Boolean(livenessText && reasonText.includes(livenessText));
-  if (liveness && !reasonCarriesLiveness) {
-    line.append(el("span", { class: "status-line-sep", "aria-hidden": "true", text: "·" }));
-    line.append(el("span", {
-      class: "status-line-item status-line-liveness liveness-" + liveness.key,
-      title: liveness.detail,
-      text: liveness.label,
-    }));
-  }
-
-  /* Escalations only: `outcome` speaks when it stops being healthy, which is
-     the whole point of deleting it from the nominal line. */
-  if (outcome !== "healthy") {
-    line.append(el("span", { class: "status-line-sep", "aria-hidden": "true", text: "·" }));
-    line.append(el("span", {
-      class: "status-line-item outcome-" + outcome,
-      text: OUTCOME_LABELS[outcome] || outcome,
-    }));
-  }
-
-  return line;
 }
 
 /* Quarantine / observed-only: one banner, not a disabled Focus card. It names
@@ -11329,19 +11210,6 @@ function normalizeCompareText(value) {
   return String(value || "").toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function taskMeaningfullyDifferent(agent) {
-  const task = typeof agent?.task === "string" ? agent.task.trim() : "";
-  if (!task) return false;
-  const message = typeof agent?.lastHumanMessage === "string" ? agent.lastHumanMessage.trim() : "";
-  if (!message) return true;
-  const a = normalizeCompareText(task);
-  const b = normalizeCompareText(message);
-  if (!a || a === b) return false;
-  if (a.length >= 12 && b.includes(a)) return false;
-  if (b.length >= 12 && a.includes(b)) return false;
-  return true;
-}
-
 function transcriptArtifact(agent) {
   return (agent.artifacts || []).find((a) => a && (a.kind === "transcript" || /transcript/i.test(a.label || "")));
 }
@@ -11459,9 +11327,9 @@ function dedupeTurns(candidates) {
 /* Thread — the drawer's one reading surface, and the only place a message is
    printed. Operate is gone: its "Last human message" was the SAME string as this
    panel's user turn on 37% of the board, and on active agents it was actually the
-   ASSISTANT's prose under a label claiming a human wrote it. Its task moved to the
-   head, its outcome note to the status line, its role/model chips were the third
-   printing of facts the row and the head already carry.
+   ASSISTANT's prose under a label claiming a human wrote it. Its provider task
+   remains a fallback turn, its outcome note moved to the status line, and its
+   role/model chips were the third printing of facts the row and head already carry.
 
    `lastHumanMessage` is deliberately NOT a fallback here. The server documents it
    as "the latest provider-shaped assistant OR user prose", so using it to fill a
@@ -11469,22 +11337,9 @@ function dedupeTurns(candidates) {
    the honest stand-in is the task the operator actually set. */
 function renderChat(agent, ui = state, opts = {}) {
   const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
-  /* `task` is the last candidate, and it is what stops three independently
-     reasonable dedup rules from composing into an empty drawer: the head
-     suppresses the objective when it equals the message, Thread reads only the
-     two turn fields, and the row summary is folded on the selected row — so an
-     agent whose only prose is `task` could end up with the head silent, Thread
-     saying "no messages", and the roster copy hidden, for a session whose task
-     is populated on the wire. Recovering it meant leaving the cockpit.
-
-     dedupeTurns still drops it when a turn already says the same thing, so this
-     adds a floor without adding a duplicate: at least one copy always survives. */
-  /* The task is a FLOOR, not a fixture: it appears here only when nothing else
-     carries it. The head already prints it as the objective whenever it differs
-     from the turns, so including it unconditionally rendered the same prose
-     twice in one drawer — six lines apart, which is the exact defect this
-     overhaul was commissioned to remove, reintroduced by the fix for the
-     opposite failure (a drawer that could go completely empty). */
+  /* The provider task is the final candidate: it keeps a turn-less drawer useful,
+     while dedupeTurns removes it whenever a recorded turn already carries the
+     same prose. The header does not render task content. */
   /* The agent's reply leads. An operator opens this to find out what the AGENT
      said; their own message is the one thing in the drawer they already know.
      Reading order was user-first, and with the panel's head, banner and vitals
@@ -11512,10 +11367,7 @@ function renderChat(agent, ui = state, opts = {}) {
     { role: "assistant", text: agent.lastAgentMessage },
     { role: "assistant", text: tldrTail },
     { role: "user", text: agent.lastUserMessage },
-    /* opts.taskCarried: the drawer's Task card prints agent.task in full just
-       above this chat, so the floor would be a literal reprint one card apart —
-       the head-objective check alone cannot see that carrier. */
-    { role: "task", text: (drawerObjective(agent) || opts.taskCarried) ? "" : agent.task },
+    { role: "task", text: agent.task },
   ].map((turn) => {
     const sender = senderView(turn.text, ui);
     if (!sender) return turn;
@@ -11638,8 +11490,28 @@ function renderChatFeedBody(agent, ui = state, opts = {}) {
     body.append(transcriptLineNode(line));
     i += 1;
   }
+  /* Loaded transcripts replace the preview renderer, but they must not replace
+     its provider-task floor. Append the task only when no loaded line already
+     carries the same prose; this keeps turn-less and assistant-only records
+     identifiable without restoring a separate Task card. */
+  const loadedTurns = lines.map((line) => ({
+    role: line.role,
+    text: withoutSenderHeader(line.text),
+  }));
+  const taskFloor = dedupeTurns([
+    ...loadedTurns,
+    { role: "task", text: withoutSenderHeader(agent.task) },
+  ]).at(-1);
+  if (taskFloor?.role === "task") {
+    body.append(chatMessageGroupNode(
+      [{ at: null, role: taskFloor.role, text: agent.task }],
+      agent,
+      ui,
+    ));
+  }
   if (shouldAnimateEntry) {
-    const entry = body.childNodes[body.childNodes.length - 1];
+    const taskOffset = taskFloor?.role === "task" ? 2 : 1;
+    const entry = body.childNodes[body.childNodes.length - taskOffset];
     entry?.classList?.add("chat-entry");
     enteredTranscriptPayloads.add(view.data);
   }

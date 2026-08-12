@@ -14,7 +14,6 @@ import { JsonSessionNameStore } from "./session-names";
 import { JsonProgramAliasStore } from "./program-aliases";
 import { archiveLimits, JsonSettingsStore } from "./settings";
 import { JsonTriageQueueStore, NativeLunaInvestigationRunner } from "./triage";
-import { shouldLaunchTaskRefiner, taskRefinerCommand } from "./task-refiner-launch";
 
 const PROJECT_ROOT = join(import.meta.dir, "../..");
 loadCmuxSocketEnv(PROJECT_ROOT);
@@ -98,27 +97,6 @@ const server = Bun.serve({
 });
 
 let stopping = false;
-let taskRefinerProcess: ReturnType<typeof Bun.spawn> | undefined;
-if (shouldLaunchTaskRefiner(configuredPort)) {
-  try {
-    taskRefinerProcess = Bun.spawn(taskRefinerCommand(PROJECT_ROOT, configuredPort), {
-      cwd: PROJECT_ROOT,
-      stdin: "ignore",
-      stdout: "inherit",
-      stderr: "inherit",
-    });
-    void taskRefinerProcess.exited.then((exitCode) => {
-      if (!stopping && exitCode !== 0) {
-        console.error(`[task-refiner] child exited unexpectedly with code ${exitCode}`);
-      }
-    });
-  } catch (error) {
-    console.error(
-      `[task-refiner] child could not start: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-}
-
 let refreshNumber = 0;
 const refreshTimer = setInterval(() => {
   refreshNumber += 1;
@@ -133,11 +111,6 @@ function stop(): void {
   clearInterval(refreshTimer);
   state.stopCmuxEvents();
   mountainFetch.dispose();
-  try {
-    taskRefinerProcess?.kill();
-  } catch {
-    // The singleton child may already have exited because another server owns it.
-  }
   server.stop();
 }
 process.once("SIGINT", stop);

@@ -52,5 +52,5 @@ lands at a task boundary, on its own.
 **ACTIVE — Phase 0 blocked.** OBB 1.0.32 and its encrypted schema are compatible,
 but the required 24-hour cross-source window contains no readable rows. The
 elevated repository gate is 3010/3011; a fresh Luna RCA owns the only red claim.
-Chat UX is explicitly user-owned. Parser is landed; Foundation and Task Widget
-handoffs are ready; the TL;DR ribbon mockup is in active visual refinement.
+Chat UX is explicitly user-owned. The retired Task Widget and its sidecar
+refiner are no longer part of the drawer; the TL;DR ribbon remains independent.

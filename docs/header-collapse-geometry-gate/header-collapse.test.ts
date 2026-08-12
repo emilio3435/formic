@@ -386,7 +386,7 @@ beforeAll(async () => {
   base = `http://127.0.0.1:${port}`;
   server = Bun.spawn(["bun", "src/server/index.ts"], {
     cwd: REPO,
-    env: { ...process.env, MOUNTAIN_PORT: String(port), ANT_HILL_TASK_REFINER_DISABLED: "1" },
+    env: { ...process.env, MOUNTAIN_PORT: String(port) },
     stdout: "pipe",
     stderr: "pipe",
   });

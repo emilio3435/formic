@@ -69,8 +69,6 @@ import {
   type SenderTranscriptEvidence,
 } from "./sender-verification";
 import { taskStateWantsHuman } from "./task-state";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import {
   capTranscriptTail,
   type ArchiveStore,
@@ -80,8 +78,6 @@ import {
   type CmuxWorkspaceSnapshot,
   type CollectedAgent,
 } from "./types";
-
-const DEFAULT_TASK_SUMMARY_ROOT = join(import.meta.dir, "../../data/task-summaries");
 
 function pathIsWithin(path: string, root: string): boolean {
   const normalizedPath = path.replaceAll("\\", "/").replace(/\/+$/, "");
@@ -130,8 +126,6 @@ export interface SnapshotInput {
   stalledActiveMinutes?: number;
   /** Readable transcript evidence keyed by sender, including whether the read was complete. */
   senderTranscriptTails?: ReadonlyMap<string, SenderTranscriptEvidence>;
-  /** Test seam for the task-refiner sidecars; production uses this worktree's data directory. */
-  taskSummaryRoot?: string;
   /**
    * The identity scan enumerated every process without error, so a session no
    * process claims has been observed to be gone rather than merely unchecked.
@@ -543,21 +537,8 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       launch: _launch,
       ...publishable
     } = displaySource;
-    let refinedTask: string | undefined;
-    if (!terminal) try {
-      const encoded = source.id.replace(/[:\/\\]/g, "_");
-      const content = readFileSync(
-        join(input.taskSummaryRoot ?? DEFAULT_TASK_SUMMARY_ROOT, `${encoded}.txt`),
-        "utf8",
-      ).trim();
-      if (content) refinedTask = content.slice(0, 120);
-    } catch {
-      /* Sidecars are optional. A missing or unreadable summary leaves the
-         provider task untouched; it never hides the agent or degrades source health. */
-    }
     const agent: AgentSnapshotWithControlRefusal = {
       ...publishable,
-      ...(refinedTask ? { task: refinedTask, ...(source.task ? { rawTask: source.task } : {}) } : {}),
       programId: runKey ?? (program.groupPath ? `repo:${program.groupPath[0]}` : program.id),
       /* An unread notification no longer overwrites the status. It used to,
          which is how a working session came to publish `status: "attention"` —
@@ -637,7 +618,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
         ? source.lastHumanMessage === source.statusReason
           ? snapshotStatusReason
           : source.lastHumanMessage
-        : refinedTask ?? source.task ?? source.statusReason ?? null,
+        : source.task ?? source.statusReason ?? null,
       transcriptTail: notification?.body
         ? capTranscriptTail(`${source.transcriptTail ? `${source.transcriptTail}\n\n` : ""}[Attention] ${notification.body}`)
         : capTranscriptTail(source.transcriptTail),
