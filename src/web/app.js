@@ -11625,6 +11625,15 @@ function exhibitHead({ mark, title, section, extra, markClass, markTitle }) {
   return head;
 }
 
+function exhibitShell({ mark, title, section, extra, markClass, markTitle, wrapClass }) {
+  const wrap = el("div", { class: wrapClass || "exhibit" });
+  wrap.dataset.evidenceSection = section;
+  wrap.append(exhibitHead({ mark, title, section, extra, markClass, markTitle }));
+  const body = el("div", { class: "exhibit-body" });
+  wrap.append(body);
+  return { wrap, body };
+}
+
 function relativeArtifactPath(cwd, path, label) {
   const raw = typeof path === "string" ? path : "";
   const root = typeof cwd === "string" ? cwd.replace(/\/+$/, "") : "";
@@ -11633,6 +11642,16 @@ function relativeArtifactPath(cwd, path, label) {
     if (rel) return rel;
   }
   return raw || label || "";
+}
+
+function absoluteArtifactPath(cwd, path, shown) {
+  const raw = typeof path === "string" ? path.trim() : "";
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith("/")) return raw;
+  const root = typeof cwd === "string" ? cwd.replace(/\/+$/, "") : "";
+  const rel = String(shown || raw).replace(/^\/+/, "");
+  if (root && rel) return root + "/" + rel;
+  return raw || shown || "";
 }
 
 function workspaceFiles(agent) {
@@ -11701,6 +11720,12 @@ function historyExhibitSentence(agent) {
   return "";
 }
 
+function markCopied(btn) {
+  if (!btn || !btn.classList) return;
+  btn.classList.add("is-copied");
+  setTimeout(() => btn.classList.remove("is-copied"), 900);
+}
+
 function pathValue(agent, value, label) {
   return el("span", { class: "evidence-value" },
     el("code", { title: value, text: value }),
@@ -11709,8 +11734,11 @@ function pathValue(agent, value, label) {
       class: "artifact-copy evidence-path-copy",
       title: "Copy " + label + " path",
       "aria-label": "Copy " + label + " path",
-      dataset: { fkey: `copy-path:${agent.id}:${label}` },
-      onclick: () => copyText(value),
+      dataset: { fkey: `copy-path:${agent.id}:${label}`, fullPath: value },
+      onclick: (event) => {
+        void copyText(value);
+        markCopied(event && event.currentTarget);
+      },
     }, icon("copy")));
 }
 
@@ -11766,42 +11794,62 @@ function renderWorkspaceExhibit(agent) {
     return null;
   }
 
-  const wrap = el("div", { class: "exhibit" });
-  wrap.dataset.evidenceSection = "workspace";
-  wrap.append(exhibitHead({ mark: EXHIBIT_MARK.workspace, title: "Workspace", section: "workspace" }));
+  const { wrap, body } = exhibitShell({ mark: EXHIBIT_MARK.workspace, title: "Workspace", section: "workspace" });
 
-  const grid = el("dl", { class: "detail-grid" });
-  if (cwd) dtdd(grid, "Workspace", pathValue(agent, cwd, "Workspace"));
-  if (showRepo) dtdd(grid, "Repository", pathValue(agent, repoName || repoPath, "Repository"));
-  if (showLaunch) dtdd(grid, "Launch folder", pathValue(agent, launchCwd, "Launch folder"));
-  if (showShell) dtdd(grid, "Terminal shell folder", pathValue(agent, surfaceCwd, "Terminal shell folder"));
-  if (specialty) dtdd(grid, "specialty", specialty);
-  if (succeededBy) dtdd(grid, "succeeded by", succeededBy);
-  if (supersedes) dtdd(grid, "supersedes", supersedes);
-  if (grid.childNodes.length) wrap.append(grid);
+  const extras = [];
+  if (showRepo) extras.push(["Repository", pathValue(agent, repoName || repoPath, "Repository")]);
+  if (showLaunch) extras.push(["Launch folder", pathValue(agent, launchCwd, "Launch folder")]);
+  if (showShell) extras.push(["Terminal shell folder", pathValue(agent, surfaceCwd, "Terminal shell folder")]);
+  if (specialty) extras.push(["specialty", specialty]);
+  if (succeededBy) extras.push(["succeeded by", succeededBy]);
+  if (supersedes) extras.push(["supersedes", supersedes]);
+
+  if (extras.length) {
+    const grid = el("dl", { class: "detail-grid exhibit-readout" });
+    if (cwd) dtdd(grid, "Workspace", pathValue(agent, cwd, "Workspace"));
+    for (const [label, value] of extras) dtdd(grid, label, value);
+    body.append(grid);
+  } else if (cwd) {
+    body.append(el("p", { class: "evidence-value exhibit-readout" },
+      el("code", { title: cwd, text: cwd }),
+      el("button", {
+        type: "button",
+        class: "artifact-copy evidence-path-copy",
+        title: "Copy full path",
+        "aria-label": "Copy Workspace path",
+        dataset: { fkey: `copy-path:${agent.id}:Workspace`, fullPath: cwd },
+        onclick: (event) => {
+          void copyText(cwd);
+          markCopied(event && event.currentTarget);
+        },
+      }, icon("copy"))));
+  }
 
   if (cwdNote) {
-    wrap.append(el("p", {
+    body.append(el("p", {
       class: "directory-relation-note",
       text: "Claude’s tool session and the terminal shell maintain separate working directories. This does not change the exact cmux link.",
     }));
   }
 
   if (files.length) {
-    wrap.append(el("ul", { class: "artifact-list" },
+    body.append(el("ul", { class: "artifact-list" },
       files.map((item) => {
         const shown = relativeArtifactPath(cwd, item.path, item.label);
-        const copyValue = item.path || shown;
+        const copyValue = absoluteArtifactPath(cwd, item.path, shown);
         return el("li", {},
           el("span", { class: "artifact-label", text: item.label || shown }),
-          el("span", { class: "artifact-path", title: item.path || shown, text: shown }),
+          el("span", { class: "artifact-path", title: copyValue, text: shown }),
           el("button", {
             type: "button",
             class: "artifact-copy",
-            title: "Copy path",
-            "aria-label": "Copy path",
-            dataset: { fkey: `copy:${agent.id}:${copyValue}` },
-            onclick: () => copyText(copyValue),
+            title: "Copy full path",
+            "aria-label": "Copy full path",
+            dataset: { fkey: `copy:${agent.id}:${copyValue}`, fullPath: copyValue },
+            onclick: (event) => {
+              void copyText(copyValue);
+              markCopied(event && event.currentTarget);
+            },
           }, icon("copy")));
       })));
   }
@@ -11812,28 +11860,24 @@ function renderGitExhibit(agent) {
   if (!gitPresent(agent.git)) return null;
   const git = agent.git;
   const dirty = Boolean(git.dirty);
-  const wrap = el("div", { class: "exhibit" });
-  wrap.dataset.evidenceSection = "git";
-  wrap.append(exhibitHead({
+  const { wrap, body } = exhibitShell({
     mark: EXHIBIT_MARK.git,
     title: "Git",
     section: "git",
     markClass: dirty ? "git-dirty" : "",
     markTitle: dirty ? "Uncommitted changes" : "Clean working tree",
-  }));
-  wrap.append(el("span", { class: "git-line" },
+  });
+  body.append(el("span", { class: "git-line exhibit-readout" },
     git.branch ? el("code", { text: git.branch }) : null,
-    git.head ? el("code", { text: "@" + String(git.head).slice(0, 7) }) : null));
+    git.head ? el("code", { class: "git-rev", text: "@" + String(git.head).slice(0, 7) }) : null));
   return wrap;
 }
 
 function renderPullRequestExhibit(agent) {
   const urls = Array.isArray(agent.pullRequestUrls) ? agent.pullRequestUrls.filter(Boolean) : [];
   if (!urls.length) return null;
-  const wrap = el("div", { class: "exhibit" });
-  wrap.dataset.evidenceSection = "pr";
-  wrap.append(exhibitHead({ mark: EXHIBIT_MARK.pr, title: "Pull request", section: "pr" }));
-  wrap.append(el("ul", { class: "artifact-list" },
+  const { wrap, body } = exhibitShell({ mark: EXHIBIT_MARK.pr, title: "Pull request", section: "pr" });
+  body.append(el("ul", { class: "artifact-list" },
     urls.map((url) => {
       const label = prShortLabel(url);
       return el("li", {},
@@ -11844,8 +11888,11 @@ function renderPullRequestExhibit(agent) {
           class: "artifact-copy",
           title: "Copy URL",
           "aria-label": "Copy URL",
-          dataset: { fkey: `copy:${agent.id}:${url}` },
-          onclick: () => copyText(url),
+          dataset: { fkey: `copy:${agent.id}:${url}`, fullPath: url },
+          onclick: (event) => {
+            void copyText(url);
+            markCopied(event && event.currentTarget);
+          },
         }, icon("copy")));
     })));
   return wrap;
@@ -11855,10 +11902,8 @@ function renderHistoryExhibit(agent) {
   if (!historyExhibitVisible(agent)) return null;
   const sentence = historyExhibitSentence(agent);
   if (!sentence) return null;
-  const wrap = el("div", { class: "exhibit" });
-  wrap.dataset.evidenceSection = "history";
-  wrap.append(exhibitHead({ mark: EXHIBIT_MARK.history, title: "History", section: "history" }));
-  wrap.append(el("p", { class: "evidence-value", text: sentence }));
+  const { wrap, body } = exhibitShell({ mark: EXHIBIT_MARK.history, title: "History", section: "history" });
+  body.append(el("p", { class: "evidence-value exhibit-readout", text: sentence }));
   return wrap;
 }
 
@@ -11889,23 +11934,22 @@ function renderIdentityBlock(agent, ui = state) {
     onclick: () => void loadIdentityEvidence(agent.id),
   }, icon("arrow-up-right"));
 
-  const wrap = el("div", { class: "identity-block exhibit" });
-  wrap.dataset.evidenceSection = "route";
-  wrap.append(exhibitHead({
+  const { wrap, body } = exhibitShell({
     mark: EXHIBIT_MARK.route,
     title: "Route",
     section: "route",
     extra: [chip, expand],
-  }));
+    wrapClass: "identity-block exhibit",
+  });
 
   for (const step of routeBindSteps(view)) {
-    wrap.append(el("div", { class: routeBindClass(step.outcome) },
+    body.append(el("div", { class: routeBindClass(step.outcome) },
       el("span", { class: "route-bind-kicker", text: ROUTE_BIND_KICKERS[step.tier] || step.tierLabel }),
       el("p", { text: step.detail })));
   }
 
   if (view.bridge) {
-    wrap.append(el("p", { class: "identity-note", text:
+    body.append(el("p", { class: "identity-note", text:
       "A remembered binding to " + (view.bridge.surfaceId || "a terminal")
       + " carried this session through a scan with no live evidence"
       + (view.bridge.confirmedAt ? " (last confirmed " + agoText(view.bridge.confirmedAt) + ")" : "")
@@ -11913,7 +11957,7 @@ function renderIdentityBlock(agent, ui = state) {
   }
 
   const surfaces = renderSurfaceEvidence(agent, ui, expanded);
-  if (surfaces) wrap.append(surfaces);
+  if (surfaces) body.append(surfaces);
   return wrap;
 }
 
@@ -11961,7 +12005,7 @@ function renderSurfaceEvidence(agent, ui = state, expanded = false) {
 }
 
 function renderEvidence(agent, ui = state) {
-  const panel = el("div", { class: "inspector-panel evidence-inspector-panel", role: "tabpanel" });
+  const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
   const sections = [
     renderWorkspaceExhibit(agent),
     renderGitExhibit(agent),
