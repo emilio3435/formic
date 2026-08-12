@@ -33,6 +33,51 @@ const HOME_DIR = homedir();
 
 const nowMs = Date.parse("2026-07-21T23:31:00.000Z");
 
+describe("human-facing recency remains separate from provider activity", () => {
+  test("OMP ignores later model and session machinery", () => {
+    const agent = parseOmpJsonl([
+      JSON.stringify({ type: "session", id: "omp-human-clock", timestamp: "2026-08-11T10:00:00.000Z" }),
+      JSON.stringify({ type: "message", timestamp: "2026-08-11T10:00:01.000Z", message: { role: "user", content: "Please inspect the fleet." } }),
+      JSON.stringify({ type: "message", timestamp: "2026-08-11T10:00:02.000Z", message: { role: "assistant", content: [{ type: "text", text: "The fleet is stable." }] } }),
+      JSON.stringify({ type: "model_change", timestamp: "2026-08-11T10:00:03.000Z", model: "gpt-5.6" }),
+      JSON.stringify({ type: "custom", timestamp: "2026-08-11T10:00:04.000Z", data: { kind: "heartbeat" } }),
+      JSON.stringify({ type: "message", message: { role: "assistant", content: "Readable, but without source time." } }),
+    ].join("\n"), { nowMs: Date.parse("2026-08-11T10:00:05.000Z") });
+
+    expect(agent?.lastHumanFacingAt).toBe("2026-08-11T10:00:02.000Z");
+    expect(agent?.updatedAt).toBe("2026-08-11T10:00:04.000Z");
+  });
+
+  test("Codex ignores later reasoning, tool, and token records", () => {
+    const agent = parseCodexJsonl([
+      JSON.stringify({ type: "session_meta", timestamp: "2026-08-11T10:00:00.000Z", payload: { id: "codex-human-clock", cwd: "/tmp/formic" } }),
+      JSON.stringify({ type: "event_msg", timestamp: "2026-08-11T10:00:01.000Z", payload: { type: "user_message", message: "Please inspect the fleet." } }),
+      JSON.stringify({ type: "response_item", timestamp: "2026-08-11T10:00:02.000Z", payload: { type: "reasoning", summary: "internal" } }),
+      JSON.stringify({ type: "response_item", timestamp: "2026-08-11T10:00:03.000Z", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "The fleet is stable." }] } }),
+      JSON.stringify({ type: "response_item", timestamp: "2026-08-11T10:00:04.000Z", payload: { type: "function_call", name: "inspect" } }),
+      JSON.stringify({ type: "response_item", timestamp: "2026-08-11T10:00:05.000Z", payload: { type: "function_call_output", output: "ok" } }),
+      JSON.stringify({ type: "event_msg", timestamp: "2026-08-11T10:00:06.000Z", payload: { type: "token_count" } }),
+      JSON.stringify({ type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Readable, but without source time." }] } }),
+    ].join("\n"), { nowMs: Date.parse("2026-08-11T10:00:07.000Z") });
+
+    expect(agent?.lastHumanFacingAt).toBe("2026-08-11T10:00:03.000Z");
+    expect(agent?.updatedAt).toBe("2026-08-11T10:00:06.000Z");
+  });
+
+  test("Claude ignores later thinking, tools, and injected metadata", () => {
+    const agent = parseClaudeJsonl([
+      JSON.stringify({ type: "user", sessionId: "claude-human-clock", cwd: "/tmp/formic", timestamp: "2026-08-11T10:00:01.000Z", message: { role: "user", content: "Please inspect the fleet." } }),
+      JSON.stringify({ type: "assistant", sessionId: "claude-human-clock", cwd: "/tmp/formic", timestamp: "2026-08-11T10:00:02.000Z", message: { role: "assistant", content: [{ type: "text", text: "The fleet is stable." }] } }),
+      JSON.stringify({ type: "assistant", sessionId: "claude-human-clock", cwd: "/tmp/formic", timestamp: "2026-08-11T10:00:03.000Z", message: { role: "assistant", content: [{ type: "thinking", thinking: "internal" }, { type: "tool_use", name: "inspect" }] } }),
+      JSON.stringify({ type: "user", sessionId: "claude-human-clock", cwd: "/tmp/formic", timestamp: "2026-08-11T10:00:04.000Z", isMeta: true, message: { role: "user", content: "Injected metadata." } }),
+      JSON.stringify({ type: "assistant", sessionId: "claude-human-clock", cwd: "/tmp/formic", message: { role: "assistant", content: "Readable, but without source time." } }),
+    ].join("\n"), { nowMs: Date.parse("2026-08-11T10:00:05.000Z") });
+
+    expect(agent?.lastHumanFacingAt).toBe("2026-08-11T10:00:02.000Z");
+    expect(agent?.updatedAt).toBe("2026-08-11T10:00:04.000Z");
+  });
+});
+
 describe("collector identity and usage truth", () => {
   test("CWD-PROV-1 hook launch cwd is published without launch command material", async () => {
     const home = mkdtempSync(join(tmpdir(), "mountain-cwd-provenance-"));

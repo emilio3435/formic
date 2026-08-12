@@ -628,6 +628,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       /* Only when a human plausibly typed it — cmux titles every pane, and its
          own defaults must not arrive on the board wearing a rename's authority. */
       surfaceTitle: paneRename(surface?.title, surface?.cwd),
+      lastHumanFacingAt: source.lastHumanFacingAt,
       lastUserMessage: source.lastUserMessage,
       ...(senderVerified === undefined ? {} : { senderVerified }),
       lastAgentMessage: source.lastAgentMessage,
@@ -682,9 +683,16 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
   const orderedPrograms = [...programs.values()]
     .map((program) => ({
       ...program,
-      agents: program.agents.sort((left, right) =>
-        agentSortRank(left) - agentSortRank(right) || right.updatedAt.localeCompare(left.updatedAt),
-      ),
+      agents: program.agents.sort((left, right) => {
+        const rank = agentSortRank(left) - agentSortRank(right);
+        if (rank) return rank;
+        if (left.lastHumanFacingAt && right.lastHumanFacingAt) {
+          return right.lastHumanFacingAt.localeCompare(left.lastHumanFacingAt);
+        }
+        if (left.lastHumanFacingAt) return -1;
+        if (right.lastHumanFacingAt) return 1;
+        return 0;
+      }),
     }))
     .map((program) => ({ ...program, rollup: rollupFor(program.agents) }))
     .sort((left, right) =>

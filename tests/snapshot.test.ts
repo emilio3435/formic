@@ -500,6 +500,81 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(absent.programs[0]?.agents[0]?.lastHumanMessage).toBeNull();
   });
 
+  test("orders equal-priority rows by human prose, never internal source activity", () => {
+    const snapshot = buildSnapshot({
+      agents: [
+        collected({ id: "codex:older-message", sourceSessionId: "older-message", lastHumanFacingAt: "2026-07-21T22:00:00.000Z", updatedAt: "2026-07-21T23:00:29.000Z" }),
+        collected({ id: "codex:newer-message", sourceSessionId: "newer-message", lastHumanFacingAt: "2026-07-21T22:30:00.000Z", updatedAt: "2026-07-21T23:00:01.000Z" }),
+      ],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.programs[0]?.agents.map(({ id }) => id)).toEqual([
+      "codex:newer-message",
+      "codex:older-message",
+    ]);
+    expect(snapshot.programs[0]?.agents[0]?.lastHumanFacingAt).toBe("2026-07-21T22:30:00.000Z");
+  });
+
+  test("keeps equal and unavailable human clocks stable without updatedAt fallback", () => {
+    const snapshot = buildSnapshot({
+      agents: [
+        collected({ id: "codex:absent-first", sourceSessionId: "absent-first", lastHumanFacingAt: undefined, updatedAt: "2026-07-21T23:00:29.000Z" }),
+        collected({ id: "codex:equal-first", sourceSessionId: "equal-first", lastHumanFacingAt: "2026-07-21T22:00:00.000Z", updatedAt: "2026-07-21T23:00:01.000Z" }),
+        collected({ id: "codex:absent-second", sourceSessionId: "absent-second", lastHumanFacingAt: undefined, updatedAt: "2026-07-21T23:00:01.000Z" }),
+        collected({ id: "codex:equal-second", sourceSessionId: "equal-second", lastHumanFacingAt: "2026-07-21T22:00:00.000Z", updatedAt: "2026-07-21T23:00:29.000Z" }),
+      ],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.programs[0]?.agents.map(({ id }) => id)).toEqual([
+      "codex:equal-first",
+      "codex:equal-second",
+      "codex:absent-first",
+      "codex:absent-second",
+    ]);
+  });
+
+  test("keeps operational priority ahead of a newer human message", () => {
+    const snapshot = buildSnapshot({
+      agents: [
+        collected({ id: "codex:working", sourceSessionId: "working", lastHumanFacingAt: "2026-07-21T22:00:00.000Z" }),
+        collected({
+          id: "codex:finished",
+          sourceSessionId: "finished",
+          status: "archived",
+          endEvidence: "session-exit",
+          transcriptEndedCleanly: true,
+          lastHumanFacingAt: "2026-07-21T22:59:00.000Z",
+        }),
+      ],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.programs[0]?.agents.map(({ id }) => id)).toEqual([
+      "codex:working",
+      "codex:finished",
+    ]);
+  });
+
+  test("a genuine human-message clock change produces a new fingerprint", () => {
+    const build = (lastHumanFacingAt: string) => buildSnapshot({
+      agents: [collected({ lastHumanFacingAt })],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshotFingerprint(build("2026-07-21T22:00:00.000Z")))
+      .not.toBe(snapshotFingerprint(build("2026-07-21T22:01:00.000Z")));
+  });
+
   test("the linked pane's own title is published, separately from its workspace's", () => {
     /* The collector has read `surface.title` all along and the snapshot dropped
        it, so a terminal the operator renamed reached the board as whatever the

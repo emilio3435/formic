@@ -1,12 +1,33 @@
 import { describe, expect, test } from "bun:test";
 import {
   extractClosingByRole,
+  extractLastHumanFacingAt,
   extractLastHumanMessage,
   extractLastMessageByRole,
   readableClosing,
   readableHumanMessage,
   type HumanMessageCandidate,
 } from "../src/server/human-message";
+
+describe("extractLastHumanFacingAt — readable prose with an honest source clock", () => {
+  test("uses only valid timestamps attached to accepted human-facing prose", () => {
+    expect(extractLastHumanFacingAt("codex", [
+      { role: "user", content: "Please repair the refresh path.", timestamp: "2026-08-11T10:00:01.000Z" },
+      { role: "assistant", content: [{ type: "reasoning", text: "internal plan" }], timestamp: "2026-08-11T10:00:02.000Z" },
+      { role: "assistant", content: "tool_result: {\"ok\":true}", timestamp: "2026-08-11T10:00:03.000Z" },
+      { role: "assistant", content: "This timestamp is malformed.", timestamp: "not-a-time" },
+      { role: "assistant", content: "The refresh path is repaired.", timestamp: "2026-08-11T10:00:04-05:00" },
+      { role: "user", content: "Injected metadata.", isMeta: true, timestamp: "2026-08-11T10:00:05.000Z" },
+    ])).toBe("2026-08-11T15:00:04.000Z");
+  });
+
+  test("leaves the clock unavailable when readable prose has no valid attached timestamp", () => {
+    expect(extractLastHumanFacingAt("cursor", [
+      { role: "user", content: "A real request with no source time." },
+      { role: "assistant", content: "A real reply with no source time.", timestamp: 1786456800000 },
+    ])).toBeUndefined();
+  });
+});
 
 describe("readableHumanMessage — human, never machine language", () => {
   test("strips Claude slash-command + local-command transport envelopes", () => {

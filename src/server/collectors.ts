@@ -12,6 +12,7 @@ import {
 import {
   extractLastHumanMessage,
   extractClosingByRole,
+  extractLastHumanFacingAt,
   extractLastMessageByRole,
   readableHumanMessage,
   type HumanMessageCandidate,
@@ -70,6 +71,7 @@ interface IndexedHumanMessage {
 interface HumanMessageWindow {
   user?: IndexedHumanMessage;
   assistant?: IndexedHumanMessage;
+  lastHumanFacingAt?: string;
 }
 
 const PROVIDER_NAMES: Record<Provider, string> = {
@@ -110,6 +112,10 @@ function recordHumanMessage(
   index: number,
 ): void {
   if (candidate.isMeta || !readableHumanMessage(provider, candidate.content)) return;
+  const timestamp = isoTimestamp(candidate.timestamp);
+  if (timestamp && (!window.lastHumanFacingAt || timestamp > window.lastHumanFacingAt)) {
+    window.lastHumanFacingAt = timestamp;
+  }
   window[candidate.role] = { index, candidate };
 }
 
@@ -375,6 +381,7 @@ function makeAgent(input: {
   threadDepth?: number;
   nickname?: string;
   humanMessages?: readonly HumanMessageCandidate[];
+  lastHumanFacingAt?: string;
   statusReason?: string;
   exited?: boolean;
   /* What `exited` actually meant for this provider. Passing it beside the
@@ -448,6 +455,8 @@ function makeAgent(input: {
       input.task,
       statusReason,
     ),
+    lastHumanFacingAt: input.lastHumanFacingAt
+      ?? extractLastHumanFacingAt(input.provider, input.humanMessages ?? []),
     lastUserMessage: extractLastMessageByRole(input.provider, input.humanMessages ?? [], "user"),
     lastAgentMessage: extractLastMessageByRole(input.provider, input.humanMessages ?? [], "assistant"),
     // End-anchored and role-attributed: what the agent actually stopped on.
@@ -517,6 +526,7 @@ function createOmpParser(): IncrementalParser {
           recordHumanMessage("omp", messages, {
             role: row.message.role,
             content: row.message?.content,
+            timestamp,
           }, rowIndex);
         }
         if (text) tail = text;
@@ -576,6 +586,7 @@ function createOmpParser(): IncrementalParser {
         transcriptTail: tail,
         activeMs: activeTime.value,
         humanMessages: humanMessages(messages),
+        lastHumanFacingAt: messages.lastHumanFacingAt,
         statusReason: "Legacy OMP history is read-only; file timestamps are not treated as a live runtime signal.",
         exited,
         // OMP's session_exit is the real thing: a record that the session, not a
@@ -643,7 +654,7 @@ function createCodexParser(): IncrementalParser {
         if (row.type === "event_msg" && payload.type === "user_message") {
           exited = false;
           task = nextTask(task, payload.message);
-          recordHumanMessage("codex", messages, { role: "user", content: payload.message }, rowIndex);
+          recordHumanMessage("codex", messages, { role: "user", content: payload.message, timestamp }, rowIndex);
         }
         if (row.type === "event_msg" && payload.type === "task_complete") exited = true;
         if (payload.type === "token_count" && payload.info?.total_token_usage) {
@@ -714,6 +725,7 @@ function createCodexParser(): IncrementalParser {
             recordHumanMessage("codex", messages, {
               role: payload.role,
               content: payload.content,
+              timestamp,
             }, rowIndex);
           }
           if (text) tail = text;
@@ -754,6 +766,7 @@ function createCodexParser(): IncrementalParser {
         transcriptTail: tail,
         activeMs: activeTime.value,
         humanMessages: humanMessages(messages),
+        lastHumanFacingAt: messages.lastHumanFacingAt,
         exited,
         // Codex `task_complete` closes a TURN. The session stays open, and the
         // next user message clears the flag again a few lines above.
@@ -868,12 +881,12 @@ function createClaudeParser(): IncrementalParser {
         }
         if (row.type === "assistant" && row.message?.stop_reason === "end_turn") exited = true;
         if (text) tail = text;
-        if ((row.type === "user" || row.type === "assistant") &&
-          (row.message?.role === "user" || row.message?.role === "assistant")) {
+        if ((row.type === "user" || row.type === "assistant") && row.message?.role === row.type) {
           recordHumanMessage("claude", messages, {
             role: row.message.role,
             content: row.message?.content,
             isMeta: row.isMeta === true,
+            timestamp,
           }, rowIndex);
         }
         const usage = row.message?.usage;
@@ -996,6 +1009,7 @@ function createClaudeParser(): IncrementalParser {
         transcriptTail: tail,
         activeMs: activeTime.value,
         humanMessages: humanMessages(messages),
+        lastHumanFacingAt: messages.lastHumanFacingAt,
         exited,
         // Claude `stop_reason:"end_turn"` is the model yielding the floor, not
         // the session closing. The very next user message reopens it.

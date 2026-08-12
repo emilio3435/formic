@@ -459,6 +459,8 @@ export interface AgentSnapshot {
       the whole workspace: the pane title is a claim about this session, the
       workspace title is only a claim about where it is parked. */
   surfaceTitle?: string;
+  /** Latest readable user/assistant prose with a directly associated source timestamp. */
+  lastHumanFacingAt?: string;
   /** Sanitized provider-aware prose for dense rows; null means no readable fallback survived. */
   lastHumanMessage: string | null;
   /** Latest sanitized human-legible USER request; null when none survived cleaning. */

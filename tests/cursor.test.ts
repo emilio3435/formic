@@ -39,6 +39,53 @@ class SequenceRunner implements CommandRunner {
   }
 }
 
+describe("Cursor human-facing recency", () => {
+  test("accepts only timestamps directly attached to readable prose", async () => {
+    const agent = parseCursorSession({
+      sessionId: SESSION_ID,
+      metaJson: await fixture("cursor-meta.json"),
+      transcriptJsonl: [
+        JSON.stringify({ role: "user", timestamp: "2026-08-11T10:00:01.000Z", message: { content: "Please inspect Cursor." } }),
+        JSON.stringify({ role: "assistant", timestamp: "2026-08-11T10:00:02.000Z", message: { content: [{ type: "text", text: "Cursor is ready." }] } }),
+        JSON.stringify({ role: "assistant", timestamp: "2026-08-11T10:00:03.000Z", message: { content: [{ type: "tool_result", text: "ok" }] } }),
+        JSON.stringify({ role: "assistant", message: { content: "Readable, but without source time." } }),
+      ].join("\n"),
+      transcriptMtimeMs: Date.parse("2026-08-11T10:00:04.000Z"),
+      storeDbMtimeMs: Date.parse("2026-08-11T10:00:05.000Z"),
+      nowMs: Date.parse("2026-08-11T10:00:06.000Z"),
+    });
+
+    expect(agent?.lastHumanFacingAt).toBe("2026-08-11T10:00:02.000Z");
+    expect(agent?.updatedAt).toBe("2026-08-11T10:00:05.000Z");
+  });
+
+  test("does not infer message time from metadata, mtimes, or a parent clock", async () => {
+    const parent = parseCursorSession({
+      sessionId: SESSION_ID,
+      metaJson: await fixture("cursor-meta.json"),
+      transcriptJsonl: [
+        JSON.stringify({ role: "user", message: { content: "Readable but untimestamped." } }),
+        JSON.stringify({ role: "assistant", timestamp: "not-a-time", message: { content: "Readable with malformed time." } }),
+      ].join("\n"),
+      transcriptMtimeMs: Date.parse("2026-08-11T10:00:04.000Z"),
+      storeDbMtimeMs: Date.parse("2026-08-11T10:00:05.000Z"),
+      nowMs: Date.parse("2026-08-11T10:00:06.000Z"),
+    });
+    const child = parseCursorChildSession({
+      sessionId: CHILD_SESSION_ID,
+      parentSessionId: SESSION_ID,
+      cwd: "/tmp/formic",
+      transcriptJsonl: JSON.stringify({ role: "assistant", message: { content: "Child prose without time." } }),
+      transcriptPath: "/tmp/child.jsonl",
+      updatedAtMs: Date.parse("2026-08-11T10:00:05.000Z"),
+      nowMs: Date.parse("2026-08-11T10:00:06.000Z"),
+    });
+
+    expect(parent?.lastHumanFacingAt).toBeUndefined();
+    expect(child?.lastHumanFacingAt).toBeUndefined();
+  });
+});
+
 // A CLI assistant message blob: the resolved modelName lives on content PARTS,
 // while the message-level providerOptions.cursor carries only routing ids.
 function assistantBlob(modelName: string): string {
