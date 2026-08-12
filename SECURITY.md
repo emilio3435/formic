@@ -42,10 +42,10 @@ separate-user broker.
   additionally require an exact same-origin `Origin`.
 
 - **Fresh target evidence for single-agent control.** Before `focus`,
-  `instruct`, or `interrupt` through `/api/control`, Ant Hill rejects a snapshot
+  `instruct`, or `interrupt` through `/api/control`, Formic rejects a snapshot
   older than 30 seconds. This prevents old routing evidence from targeting a
   terminal after the observed state has gone stale. `archive` is exempt because
-  it changes Ant Hill's local data, not cmux.
+  it changes Formic's local data, not cmux.
 
   `/api/broadcast` enforces the same 30-second check: it rejects a stale
   snapshot with `STALE_SNAPSHOT` before dispatching any `instruct` action
