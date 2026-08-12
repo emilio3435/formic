@@ -14728,3 +14728,69 @@ describe("the Board all-clear is reachable, and honest about its window", () => 
     expect(hidden).toBe(1);
   });
 });
+
+describe("header collapse — static masthead and fence contracts", () => {
+  test("#compact-summary sits once between the scene and the signals, hidden by default", () => {
+    expect(html.match(/id="compact-summary"/g)?.length).toBe(1);
+    const inner = html.slice(html.indexOf('class="masthead-inner"'), html.indexOf("</header>"));
+    const scene = inner.indexOf('class="masthead-scene"');
+    const compact = inner.indexOf('id="compact-summary"');
+    const signals = inner.indexOf('class="masthead-signals"');
+    expect(scene).toBeGreaterThan(-1);
+    expect(compact).toBeGreaterThan(scene);
+    expect(signals).toBeGreaterThan(compact);
+    const tag = html.match(/<div[^>]*id="compact-summary"[^>]*>/)?.[0] ?? "";
+    expect(tag).toContain('class="compact-summary"');
+    expect(tag).toContain('role="group"');
+    expect(tag).toContain('aria-label="Fleet summary, compact"');
+    expect(tag).toContain("hidden");
+  });
+
+  test("the disclosure toggle is one native button carrying the locked contract", () => {
+    expect(html.match(/data-fkey="header-summary-toggle"/g)?.length).toBe(1);
+    const at = html.indexOf('data-fkey="header-summary-toggle"');
+    const open = html.lastIndexOf("<", at);
+    const close = html.indexOf(">", at);
+    const tag = html.slice(open, close + 1);
+    expect(tag.startsWith("<button")).toBe(true);
+    expect(tag).toContain('type="button"');
+    expect(tag).toContain('id="header-summary-toggle"');
+    expect(tag).toContain('aria-controls="health-rail compact-summary"');
+    expect(tag).toContain('aria-expanded="true"');
+    const label = html.slice(close + 1, html.indexOf("<", close + 1));
+    expect(label.trim()).toBe("Collapse header");
+    /* Inside .masthead-signals, so panel anchoring and focus behavior are the
+       row's own. */
+    const signalsAt = html.indexOf('class="masthead-signals"');
+    const signalsEnd = html.indexOf('id="settings-panel"');
+    expect(at).toBeGreaterThan(signalsAt);
+    expect(at).toBeLessThan(signalsEnd);
+  });
+
+  test("existing masthead controls keep their IDs and counts; the alarm stays outside the rail", () => {
+    for (const id of ["notify-toggle", "notifications-panel", "settings-toggle", "conn-badge", "server-health", "feed-alarm", "cleanup-status"]) {
+      expect(html.match(new RegExp(`id="${id}"`, "g"))?.length, id).toBe(1);
+    }
+    /* Attention/trust order is load-bearing: the alarm sits between the
+       masthead and the rail so a frozen feed cannot be hidden by collapsing. */
+    expect(html.indexOf('id="feed-alarm"')).toBeGreaterThan(html.indexOf("</header>"));
+    expect(html.indexOf('id="feed-alarm"')).toBeLessThan(html.indexOf('id="health-rail"'));
+    /* The static live region stays outside the collapsible rail so cleanup
+       announcements remain exposed in compact mode. */
+    expect(html.indexOf('id="cleanup-status"')).toBeLessThan(html.indexOf('id="health-rail"'));
+  });
+
+  test("both faces read from one derivation: the compact paint reuses the model, never a second summaryWidgetData sweep", () => {
+    /* renderHealthRail derives once; the shared target-population helper is the
+       only writer of both faces. A compact branch calling summaryWidgetData
+       again is the two-sources-of-truth defect the spec locks out. */
+    const app = source;
+    const railBody = app.slice(app.indexOf("function renderHealthRail("), app.indexOf("function heartbeatTldrAgent("));
+    expect(railBody).toContain("renderReadingsInto(");
+    const helperBody = app.match(/function renderReadingsInto\(([\s\S]*?)\n\}/)?.[0] ?? "";
+    expect(helperBody).not.toContain("summaryWidgetData(");
+    expect(helperBody).toContain("renderPulseCalm(");
+    expect(helperBody).toContain("renderSummaryWidget(");
+    expect(source).not.toContain('healthData || summaryWidgetData("health"');
+  });
+});

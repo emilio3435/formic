@@ -123,6 +123,11 @@ export const state = {
   renaming: null,              // presentation target key currently being edited
   widgetIds: [...DEFAULT_WIDGET_IDS], // own mutable copy; the catalog is frozen
   widgetCustomizerOpen: false,
+  /* The masthead summary disclosure: false = the expanded health rail,
+     true = the compact masthead face. Loaded from HEADER_COLLAPSED_STORAGE_KEY
+     at boot; only an explicit toggle ever writes it — snapshots and viewport
+     changes must never move it. */
+  headerCollapsed: false,
   renameDraft: "",
   renamePending: false,
   renameError: "",
