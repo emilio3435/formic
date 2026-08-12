@@ -100,6 +100,7 @@ const ICON_PATHS = {
   paperclip: [["path", { d: "M9 15.5V9a3 3 0 0 1 6 0v7.5a4.5 4.5 0 0 1-9 0V8a6 6 0 0 1 12 0v8.5a7 7 0 0 1-14 0V10" }]],
   file: [["path", { d: "M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9z" }], ["path", { d: "M14 3v5h5" }]],
   "git-merge": [["circle", { cx: 7, cy: 6, r: 2 }], ["circle", { cx: 17, cy: 6, r: 2 }], ["circle", { cx: 12, cy: 18, r: 2 }], ["path", { d: "M7 8v4a4 4 0 0 0 4 4h1M17 8v4a4 4 0 0 1-4 4h-1" }]],
+  "arrow-up-right": [["line", { x1: 7, y1: 17, x2: 17, y2: 7 }], ["polyline", { points: "7 7 17 7 17 17" }]],
   "link-2": [["path", { d: "M9 12h6" }], ["path", { d: "M10 8H8a3 3 0 0 0 0 6h2" }], ["path", { d: "M14 8h2a3 3 0 0 1 0 6h-2" }]],
   chevron: [["polyline", { points: "9 6 15 12 9 18" }]],
   book: [["path", { d: "M4 5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5z" }], ["path", { d: "M8 7h6" }], ["path", { d: "M8 11h6" }]],

@@ -317,16 +317,16 @@ export function identityCause(view) {
    Returns null when controls route normally. Pure. */
 
 /* Normalized, render-ready view of one agent's identity trace. Pure. */
-export function identityTraceView(agent) {
-  const trace = (agent && agent.identityTrace) || null;
+export function identityTraceView(agent, trace) {
+  const resolved = (trace !== undefined ? trace : (agent && agent.identityTrace)) || null;
   const target = (agent && agent.target) || {};
-  const rawSteps = trace && Array.isArray(trace.steps) ? trace.steps : [];
+  const rawSteps = resolved && Array.isArray(resolved.steps) ? resolved.steps : [];
   return {
-    resolution: (trace && trace.resolution) || target.resolution || "missing",
-    matchedTier: (trace && trace.matchedTier) || null,
-    reason: (trace && trace.reason) || null,
-    surfaceId: (trace && trace.surfaceId) || target.surfaceId || null,
-    bridge: (trace && trace.bindingBridge) || null,
+    resolution: (resolved && resolved.resolution) || target.resolution || "missing",
+    matchedTier: (resolved && resolved.matchedTier) || null,
+    reason: (resolved && resolved.reason) || null,
+    surfaceId: (resolved && resolved.surfaceId) || target.surfaceId || null,
+    bridge: (resolved && resolved.bindingBridge) || null,
     steps: rawSteps.map((step) => ({
       tier: step.tier,
       tierLabel: IDENTITY_TIER_LABELS[step.tier] || step.tier,

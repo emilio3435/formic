@@ -244,8 +244,9 @@ describe("synthetic API payload rendered by the real browser client", () => {
     const rendered = textOf(evidence);
     expect(rendered).toContain("Workspace");
     expect(rendered).toContain("Terminal shell folder");
-    // Repository collapsed when folder == repo (content crit: distinct not identical) — shows "folder = repo"
-    expect(rendered).toMatch(/Workspace|Repository/);
+    // Repository is omitted when folder and repo are the same path — no badge.
+    expect(rendered).toContain("Workspace");
+    expect(rendered).not.toContain("folder = repo");
     expect(rendered).not.toContain("Linked for Focus and Send.");
     expect(rendered).toContain("Claude’s tool session and the terminal shell maintain separate working directories. This does not change the exact cmux link.");
     expect(rendered).not.toMatch(/mismatch|session cwd|≠/i);

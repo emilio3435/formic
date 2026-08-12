@@ -10466,11 +10466,6 @@ function renderAgentDrawer(pane, view) {
     "aria-label": "Evidence and lineage",
   });
   desk.id = "drawer-evidence-panel";
-  desk.append(el("div", { class: "drawer-section-head sticky-head drawer-evidence-head" },
-    el("span", { class: "drawer-evidence-mark", "aria-hidden": "true" }, icon("shield", { label: "" })),
-    el("div", { class: "drawer-evidence-title" },
-      el("span", { class: "drawer-evidence-kicker", text: "Session inspector" }),
-      el("h3", { class: "section-title" }, "Evidence"))));
   desk.append(el("div", { id: "drawer-evidence-body", class: "drawer-evidence-body" },
     renderEvidence(agent),
     renderLineageSpine(agent)));
@@ -11617,118 +11612,380 @@ function renderLineageSpine(agent) {
 
 /* ---------- inspector: Evidence ---------- */
 
-function copyIdButton(label, value, key) {
-  if (!value) return null;
-  return el("button", {
-    type: "button",
-    class: "btn sm evidence-copy-id",
-    title: value,
-    dataset: { fkey: key },
-    onclick: () => copyText(value),
-  }, "Copy " + label);
+const EXHIBIT_MARK = {
+  workspace: { src: "/icons/folder.svg", alt: "Workspace" },
+  git: { src: "/icons/git.svg", alt: "Git" },
+  pr: { src: "/icons/github.svg", alt: "GitHub" },
+  route: { src: "/icons/route.svg", alt: "Route" },
+  history: { src: "/icons/history.svg", alt: "History" },
+};
+
+const ROUTE_BIND_KICKERS = {
+  recorded: "Recorded target",
+  session: "Session ID",
+  cwd: "Working folder",
+};
+
+const ROUTE_CHIPS = {
+  exact: { text: "Exact", className: "route-chip route-chip--exact" },
+  "unique-cwd": { text: "Unique folder", className: "route-chip" },
+  ambiguous: { text: "Quarantined", className: "route-chip route-chip--lock" },
+};
+
+function exhibitHead({ mark, title, section, extra, markClass, markTitle }) {
+  const head = el("div", { class: "exhibit-head" },
+    el("span", {
+      class: "exhibit-mark" + (markClass ? " " + markClass : ""),
+      title: markTitle || undefined,
+    }, el("img", { src: mark.src, alt: mark.alt, width: "16", height: "16" })),
+    el("h3", { class: "section-title", dataset: { evidenceSection: section } }, title));
+  for (const node of [].concat(extra || []).filter(Boolean)) head.append(node);
+  return head;
 }
 
-function controlLinkSentence(target) {
-  if (!target) return null;
-  const resolution = RESOLUTION_LABELS[target.resolution] || target.resolution;
-  const terminal = target.workspaceTitle ? "terminal: " + target.workspaceTitle : null;
-  if (target.resolution === "exact") {
-    return "Linked for Focus and Send.";
-  }
-  /* A directory match routes a Focus and nothing else. Claiming "for Focus and
-     Send" here is the sentence form of the same overclaim the chip made. */
-  if (target.resolution === "unique-cwd") {
-    return (terminal ? "Focus only, to " + terminal : "Focus only")
-      + " · " + resolution + ", not attested by cmux"
-      + ".";
-  }
-  if (target.resolution === "ambiguous") {
-    return "Control routing is quarantined — identity evidence is ambiguous"
-      + (terminal ? " for " + terminal : "")
-      + ".";
-  }
-  return "No safe control link"
-    + (terminal ? " for " + terminal : "")
-    + (resolution ? " · " + resolution : "")
-    + ".";
+function exhibitShell({ mark, title, section, extra, markClass, markTitle, wrapClass }) {
+  const wrap = el("div", { class: wrapClass || "exhibit" });
+  wrap.dataset.evidenceSection = section;
+  wrap.append(exhibitHead({ mark, title, section, extra, markClass, markTitle }));
+  const body = el("div", { class: "exhibit-body" });
+  wrap.append(body);
+  return { wrap, body };
 }
 
-function renderControlLink(target) {
-  if (!target) return null;
-  const wrap = el("div", { class: "evidence-control-link" });
-  const sentence = controlLinkSentence(target);
-  wrap.append(el("p", {
-    class: "evidence-control-sentence",
-    title: READY_LINKED_HINT,
-    text: sentence,
-  }));
-  const ids = el("div", { class: "evidence-ids" });
-  const buttons = [
-    copyIdButton("workspace", target.workspaceId, "copy-ws:" + (target.workspaceId || "")),
-    copyIdButton("surface", target.surfaceId, "copy-surface:" + (target.surfaceId || "")),
-    copyIdButton("pane", target.paneId, "copy-pane:" + (target.paneId || "")),
-  ].filter(Boolean);
-  for (const btn of buttons) ids.append(btn);
-  if (buttons.length) wrap.append(ids);
+function relativeArtifactPath(cwd, path, label) {
+  const raw = typeof path === "string" ? path : "";
+  const root = typeof cwd === "string" ? cwd.replace(/\/+$/, "") : "";
+  if (root && raw.startsWith(root + "/")) {
+    const rel = raw.slice(root.length + 1);
+    if (rel) return rel;
+  }
+  return raw || label || "";
+}
+
+function absoluteArtifactPath(cwd, path, shown) {
+  const raw = typeof path === "string" ? path.trim() : "";
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith("/")) return raw;
+  const root = typeof cwd === "string" ? cwd.replace(/\/+$/, "") : "";
+  const rel = String(shown || raw).replace(/^\/+/, "");
+  if (root && rel) return root + "/" + rel;
+  return raw || shown || "";
+}
+
+function workspaceFiles(agent) {
+  const foot = transcriptArtifact(agent);
+  const footPath = foot && typeof foot.path === "string" ? foot.path : "";
+  return (agent.artifacts || []).filter((item) => {
+    if (!item) return false;
+    if (item.kind === "transcript") return false;
+    if (footPath && item.path === footPath) return false;
+    if (/transcript/i.test(item.label || "") && (!item.kind || item.kind === "transcript")) return false;
+    return true;
+  });
+}
+
+function resolvedIdentityTrace(agent, ui) {
+  const identity = ui && ui.identity;
+  if (identity && identity.agentId === agent.id && identity.data && identity.data.agent && identity.data.agent.trace) {
+    return identity.data.agent.trace;
+  }
+  return (agent && agent.identityTrace) || null;
+}
+
+function routeBindSteps(view) {
+  return (view.steps || []).filter((step) => step.outcome !== "skipped");
+}
+
+function routeBindClass(outcome) {
+  if (outcome === "quarantined" || outcome === "ambiguous") return "route-bind route-bind--lock";
+  if (outcome === "no-match" || outcome === "rejected") return "route-bind route-bind--warn";
+  return "route-bind";
+}
+
+function routeExhibitVisible(agent, view) {
+  const resolution = view.resolution;
+  if (resolution === "exact" || resolution === "unique-cwd" || resolution === "ambiguous") return true;
+  if (deriveControlState(agent) === "quarantined") return true;
+  if (quarantineBrief(agent, deriveControlState(agent))) return true;
+  if ((view.steps || []).some((step) => step.outcome !== "skipped") || view.reason || view.bridge) return true;
+  return false;
+}
+
+function gitPresent(git) {
+  if (!git) return false;
+  const branch = typeof git.branch === "string" ? git.branch.trim() : "";
+  const head = typeof git.head === "string" ? git.head.trim() : "";
+  return Boolean(branch || head);
+}
+
+function historyExhibitVisible(agent) {
+  if (scopeOf(agent) === "retained") return true;
+  const why = provenanceOf(agent);
+  if (why === "process-died" || why === "operator-archive") return true;
+  const end = agent && agent.endEvidence;
+  return end === "worktree-deleted" || end === "superseded" || end === "turn-complete";
+}
+
+function historyExhibitSentence(agent) {
+  const provenance = historyProvenance(agent);
+  if (provenance) return provenance.label;
+  const why = provenanceOf(agent);
+  if (why === "process-died") return "Process died.";
+  const end = agent && agent.endEvidence;
+  if (end === "worktree-deleted") return "Worktree deleted.";
+  if (end === "superseded") return "Superseded.";
+  if (end === "turn-complete") return "Turn complete.";
+  return "";
+}
+
+function markCopied(btn) {
+  if (!btn || !btn.classList) return;
+  btn.classList.add("is-copied");
+  setTimeout(() => btn.classList.remove("is-copied"), 900);
+}
+
+function pathValue(agent, value, label) {
+  return el("span", { class: "evidence-value" },
+    el("code", { title: value, text: value }),
+    el("button", {
+      type: "button",
+      class: "artifact-copy evidence-path-copy",
+      title: "Copy " + label + " path",
+      "aria-label": "Copy " + label + " path",
+      dataset: { fkey: `copy-path:${agent.id}:${label}`, fullPath: value },
+      onclick: (event) => {
+        void copyText(value);
+        markCopied(event && event.currentTarget);
+      },
+    }, icon("copy")));
+}
+
+function prShortLabel(url) {
+  const raw = String(url || "");
+  try {
+    const parsed = new URL(raw);
+    return (parsed.host + parsed.pathname).replace(/\/$/, "");
+  } catch {
+    return raw.replace(/^https?:\/\//, "").replace(/\/$/, "") || raw;
+  }
+}
+
+function identityHintLines(data) {
+  const lines = [];
+  const take = (list) => {
+    for (const hint of list || []) {
+      if (typeof hint === "string") {
+        const text = hint.trim();
+        if (text) lines.push(text);
+        continue;
+      }
+      if (!hint || typeof hint !== "object") continue;
+      const text = [hint.command, hint.value, hint.resolvedSessionId, hint.rejectionReason]
+        .filter(Boolean).join(" · ");
+      if (text) lines.push(text);
+    }
+  };
+  take(data && data.commandHints);
+  for (const surface of (data && data.relatedSurfaces) || []) {
+    take(surface.commandHints);
+    take(surface.identityTrace && surface.identityTrace.commandHints);
+  }
+  return lines;
+}
+
+function renderWorkspaceExhibit(agent) {
+  const cwd = typeof agent.cwd === "string" ? agent.cwd.trim() : "";
+  const repoPath = agent.repo && typeof agent.repo.worktreePath === "string" ? agent.repo.worktreePath.trim() : "";
+  const repoName = agent.repo && typeof agent.repo.repoName === "string" ? agent.repo.repoName.trim() : "";
+  const launchCwd = typeof agent.launchCwd === "string" ? agent.launchCwd.trim() : "";
+  const surfaceCwd = agent.target && typeof agent.target.surfaceCwd === "string" ? agent.target.surfaceCwd.trim() : "";
+  const files = workspaceFiles(agent);
+  const specialty = specialtyLabel(agent);
+  const succeededBy = typeof agent.succeededBy === "string" ? agent.succeededBy.trim() : "";
+  const supersedes = typeof agent.supersedes === "string" ? agent.supersedes.trim() : "";
+  const cwdNote = agent.target && agent.target.cwdRelation === "different";
+  const sameRepo = Boolean(cwd && repoPath && cwd === repoPath);
+  const showRepo = !sameRepo && Boolean(repoName || repoPath);
+  const showLaunch = Boolean(launchCwd && launchCwd !== cwd);
+  const showShell = Boolean(surfaceCwd && surfaceCwd !== cwd);
+  if (!cwd && !showRepo && !showLaunch && !showShell && !files.length && !specialty && !succeededBy && !supersedes && !cwdNote) {
+    return null;
+  }
+
+  const { wrap, body } = exhibitShell({ mark: EXHIBIT_MARK.workspace, title: "Workspace", section: "workspace" });
+
+  const extras = [];
+  if (showRepo) extras.push(["Repository", pathValue(agent, repoName || repoPath, "Repository")]);
+  if (showLaunch) extras.push(["Launch folder", pathValue(agent, launchCwd, "Launch folder")]);
+  if (showShell) extras.push(["Terminal shell folder", pathValue(agent, surfaceCwd, "Terminal shell folder")]);
+  if (specialty) extras.push(["specialty", specialty]);
+  if (succeededBy) extras.push(["succeeded by", succeededBy]);
+  if (supersedes) extras.push(["supersedes", supersedes]);
+
+  if (extras.length) {
+    const grid = el("dl", { class: "detail-grid exhibit-readout" });
+    if (cwd) dtdd(grid, "Workspace", pathValue(agent, cwd, "Workspace"));
+    for (const [label, value] of extras) dtdd(grid, label, value);
+    body.append(grid);
+  } else if (cwd) {
+    body.append(el("p", { class: "evidence-value exhibit-readout" },
+      el("code", { title: cwd, text: cwd }),
+      el("button", {
+        type: "button",
+        class: "artifact-copy evidence-path-copy",
+        title: "Copy full path",
+        "aria-label": "Copy Workspace path",
+        dataset: { fkey: `copy-path:${agent.id}:Workspace`, fullPath: cwd },
+        onclick: (event) => {
+          void copyText(cwd);
+          markCopied(event && event.currentTarget);
+        },
+      }, icon("copy"))));
+  }
+
+  if (cwdNote) {
+    body.append(el("p", {
+      class: "directory-relation-note",
+      text: "Claude’s tool session and the terminal shell maintain separate working directories. This does not change the exact cmux link.",
+    }));
+  }
+
+  if (files.length) {
+    body.append(el("ul", { class: "artifact-list" },
+      files.map((item) => {
+        const shown = relativeArtifactPath(cwd, item.path, item.label);
+        const copyValue = absoluteArtifactPath(cwd, item.path, shown);
+        return el("li", {},
+          el("span", { class: "artifact-label", text: item.label || shown }),
+          el("span", { class: "artifact-path", title: copyValue, text: shown }),
+          el("button", {
+            type: "button",
+            class: "artifact-copy",
+            title: "Copy full path",
+            "aria-label": "Copy full path",
+            dataset: { fkey: `copy:${agent.id}:${copyValue}`, fullPath: copyValue },
+            onclick: (event) => {
+              void copyText(copyValue);
+              markCopied(event && event.currentTarget);
+            },
+          }, icon("copy")));
+      })));
+  }
+  return wrap;
+}
+
+function renderGitExhibit(agent) {
+  if (!gitPresent(agent.git)) return null;
+  const git = agent.git;
+  const dirty = Boolean(git.dirty);
+  const { wrap, body } = exhibitShell({
+    mark: EXHIBIT_MARK.git,
+    title: "Git",
+    section: "git",
+    markClass: dirty ? "git-dirty" : "",
+    markTitle: dirty ? "Uncommitted changes" : "Clean working tree",
+  });
+  body.append(el("span", { class: "git-line exhibit-readout" },
+    git.branch ? el("code", { text: git.branch }) : null,
+    git.head ? el("code", { class: "git-rev", text: "@" + String(git.head).slice(0, 7) }) : null));
+  return wrap;
+}
+
+function renderPullRequestExhibit(agent) {
+  const urls = Array.isArray(agent.pullRequestUrls) ? agent.pullRequestUrls.filter(Boolean) : [];
+  if (!urls.length) return null;
+  const { wrap, body } = exhibitShell({ mark: EXHIBIT_MARK.pr, title: "Pull request", section: "pr" });
+  body.append(el("ul", { class: "artifact-list" },
+    urls.map((url) => {
+      const label = prShortLabel(url);
+      return el("li", {},
+        el("span", { class: "artifact-label", text: label.split("/").slice(-2).join("/") || label }),
+        el("a", { class: "artifact-path", href: url, text: label }),
+        el("button", {
+          type: "button",
+          class: "artifact-copy",
+          title: "Copy URL",
+          "aria-label": "Copy URL",
+          dataset: { fkey: `copy:${agent.id}:${url}`, fullPath: url },
+          onclick: (event) => {
+            void copyText(url);
+            markCopied(event && event.currentTarget);
+          },
+        }, icon("copy")));
+    })));
+  return wrap;
+}
+
+function renderHistoryExhibit(agent) {
+  if (!historyExhibitVisible(agent)) return null;
+  const sentence = historyExhibitSentence(agent);
+  if (!sentence) return null;
+  const { wrap, body } = exhibitShell({ mark: EXHIBIT_MARK.history, title: "History", section: "history" });
+  body.append(el("p", { class: "evidence-value exhibit-readout", text: sentence }));
   return wrap;
 }
 
 /* The routing story in full: which tier bound the session (or refused), the
    ordered evidence trail, and — on demand — the ps/lsof view of the terminals
-   involved, which is the only place "ttys082 has both of these open" can come
-   from. Nothing here is fabricated: an agent with no trace renders nothing. */
+   involved. Quarantined sessions always mount, even when identityTrace was
+   stripped from the SSE payload. */
 function renderIdentityBlock(agent, ui = state) {
-  const view = identityTraceView(agent);
-  if (!view.steps.length && !view.reason && !view.bridge) return null;
+  const view = identityTraceView(agent, resolvedIdentityTrace(agent, ui));
+  if (!routeExhibitVisible(agent, view)) return null;
 
-  const wrap = el("div", { class: "identity-block" },
-    el("h3", { class: "section-title" }, icon("shield", { label: "" }), "Identity resolution"));
+  const identity = ui.identity || { agentId: null, loading: false, error: "", data: null };
+  const shown = identity.agentId === agent.id;
+  const expanded = shown && !identity.loading && Boolean(identity.data || identity.error);
+  const chipSpec = ROUTE_CHIPS[view.resolution]
+    || (deriveControlState(agent) === "quarantined" ? ROUTE_CHIPS.ambiguous : null);
+  const chip = chipSpec
+    ? el("span", { class: chipSpec.className, text: chipSpec.text })
+    : null;
+  const expand = el("button", {
+    type: "button",
+    class: "identity-load identity-expand",
+    "aria-expanded": expanded ? "true" : "false",
+    "aria-busy": shown && identity.loading ? "true" : null,
+    "aria-label": shown && identity.loading ? "Reading terminals…" : "Show which terminals claim this session",
+    title: "Show which terminals claim this session",
+    dataset: { fkey: "identity-load:" + agent.id },
+    onclick: () => void loadIdentityEvidence(agent.id),
+  }, icon("arrow-up-right"));
 
-  const verdict = view.matchedTier
-    ? "Bound by " + (IDENTITY_TIER_LABELS[view.matchedTier] || view.matchedTier).toLowerCase()
-      + " · " + (RESOLUTION_LABELS[view.resolution] || view.resolution)
-    : "Not bound · " + (RESOLUTION_LABELS[view.resolution] || view.resolution);
-  wrap.append(el("p", { class: "identity-verdict", text: verdict }));
-  if (view.reason) wrap.append(el("p", { class: "identity-reason", text: view.reason }));
+  const { wrap, body } = exhibitShell({
+    mark: EXHIBIT_MARK.route,
+    title: "Route",
+    section: "route",
+    extra: [chip, expand],
+    wrapClass: "identity-block exhibit",
+  });
 
-  if (view.steps.length) {
-    wrap.append(el("ol", { class: "identity-steps", "aria-label": "Identity resolution trail" },
-      view.steps.map((step) => el("li", { class: "identity-step identity-step--" + step.outcome },
-        el("span", { class: "identity-step-tier", text: step.tierLabel }),
-        el("span", { class: "identity-step-outcome", text: step.outcomeLabel }),
-        el("span", { class: "identity-step-detail", text: step.detail })))));
+  for (const step of routeBindSteps(view)) {
+    body.append(el("div", { class: routeBindClass(step.outcome) },
+      el("span", { class: "route-bind-kicker", text: ROUTE_BIND_KICKERS[step.tier] || step.tierLabel }),
+      el("p", { text: step.detail })));
   }
 
   if (view.bridge) {
-    wrap.append(el("p", { class: "identity-note", text:
+    body.append(el("p", { class: "identity-note", text:
       "A remembered binding to " + (view.bridge.surfaceId || "a terminal")
       + " carried this session through a scan with no live evidence"
       + (view.bridge.confirmedAt ? " (last confirmed " + agoText(view.bridge.confirmedAt) + ")" : "")
       + "." }));
   }
 
-  wrap.append(renderSurfaceEvidence(agent, ui));
+  const surfaces = renderSurfaceEvidence(agent, ui, expanded);
+  if (surfaces) body.append(surfaces);
   return wrap;
 }
 
 /* The on-demand half. Only the debug endpoint knows the pids, commands and
-   open session files behind a terminal, so this is a button until asked. */
-function renderSurfaceEvidence(agent, ui = state) {
+   open session files behind a terminal, so this stays collapsed until ↗. */
+function renderSurfaceEvidence(agent, ui = state, expanded = false) {
   const identity = ui.identity || { agentId: null, loading: false, error: "", data: null };
   const shown = identity.agentId === agent.id;
+  if (!shown || !expanded) return null;
   const wrap = el("div", { class: "identity-surfaces" });
-
-  if (!shown || identity.loading) {
-    wrap.append(el("button", {
-      type: "button",
-      class: "btn sm identity-load",
-      disabled: shown && identity.loading ? "" : null,
-      "aria-busy": shown && identity.loading ? "true" : null,
-      dataset: { fkey: "identity-load:" + agent.id },
-      onclick: () => void loadIdentityEvidence(agent.id),
-    }, shown && identity.loading ? "Reading terminals…" : "Show which terminals claim this session"));
-    return wrap;
-  }
 
   if (identity.error) {
     wrap.append(el("p", { class: "identity-error", role: "alert",
@@ -11744,165 +12001,43 @@ function renderSurfaceEvidence(agent, ui = state) {
   const collisions = surfaceCollisions(identity.data);
   if (!collisions.length) {
     wrap.append(el("p", { class: "identity-note", text: "No cmux terminal reports evidence for this session." }));
-    return wrap;
-  }
-  const list = el("ul", { class: "identity-surface-list", "aria-label": "Terminals claiming this session" });
-  for (const collision of collisions) {
-    const item = el("li", { class: "identity-surface" + (collision.claims.length > 1 ? " is-contested" : "") },
-      el("span", { class: "identity-surface-line mono", text: collisionLine(collision) }));
-    if (collision.conflict) {
-      item.append(el("span", { class: "identity-surface-conflict", text: collision.conflict }));
+  } else {
+    const list = el("ul", { class: "identity-surface-list", "aria-label": "Terminals claiming this session" });
+    for (const collision of collisions) {
+      const item = el("li", { class: "identity-surface" + (collision.claims.length > 1 ? " is-contested" : "") },
+        el("span", { class: "identity-surface-line mono", text: collisionLine(collision) }));
+      if (collision.conflict) {
+        item.append(el("span", { class: "identity-surface-conflict", text: collision.conflict }));
+      }
+      list.append(item);
     }
-    list.append(item);
+    wrap.append(list);
   }
-  wrap.append(list);
+
+  const hints = identityHintLines(identity.data);
+  if (hints.length) {
+    wrap.append(el("ul", { class: "identity-hints" },
+      hints.map((hint) => el("li", { class: "identity-hint", text: hint }))));
+  }
   return wrap;
 }
 
-/* ---------- inspector: inline transcript ----------
-
-   Verifying "this lane says it is done — is that true?" used to mean copying a
-   path out of the drawer, switching to a terminal, jq-ing a JSONL and switching
-   back, per agent, across ~200 lanes. The snapshot only carries a fixed 800-char
-   tail (MAX_TRANSCRIPT_TAIL_CHARS), which is not enough to answer the question.
-
-   Contract (GET /api/transcript?agent=<id>&limit=<n>, built in a parallel lane):
-     { ok, agentId, source, truncated, lines: [{ at, role, text }] }
-   `text` is UNTRUSTED agent output. It rides textContent only, with no
-   exceptions — the source guard that forbids markup assignment covers this file
-   as a whole, and every string below goes through el({ text }). */
-
-
-
-
-
-
-
-
-
-
 function renderEvidence(agent, ui = state) {
-  const panel = el("div", { class: "inspector-panel evidence-inspector-panel", role: "tabpanel" });
-  const grid = el("dl", { class: "detail-grid" });
-
-  // — Where: Workspace / Repo / Git — deduped, 14px icons per Evidence row (Design A) —
-  const _cwd = typeof agent.cwd === "string" ? agent.cwd.trim() : "";
-  const _repoPath = agent.repo && typeof agent.repo.worktreePath === "string" ? agent.repo.worktreePath.trim() : "";
-  const _repoName = agent.repo && typeof agent.repo.repoName === "string" ? agent.repo.repoName.trim() : "";
-  const _samePath = _cwd && _repoPath && _cwd === _repoPath;
-  const _surfaceCwd = agent.target && typeof agent.target.surfaceCwd === "string" ? agent.target.surfaceCwd.trim() : "";
-  const _sameSurfacePath = _cwd && _surfaceCwd && _cwd === _surfaceCwd;
-  const pathLine = (iconName, value, label, copyValue = value, extra = null) => el("span", { class: "evidence-path-line" },
-    icon(iconName, { label: "" }),
-    el("code", { title: value, text: value }),
-    extra,
-    copyValue ? el("button", {
-      type: "button",
-      class: "artifact-copy evidence-path-copy",
-      title: "Copy " + label + " path",
-      "aria-label": "Copy " + label + " path",
-      dataset: { fkey: `copy-path:${agent.id}:${label}` },
-      onclick: () => copyText(copyValue),
-    }, icon("copy")) : null);
-  if (_samePath) {
-    dtdd(grid, "Workspace", pathLine("folder-open", _cwd, "Workspace", _cwd, el("span", { class: "badge", text: "folder = repo" })), { hint: "Working folder and repository are the same path — collapsed to one line." });
-  } else {
-    if (_cwd) dtdd(grid, "Workspace", pathLine("folder-open", _cwd, "Workspace"), { code: true });
-    const _repoLabel = _repoName || _repoPath;
-    if (_repoLabel) dtdd(grid, "Repository", pathLine("folder", _repoLabel, "Repository", _repoPath || _repoLabel), { code: true });
-  }
-  if (!_samePath && agent.launchCwd && agent.launchCwd !== _cwd) dtdd(grid, "Launch folder", pathLine("folder-open", agent.launchCwd, "Launch folder"), { code: true });
-  if (!_sameSurfacePath) {
-    dtdd(grid, "Terminal shell folder", _surfaceCwd ? pathLine("terminal", _surfaceCwd, "Terminal shell folder") : null, { code: true });
-  }
-
-  const _gitLight = !agent.git ? "⚪" : agent.git.dirty ? "🟡" : "🟢";
-  const _gitLightTitle = !agent.git ? "no git" : agent.git.dirty ? "dirty — uncommitted changes" : "clean";
-  dtdd(grid, "Git", agent.git && (agent.git.branch || agent.git.head)
-    ? el("span", { class: "git-line" },
-        icon("git-branch", { label: "" }),
-        el("span", { title: _gitLightTitle, text: _gitLight }),
-        el("code", { text: agent.git.branch || "(detached)" }),
-        agent.git.dirty ? el("span", { class: "git-dirty", text: "● uncommitted" }) : el("span", { class: "git-clean", text: "● clean" }),
-        agent.git.head ? el("code", { text: "@" + agent.git.head.slice(0, 7) }) : null)
-    : el("span", { class: "git-none", text: "— no git" }));
-
-  /* "Last message" is not printed here. It rendered `who · when "snippet"`, and
-     the tabs are gone — Document and Desk are on screen together now, so every
-     part of that row was visible twice at once: the prose is the leading bubble
-     in Chat one column to the left, and the who/when is the header vitals'
-     `status · ago`. It was never independent evidence either: `_lastRaw` could
-     only be `lastAgentMessage` or `lastUserMessage`, which are the first two
-     candidates renderChat feeds dedupeTurns, so no session existed where the
-     desk copy was the only copy. Chat is authoritative for prose. */
-  /* Each block tags itself with what it is. The collapsed rail needs to say
-     what is in here without a second copy of these conditions to drift out of
-     step with them — so the sections declare their own names and
-     evidenceInventory reads them back off a built panel. */
-  if (grid.childNodes.length) {
-    grid.dataset.evidenceSection = "paths & usage";
-    const pathsHead = el("h3", { class: "section-title", dataset: { evidenceSection: "paths & usage" } }, icon("folder-open", { label: "" }), "Paths & Usage", el("span", { class: "rule", "aria-hidden": "true" }));
-    const pathsSection = el("section", { class: "evidence-section evidence-section--paths" }, pathsHead, grid);
-    if (_sameSurfacePath) {
-      pathsSection.append(el("p", {
-        class: "directory-relation-note",
-        text: "Workspace and terminal report the same folder. This is directory evidence only and does not authorize controls.",
-      }));
-    } else if (agent.target && agent.target.cwdRelation === "different") {
-      pathsSection.append(el("p", {
-        class: "directory-relation-note",
-        text: "Claude’s tool session and the terminal shell maintain separate working directories. This does not change the exact cmux link.",
-      }));
-    }
-    panel.append(pathsSection);
-  }
-
-  /* Where the row diet's four chips went. They were on every row, and on a
-     board of 275 rows four chips of true-but-not-actionable detail is the wall
-     the roster was supposed to stop being — but each one is genuinely worth
-     reading about the ONE session an operator has opened, which is what a
-     drawer is. Same values, same helpers (never re-derived here), one click
-     away from the row that owns them. */
-  const facts = renderRowFacts(agent);
-  if (facts) {
-    facts.dataset.evidenceSection = "row facts";
-    const factsHead = el("h3", { class: "section-title", dataset: { evidenceSection: "row facts" } }, icon("activity", { label: "" }), "Row facts", el("span", { class: "rule", "aria-hidden": "true" }));
-    panel.append(el("section", { class: "evidence-section evidence-section--facts" }, factsHead, facts));
-  }
-
-  const identity = renderIdentityBlock(agent);
-  if (identity) {
-    identity.dataset.evidenceSection = "identity";
-    identity.classList.add("evidence-section", "evidence-section--identity");
-    panel.append(identity);
-  }
-
-  // Names blank field removed — empty pill looks broken, settings affordance not evidence (content crit §3.6)
-
-  if (agent.artifacts && agent.artifacts.length) {
-    panel.append(el("section", { class: "evidence-section evidence-section--artifacts" },
-      el("h3", { class: "section-title", dataset: { evidenceSection: "artifacts" } }, icon("paperclip", { label: "" }), "Artifacts", el("span", { class: "rule", "aria-hidden": "true" })),
-      el("ul", { class: "artifact-list" },
-        agent.artifacts.map((a) => el("li", {},
-          el("span", { class: "artifact-kind", text: a.kind || "file" }),
-          el("span", { class: "artifact-path", title: a.path, text: a.path || a.label }),
-          el("button", {
-            type: "button", class: "artifact-copy",
-            title: "Copy " + (a.kind === "transcript" ? "transcript" : "artifact") + " path",
-            "aria-label": "Copy " + (a.kind === "transcript" ? "transcript" : "artifact") + " path",
-            dataset: { fkey: `copy:${agent.id}:${a.path}` },
-            onclick: () => copyText(a.path),
-          }, icon("copy")))))));
-  }
-
-  // Transcript lives in Chat tab (Full Task + Transcript expandable) — not duplicated in Evidence (content crit §3.3/§3.4 triple redundancy)
-
+  const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
+  const sections = [
+    renderWorkspaceExhibit(agent),
+    renderGitExhibit(agent),
+    renderPullRequestExhibit(agent),
+    renderIdentityBlock(agent, ui),
+    renderHistoryExhibit(agent),
+  ].filter(Boolean);
+  for (const section of sections) panel.append(section);
   if (!panel.childNodes.length) {
-    panel.append(el("div", { class: "evidence-empty" },
-      el("span", { class: "evidence-empty-mark", "aria-hidden": "true" }, icon("file-text", { label: "" })),
-      el("div", {},
-        el("strong", { text: "No evidence reported" }),
-        el("p", { class: "inspector-note", text: "No evidence fields reported for this session." }))));
+    panel.append(el("p", {
+      class: "inspector-note",
+      role: "status",
+      text: "No evidence fields reported for this session.",
+    }));
   }
   return panel;
 }

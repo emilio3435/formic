@@ -1,0 +1,321 @@
+/* Implementation CSS delta for the Evidence column.
+   Append to src/web/styles.css. Tokens stay Formic; this is the exhibit
+   chrome renderEvidence would add. Scoped to .drawer-desk so roster
+   .section-title is untouched. */
+
+/* CWD-COPY-1 sentence. Advisory, not a fifth path and not a warning. */
+.directory-relation-note {
+  margin: 0.55rem 0 0;
+  padding: 0.15rem 0 0.1rem 0.65rem;
+  border-left: 2px solid color-mix(in srgb, var(--slate) 45%, var(--line));
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+/* CSP-safe stand-in for the inline flex wrapper renderEvidence uses on path rows. */
+.evidence-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* Debug commandHints[] are fetched but never painted. Same ramp as identity-note. */
+.identity-hints {
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.2rem;
+  width: 100%;
+}
+.identity-hint {
+  font: 500 11.5px/1.4 var(--font-mono);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.inspector-panel > .identity-block { margin-top: 0; }
+.drawer-desk .inspector-panel { gap: 0.65rem; }
+
+/* Desk is the instrument well. Chat is the messenger. Marks stay 16px inline. */
+.drawer-desk {
+  border-left: 2px solid var(--ink);
+}
+.drawer-desk:not(:has(.drawer-evidence-body)) {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+.drawer-desk .drawer-evidence-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  padding: 12px;
+}
+
+/* Plate: nameplate on top, readout in the well. */
+.drawer-desk .exhibit {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--slate) 22%, var(--line));
+  border-radius: 8px;
+  background: var(--raise);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 72%, transparent),
+    0 10px 22px color-mix(in srgb, var(--ink) 8%, transparent);
+}
+.drawer-desk .exhibit-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 9px 12px;
+  min-width: 0;
+  background: color-mix(in srgb, var(--slate) 7%, var(--raise));
+  border-bottom: 1px solid var(--line);
+}
+.drawer-desk .exhibit-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 10px 12px 12px;
+}
+.drawer-desk .exhibit-readout {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  padding: 0.55rem 0.5rem 0.55rem 0.7rem;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--slate) 8%, var(--sand));
+  box-shadow: inset 0 1px 2px color-mix(in srgb, var(--ink) 12%, transparent);
+}
+.drawer-desk .exhibit-readout.detail-grid {
+  display: grid;
+  padding: 0.55rem 0.7rem;
+}
+.exhibit-mark {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+.exhibit-mark img {
+  width: 16px;
+  height: 16px;
+  display: block;
+  object-fit: contain;
+}
+.exhibit-mark.git-dirty::after {
+  content: "";
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warn);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--slate) 7%, var(--raise));
+}
+
+.drawer-desk .exhibit-head .section-title {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  font: 600 14.5px/1.15 var(--font-ui);
+  letter-spacing: -0.02em;
+  text-transform: none;
+  color: var(--ink);
+  border: 0;
+  padding: 0;
+  gap: 0;
+}
+.drawer-desk .exhibit-head .section-title .rule { display: none; }
+
+.git-line .ico { width: var(--icon-sm); height: var(--icon-sm); flex: none; }
+
+/* In-tree files under Workspace, and PR rows. Labeled card, not an inline chip. */
+.exhibit .artifact-list { margin-top: 0; }
+.drawer-desk .artifact-list {
+  gap: 0.45rem;
+}
+.drawer-desk .artifact-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  column-gap: 0.45rem;
+  row-gap: 0.12rem;
+  align-items: center;
+  padding: 0.55rem 0.6rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--raise);
+  box-shadow: var(--shadow-soft);
+}
+.artifact-label {
+  font: 600 13.5px/1.25 var(--font-ui);
+  color: var(--ink);
+  min-width: 0;
+}
+.drawer-desk .artifact-path {
+  grid-column: 1;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+a.artifact-path {
+  color: var(--slate);
+  text-decoration: none;
+}
+a.artifact-path:hover { text-decoration: underline; }
+.drawer-desk .artifact-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  width: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--raise);
+  color: var(--muted);
+  cursor: pointer;
+}
+.artifact-copy:hover { color: var(--ink); border-color: var(--ink); background: var(--sand); }
+.artifact-copy .ico { width: 0.9rem; height: 0.9rem; }
+
+/* Route disclosure sits in the exhibit head, top-right. */
+.identity-expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--faint-strong);
+  cursor: pointer;
+}
+.identity-expand:hover { color: var(--ink); background: var(--sand); }
+.identity-expand .ico { width: 0.95rem; height: 0.95rem; transition: transform 150ms ease; }
+.identity-expand[aria-expanded="true"] .ico { transform: rotate(90deg); }
+.exhibit-head .route-chip { margin-left: 0.15rem; }
+
+.route-chip {
+  flex: none;
+  font: 500 10px/1 var(--font-mono);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  padding: 0.28rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--raise);
+  color: var(--muted);
+}
+.route-chip--exact {
+  color: var(--moss);
+  background: var(--moss-soft);
+  border-color: color-mix(in srgb, var(--moss) 40%, var(--line));
+}
+.route-chip--lock {
+  color: var(--failed);
+  background: var(--ember-soft);
+  border-color: color-mix(in srgb, var(--failed) 30%, var(--line));
+}
+.route-bind {
+  display: grid;
+  gap: 0.12rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--raise);
+}
+.route-bind + .route-bind { margin-top: 0.4rem; }
+.route-bind-kicker {
+  font: 500 10.5px/1.2 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--moss);
+}
+.route-bind--lock .route-bind-kicker,
+.route-bind--warn .route-bind-kicker { color: var(--failed); }
+.route-bind p { margin: 0; font-size: 12.5px; color: var(--body); overflow-wrap: anywhere; }
+.exhibit .evidence-value { margin: 0; }
+.route-bind + .identity-note { margin-top: 0.5rem; }
+
+.drawer-desk .detail-grid {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 7px;
+}
+.drawer-desk .detail-grid dt:not(:first-child) {
+  margin-top: 3px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.drawer-desk .exhibit .evidence-value code,
+.drawer-desk .git-line code,
+.drawer-desk .detail-grid dd code {
+  color: var(--ink);
+  font-size: 12.5px;
+}
+.drawer-desk .git-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.35rem 0.75rem;
+}
+.drawer-desk .exhibit .artifact-list li,
+.drawer-desk .exhibit .route-bind {
+  background: var(--sand);
+  box-shadow: none;
+}
+
+/* ---------- juice: take, scan, don't compete with chat ---------- */
+.drawer-desk .exhibit .evidence-value code {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+.drawer-desk .git-line .git-rev {
+  color: var(--faint-strong);
+  font-size: 11.5px;
+}
+.drawer-desk .inspector-note {
+  margin: 0;
+  padding: 1rem 0.85rem;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+}
+.drawer-desk .exhibit .artifact-list li {
+  transition: border-color 120ms ease;
+}
+.drawer-desk .exhibit .artifact-list li:hover,
+.drawer-desk .exhibit .artifact-list li:focus-within {
+  border-color: var(--ink);
+}
+.drawer-desk .artifact-copy.is-copied { color: var(--moss); border-color: var(--moss); }
+.drawer-desk .identity-expand { color: var(--muted); }
+@media (prefers-reduced-motion: reduce) {
+  .drawer-desk .exhibit .artifact-list li { transition: none; }
+}

@@ -1,0 +1,652 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>The Ant Hill — Evidence mockup</title>
+  <!-- Live product stylesheet. Relative from docs/rhs-shots/evidence-dossier/. -->
+  <link rel="stylesheet" href="../../../src/web/styles.css">
+  <!-- The only new rules this redesign would add. -->
+  <link rel="stylesheet" href="mockup-delta.css">
+  <style>
+    /* MOCK CHROME ONLY — not product. State switcher + caption. */
+    .mock-chrome {
+      flex: none;
+      max-width: var(--frame);
+      margin: 0 auto;
+      padding: 0.7rem 1.1rem 0.55rem;
+      border-bottom: 1px dashed var(--line-strong);
+      background: var(--canvas);
+    }
+    .mock-chrome p {
+      margin: 0 0 0.45rem;
+      font: 500 12px/1.45 var(--font-mono);
+      color: var(--faint-strong);
+    }
+    .mock-chrome a { color: var(--slate); }
+    .mock-chrome .views { border-bottom: 0; }
+  </style>
+</head>
+<body class="inspector-open">
+
+  <div class="mock-chrome" role="region" aria-label="Mockup controls — not part of the product">
+    <p>
+      Implementation mock. Linked <code>src/web/styles.css</code> +
+      <a href="mockup-delta.css">mockup-delta.css</a> (the CSS this redesign would add).
+      DOM matches <code>renderAgentDrawer</code>. Resize below 861px for the stacked sheet.
+      Conversation is a messenger; Evidence is omit-empty exhibits
+      (Workspace, Git, Pull request, Route, History).
+    </p>
+    <nav class="views" role="group" aria-label="Evidence states">
+      <button type="button" class="view-tab is-current" data-state="linked" aria-pressed="true">Linked</button>
+      <button type="button" class="view-tab" data-state="conflict" aria-pressed="false">Identity conflict</button>
+      <button type="button" class="view-tab" data-state="dirty" aria-pressed="false">Dirty worktree</button>
+      <button type="button" class="view-tab" data-state="empty" aria-pressed="false">Empty</button>
+      <button type="button" class="view-tab" data-state="retained" aria-pressed="false">Retained</button>
+    </nav>
+  </div>
+
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="masthead-scene">
+        <div class="wordmark">
+          <h1>The Ant&nbsp;Hill</h1>
+          <p class="eyebrow visually-hidden">Live multi-agent control room</p>
+        </div>
+      </div>
+      <div class="masthead-signals">
+        <button type="button" class="btn notify-toggle">Notifications</button>
+        <button type="button" class="btn settings-toggle">Settings</button>
+        <p class="conn conn-live">
+          <span class="conn-dot" aria-hidden="true"></span>
+          <span>Live</span>
+        </p>
+      </div>
+    </div>
+  </header>
+
+  <div class="app-body">
+    <div class="ops-stage">
+      <main id="main" class="pane-list" tabindex="-1">
+        <section class="toolbar" aria-label="Views, search, and selection">
+          <nav class="views" role="group" aria-label="View">
+            <button type="button" class="view-tab is-current" aria-pressed="true">Board<span class="count">3</span></button>
+            <button type="button" class="view-tab" aria-pressed="false">History<span class="count">12</span></button>
+            <button type="button" class="view-tab" aria-pressed="false">Usage</button>
+          </nav>
+          <div class="toolbar-row">
+            <div class="search-wrap">
+              <label class="visually-hidden" for="search">Search agents</label>
+              <input id="search" type="search" placeholder="Search agents…  /" autocomplete="off">
+            </div>
+          </div>
+        </section>
+
+        <section class="repo-section open" aria-label="the-mountain-main">
+          <h2 class="visually-hidden">the-mountain-main</h2>
+          <div class="repo-head">
+            <button type="button" class="repo-caret" aria-expanded="true" aria-label="Collapse the-mountain-main"><span data-ico="caret"></span></button>
+            <span class="repo-name">the-mountain-main</span>
+            <span class="repo-worktree-count">1 worktree</span>
+          </div>
+          <div class="agent-grid agent-column-header" aria-label="Agent list columns" aria-colcount="7">
+            <span class="agent-column-label">Agent/message</span>
+            <span class="agent-column-label ri-col-label">Status</span>
+            <span class="agent-column-label ri-col-label">Harness</span>
+            <span class="agent-column-label ri-col-label">Model</span>
+            <span class="agent-column-label ri-col-label">Ctx</span>
+            <span class="agent-column-label ri-col-label">Tokens</span>
+            <span class="agent-column-label ri-col-label">Elapsed</span>
+          </div>
+          <div class="repo-worktrees">
+            <section class="program open is-banded">
+              <div class="program-head">
+                <button type="button" class="program-caret" aria-expanded="true"><span data-ico="caret"></span></button>
+                <span class="program-label"><span class="program-name">docs/formic-evidence-ux-adversarial</span></span>
+              </div>
+              <div class="program-agents">
+                <button type="button" class="agent-row is-selected" aria-current="true">
+                  <span class="agent-grid">
+                    <span class="row-identity has-dual-marks">
+                      <span class="dual-marks" role="group" aria-label="Harness Codex, Agent Grok">
+                        <img class="provider-mark harness-mark" src="../../../src/web/icons/codex.svg" alt="Codex" title="Harness Codex">
+                        <img class="provider-mark agent-mark" src="../../../src/web/icons/grok.svg" alt="Grok" title="Agent Grok">
+                      </span>
+                      <span class="agent-name-wrap">
+                        <span class="agent-name">Grok · the-mountain-main</span>
+                        <span class="row-session-tag is-inline" title="Session 8f3a — this display name is shared by other rows.">#8f3a</span>
+                      </span>
+                      <span class="row-identity-tags">
+                        <span class="row-identity-tags row-summary row-description">Redesign the RHS Evidence column into a technical dossier.</span>
+                      </span>
+                    </span>
+                    <span class="row-instruments">
+                      <span class="row-state act-working"><span class="act-glyph act-working" aria-hidden="true"></span>Working</span>
+                      <span class="ri-cell ri-harness"><span class="ri-value">Codex</span></span>
+                      <span class="ri-cell ri-model"><span class="ri-value">grok 4.6</span></span>
+                      <span class="ri-cell ri-ctx"><span class="ri-value">67%</span></span>
+                      <span class="ri-cell ri-tokens"><span class="ri-value">184k</span></span>
+                      <span class="ri-cell ri-elapsed"><span class="ri-value">1.4h</span></span>
+                    </span>
+                  </span>
+                </button>
+                <button type="button" class="agent-row">
+                  <span class="agent-grid">
+                    <span class="row-identity has-dual-marks">
+                      <span class="dual-marks" role="group" aria-label="Harness Claude Code, Agent Claude">
+                        <img class="provider-mark harness-mark" src="../../../src/web/icons/claude-code.svg" alt="Claude Code" title="Harness Claude Code">
+                        <img class="provider-mark agent-mark" src="../../../src/web/icons/claude.svg" alt="Claude" title="Agent Claude">
+                      </span>
+                      <span class="agent-name-wrap">
+                        <span class="agent-name">Claude · the-mountain-main</span>
+                        <span class="row-session-tag is-inline">#c21e</span>
+                      </span>
+                      <span class="row-identity-tags">
+                        <span class="row-identity-tags row-summary row-description">Header session facts — keep metrics out of Evidence.</span>
+                      </span>
+                    </span>
+                    <span class="row-instruments">
+                      <span class="row-state act-idle"><span class="act-glyph act-idle" aria-hidden="true"></span>Idle</span>
+                      <span class="ri-cell ri-harness"><span class="ri-value">Claude</span></span>
+                      <span class="ri-cell ri-model"><span class="ri-value">opus 5</span></span>
+                      <span class="ri-cell ri-ctx"><span class="ri-value">41%</span></span>
+                      <span class="ri-cell ri-tokens"><span class="ri-value">96k</span></span>
+                      <span class="ri-cell ri-elapsed"><span class="ri-value">38m</span></span>
+                    </span>
+                  </span>
+                </button>
+                <button type="button" class="agent-row is-ended">
+                  <span class="agent-grid">
+                    <span class="row-identity has-dual-marks">
+                      <span class="dual-marks" role="group" aria-label="Harness Codex, Agent Grok">
+                        <img class="provider-mark harness-mark" src="../../../src/web/icons/codex.svg" alt="Codex" title="Harness Codex">
+                        <img class="provider-mark agent-mark" src="../../../src/web/icons/grok.svg" alt="Grok" title="Agent Grok">
+                      </span>
+                      <span class="agent-name-wrap">
+                        <span class="agent-name">Grok · the-mountain-main</span>
+                        <span class="row-session-tag is-inline">#2b90</span>
+                      </span>
+                      <span class="row-identity-tags">
+                        <span class="row-identity-tags row-summary row-description">Prior pass on drawer grid 65/35.</span>
+                      </span>
+                    </span>
+                    <span class="row-instruments">
+                      <span class="row-state act-ended"><span class="act-glyph act-ended" aria-hidden="true"></span>Ended</span>
+                      <span class="ri-cell ri-harness"><span class="ri-value">Codex</span></span>
+                      <span class="ri-cell ri-model"><span class="ri-value">grok 4.6</span></span>
+                      <span class="ri-cell ri-ctx"><span class="ri-value">22%</span></span>
+                      <span class="ri-cell ri-tokens"><span class="ri-value">41k</span></span>
+                      <span class="ri-cell ri-elapsed"><span class="ri-value">2.1h</span></span>
+                    </span>
+                  </span>
+                </button>
+              </div>
+            </section>
+          </div>
+        </section>
+      </main>
+
+      <aside id="inspector" class="pane-inspector dw-provider dw-provider--codex dw-agent" aria-label="Agent inspector">
+
+        <header class="inspector-head inspector-verdict drawer-session-header">
+          <div class="inspector-id drawer-session-main">
+            <p class="drawer-session-eyebrow">the-mountain-main · Terminal: evidence-ux</p>
+            <h2 class="inspector-title">Grok · the-mountain-main<span class="inspector-tag mono">#8f3a</span></h2>
+          </div>
+          <div class="verdict-side">
+            <button type="button" class="btn inspector-close" aria-label="Close inspector"><span data-ico="close"></span></button>
+          </div>
+          <dl class="drawer-session-facts" aria-label="Session facts">
+            <div class="drawer-session-fact drawer-session-status">
+              <dt>Status</dt>
+              <dd class="drawer-session-process" role="status">
+                <span class="drawer-process-dot status-line-liveness liveness-running" title="Process is running" aria-label="Running"></span>
+                <span class="drawer-session-age">2m ago</span>
+              </dd>
+            </div>
+            <div class="drawer-session-fact drawer-session-run-fact">
+              <dt>Run</dt>
+              <dd class="drawer-session-run">
+                <span class="dual-marks" role="group" aria-label="Harness Codex, Agent Grok">
+                  <img class="provider-mark harness-mark" src="../../../src/web/icons/codex.svg" alt="Codex" title="Harness Codex">
+                  <img class="provider-mark agent-mark" src="../../../src/web/icons/grok.svg" alt="Grok" title="Agent Grok">
+                </span>
+                <span class="drawer-session-run-label">grok 4.6</span>
+              </dd>
+            </div>
+            <div class="drawer-session-fact drawer-session-context">
+              <dt>Context</dt>
+              <dd class="drawer-session-context-value" title="67% · 184k / 274k">
+                <svg viewBox="0 0 100 58" class="drawer-context-gauge" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="67" aria-label="Context used: 67%">
+                  <path d="M 8 50 A 42 42 0 0 1 92 50" fill="none" class="gauge-track"></path>
+                  <path d="M 8 50 A 42 42 0 0 1 71.38 13.849" fill="none" class="gauge-fill"></path>
+                </svg>
+                <span class="drawer-session-context-reading">
+                  <span class="drawer-session-context-pct">67%</span>
+                  <span class="drawer-session-context-sep"> · </span>
+                  <span class="drawer-session-context-capacity">184k / 274k</span>
+                </span>
+              </dd>
+            </div>
+            <div class="drawer-session-fact drawer-session-usage">
+              <dt>Session</dt>
+              <dd>184k</dd>
+            </div>
+          </dl>
+        </header>
+
+        <div class="control-banner" role="status" data-when="conflict" hidden>
+          <span data-ico="quarantine"></span>
+          <div class="control-banner-copy">
+            <strong>Control routing locked.</strong>
+            Controls are unavailable — this session's identity is ambiguous, so control routing is quarantined.
+            <p class="control-banner-why">More than one session claims the same terminal, so there is no unambiguous target to type into.</p>
+            <p class="control-banner-next">End or close one of the sessions sharing that terminal — controls re-arm on the next scan, no restart needed.</p>
+            <button type="button" class="control-banner-link" data-scroll-route>See routing evidence →</button>
+          </div>
+        </div>
+
+        <div class="drawer-grid">
+          <div class="drawer-doc" role="region" aria-label="Conversation">
+            <div class="drawer-chat">
+              <div id="drawer-chat-feed" class="drawer-chat-scroll" role="log" tabindex="0" aria-label="Conversation">
+                <div class="chat-feed">
+                  <div class="chat-msg" data-role="user">
+                    <div class="chat-msg-meta">
+                      <span class="chat-msg-role">You</span>
+                      <span class="chat-msg-at">1h ago</span>
+                    </div>
+                    <p class="chat-msg-body">Redesign the RHS Evidence column. It has to look like Formic when we ship it — same tokens, same drawer chrome — not a second chat and not a parallel visual language.</p>
+                  </div>
+                  <div class="chat-msg" data-role="assistant">
+                    <div class="chat-msg-meta">
+                      <span class="chat-msg-role">Grok</span>
+                      <span class="chat-msg-run">run 8f3a</span>
+                      <span class="chat-msg-at">58m ago</span>
+                    </div>
+                    <p class="chat-msg-body">Omit-empty exhibits: Workspace (path + in-tree files), Git, Pull request when a URL exists, Route, History when retained. No Verify — Formic does not collect tests. Header keeps Status / Run / Context / Session. The dock keeps “Ready · linked”. Evidence does not repeat either.</p>
+                  </div>
+                  <div class="chat-msg" data-role="user">
+                    <div class="chat-msg-meta">
+                      <span class="chat-msg-role">You</span>
+                      <span class="chat-msg-at">12m ago</span>
+                    </div>
+                    <p class="chat-msg-body">Show me the mock rooted in the current codebase.</p>
+                  </div>
+                  <div class="chat-msg" data-role="assistant">
+                    <div class="chat-msg-meta">
+                      <span class="chat-msg-role">Grok</span>
+                      <span class="chat-msg-run">run 8f3a</span>
+                      <span class="chat-msg-at">2m ago</span>
+                    </div>
+                    <p class="chat-msg-body">This drawer is that mock. Left column is Conversation (bubbles + foot + composer). Right column is Evidence using the live classes: section-title, detail-grid, git-line, artifact-list, identity-block, inspector-note.</p>
+                  </div>
+                </div>
+              </div>
+              <div class="chat-feed-foot">
+                <span class="transcript-source">4 turns</span>
+                <code class="transcript-source-path">/Users/emilionunezgarcia/.cmux/sessions/codex-8f3a.jsonl</code>
+                <button type="button" class="btn sm transcript-load">Refresh</button>
+              </div>
+              <div class="command-dock command-dock--linked drawer-controls-strip" role="group" aria-label="Session controls" data-dock="linked">
+                <div class="command-dock-meta">
+                  <span class="command-dock-ready">Ready · linked</span>
+                  <span class="command-dock-corner">
+                    <span class="command-dock-hint">⌘↵ to send</span>
+                    <div class="command-dock-cluster" role="group" aria-label="Session actions">
+                      <button type="button" class="dock-tool" title="Jump to terminal pane"><span data-ico="focus"></span> Focus</button>
+                      <button type="button" class="dock-tool" title="Interrupt"><span data-ico="interrupt"></span> Interrupt</button>
+                      <details class="command-dock-more">
+                        <summary title="More session actions" aria-label="More session actions"><span data-ico="more"></span></summary>
+                        <button type="button" class="dock-tool dock-tool-warn"><span data-ico="archive"></span> Archive</button>
+                      </details>
+                    </div>
+                  </span>
+                </div>
+                <div class="dock-group" role="group" aria-label="Communicate">
+                  <span class="dock-group-label" aria-hidden="true">Communicate</span>
+                  <form class="command-composer" action="#">
+                    <input type="text" placeholder="✦ Message this agent…" aria-label="Instruction for Grok · the-mountain-main">
+                    <button type="submit" class="btn command-send primary">Send</button>
+                  </form>
+                </div>
+              </div>
+              <div class="command-dock drawer-controls-strip" role="group" aria-label="Session controls" data-dock="locked" hidden>
+                <div class="command-dock-meta">
+                  <span aria-hidden="true"></span>
+                  <span class="command-dock-corner">
+                    <div class="command-dock-cluster" role="group" aria-label="Session actions">
+                      <button type="button" class="dock-tool" disabled title="Unavailable"><span data-ico="focus"></span> Focus</button>
+                      <button type="button" class="dock-tool" disabled title="Unavailable"><span data-ico="interrupt"></span> Interrupt</button>
+                      <details class="command-dock-more">
+                        <summary title="More session actions" aria-label="More session actions"><span data-ico="more"></span></summary>
+                        <button type="button" class="dock-tool dock-tool-warn"><span data-ico="archive"></span> Archive</button>
+                      </details>
+                    </div>
+                  </span>
+                </div>
+                <div class="dock-group" role="group" aria-label="Communicate">
+                  <span class="dock-group-label" aria-hidden="true">Communicate</span>
+                  <form class="command-composer" action="#">
+                    <input type="text" placeholder="⚠️ Resolve identity conflict to instruct…" disabled aria-label="Instruction for Grok · the-mountain-main">
+                    <button type="submit" class="btn command-send" disabled>Send</button>
+                  </form>
+                </div>
+              </div>
+              <div class="command-dock drawer-controls-strip" role="group" aria-label="Session controls" data-dock="retained" hidden>
+                <div class="command-dock-meta">
+                  <span aria-hidden="true"></span>
+                  <span class="command-dock-corner">
+                    <div class="command-dock-cluster" role="group" aria-label="Session actions">
+                      <button type="button" class="dock-tool"><span data-ico="archive"></span> Un-archive</button>
+                    </div>
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="drawer-desk" role="region" aria-label="Evidence and lineage">
+            <div class="inspector-panel" role="tabpanel">
+
+              <p class="inspector-note" data-when="empty" hidden>No evidence fields reported for this session.</p>
+
+              <!-- WORKSPACE — path is the exhibit. In-tree files hang under it. -->
+              <div class="exhibit" data-when="linked conflict dirty retained">
+                <div class="exhibit-head">
+                  <span class="exhibit-mark" data-exhibit="where"><img src="marks/folder.svg" alt=""></span>
+                  <h3 class="section-title" data-evidence-section="where">Workspace</h3>
+                </div>
+                <div class="exhibit-body">
+                  <p class="evidence-value exhibit-readout" data-when="linked conflict retained">
+                    <code>/Users/emilionunezgarcia/Developer/the-mountain-main</code>
+                    <button type="button" class="artifact-copy evidence-path-copy" data-full-path="/Users/emilionunezgarcia/Developer/the-mountain-main" aria-label="Copy Workspace path" title="Copy full path"><span data-ico="copy"></span></button>
+                  </p>
+                  <div data-when="dirty" hidden>
+                    <dl class="detail-grid exhibit-readout">
+                      <dt>Current</dt>
+                      <dd><code>/Users/emilionunezgarcia/Developer/the-mountain-main/docs</code></dd>
+                      <dt>Repository</dt>
+                      <dd><code>the-mountain-main</code></dd>
+                      <dt>Launch</dt>
+                      <dd><code>/Users/emilionunezgarcia/Developer/the-mountain-main</code></dd>
+                      <dt>Shell</dt>
+                      <dd><code>/Users/emilionunezgarcia/Developer/the-mountain-main</code></dd>
+                    </dl>
+                    <p class="directory-relation-note">Claude’s tool session and the terminal shell maintain separate working directories. This does not change the exact cmux link.</p>
+                  </div>
+                  <ul class="artifact-list" data-when="linked conflict dirty">
+                    <li>
+                      <span class="artifact-label">Evidence review</span>
+                      <span class="artifact-path" title="/Users/emilionunezgarcia/Developer/the-mountain-main/docs/rhs-shots/evidence-dossier/REPORT.md">docs/rhs-shots/evidence-dossier/REPORT.md</span>
+                      <button type="button" class="artifact-copy" data-full-path="/Users/emilionunezgarcia/Developer/the-mountain-main/docs/rhs-shots/evidence-dossier/REPORT.md" aria-label="Copy full path" title="Copy full path"><span data-ico="copy"></span></button>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              <!-- GIT — omitted when empty. Official Git SCM logo; dirty = same mark + amber pip. -->
+              <div class="exhibit" data-when="linked conflict">
+                <div class="exhibit-head">
+                  <span class="exhibit-mark" data-exhibit="git" title="Clean working tree"><img src="marks/git.svg" alt="Git"></span>
+                  <h3 class="section-title" data-evidence-section="git">Git</h3>
+                </div>
+                <div class="exhibit-body">
+                  <span class="git-line exhibit-readout">
+                    <code>docs/formic-evidence-ux-adversarial</code>
+                    <code class="git-rev">@a0368d5</code>
+                  </span>
+                </div>
+              </div>
+              <div class="exhibit" data-when="dirty" hidden>
+                <div class="exhibit-head">
+                  <span class="exhibit-mark git-dirty" data-exhibit="git" title="Uncommitted changes"><img src="marks/git.svg" alt="Git"></span>
+                  <h3 class="section-title" data-evidence-section="git">Git</h3>
+                </div>
+                <div class="exhibit-body">
+                  <span class="git-line exhibit-readout">
+                    <code>docs/formic-evidence-ux-adversarial</code>
+                    <code class="git-rev">@a0368d5</code>
+                  </span>
+                </div>
+              </div>
+
+              <!-- PULL REQUEST — omit-empty. Official GitHub mark. -->
+              <div class="exhibit" data-when="linked conflict dirty">
+                <div class="exhibit-head">
+                  <span class="exhibit-mark" data-exhibit="pr"><img src="marks/github.svg" alt=""></span>
+                  <h3 class="section-title" data-evidence-section="pr">Pull request</h3>
+                </div>
+                <div class="exhibit-body">
+                  <ul class="artifact-list">
+                    <li>
+                      <span class="artifact-label">formic-evidence-ux</span>
+                      <a class="artifact-path" href="https://github.com/example/the-mountain/pull/42">github.com/example/the-mountain/pull/42</a>
+                      <button type="button" class="artifact-copy" data-full-path="https://github.com/example/the-mountain/pull/42" aria-label="Copy URL" title="Copy URL"><span data-ico="copy"></span></button>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              <div class="exhibit" data-when="retained" hidden>
+                <div class="exhibit-head">
+                  <span class="exhibit-mark" data-exhibit="history"><img src="marks/history.svg" alt=""></span>
+                  <h3 class="section-title" data-evidence-section="history">History</h3>
+                </div>
+                <div class="exhibit-body">
+                  <dl class="detail-grid exhibit-readout">
+                    <dt>history record</dt>
+                    <dd>Operator archive · retained</dd>
+                  </dl>
+                </div>
+              </div>
+
+              <!-- ROUTE — filled target mark. Exact is a chip, not a paragraph.
+                   Omit skipped cwd (session id already bound). ↗ stays top-right. -->
+              <div class="identity-block exhibit" data-when="linked dirty" data-evidence-section="route">
+                <div class="exhibit-head">
+                  <span class="exhibit-mark" data-exhibit="route" data-resolution="exact"><img src="marks/route.svg" alt=""></span>
+                  <h3 class="section-title">Route</h3>
+                  <span class="route-chip route-chip--exact">Exact</span>
+                  <button type="button" class="identity-load identity-expand" data-load-route aria-expanded="false" aria-label="Show which terminals claim this session" title="Show which terminals claim this session"><span data-ico="arrow-up-right"></span></button>
+                </div>
+                <div class="exhibit-body">
+                  <div class="route-bind">
+                    <span class="route-bind-kicker">Session ID</span>
+                    <p>One cmux pane reports this session.</p>
+                  </div>
+                  <div class="identity-surfaces">
+                    <ul class="identity-surface-list" aria-label="Terminals claiming this session" hidden>
+                      <li class="identity-surface">
+                        <span class="identity-surface-line mono">ttys082 — one session open: Codex 8f3a (pid 41211, node …/codex)</span>
+                      </li>
+                    </ul>
+                    <ul class="identity-hints" hidden>
+                      <li class="identity-hint">open files: ~/.cmux/sessions/codex-8f3a.jsonl</li>
+                      <li class="identity-hint">hint: tmux ls | grep 8f3a</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+
+              <div class="identity-block exhibit" data-when="conflict" data-evidence-section="route" hidden>
+                <div class="exhibit-head">
+                  <span class="exhibit-mark" data-exhibit="route" data-resolution="lock"><img src="marks/route.svg" alt=""></span>
+                  <h3 class="section-title">Route</h3>
+                  <span class="route-chip route-chip--lock">Quarantined</span>
+                  <button type="button" class="identity-load identity-expand" data-load-route aria-expanded="false" aria-label="Show which terminals claim this session" title="Show which terminals claim this session"><span data-ico="arrow-up-right"></span></button>
+                </div>
+                <div class="exhibit-body">
+                  <div class="route-bind route-bind--lock">
+                    <span class="route-bind-kicker">Session ID</span>
+                    <p>ttys082 is claimed by two sessions. Routing is quarantined until one releases it.</p>
+                  </div>
+                  <div class="route-bind route-bind--warn">
+                    <span class="route-bind-kicker">Working folder</span>
+                    <p>Folder match cannot pick a single pane. This is the bind key, not the Workspace path.</p>
+                  </div>
+                  <p class="identity-note">A remembered binding to surface s-19c carried this session through a scan with no live evidence (last confirmed 14m ago).</p>
+                  <div class="identity-surfaces">
+                    <ul class="identity-surface-list" aria-label="Terminals claiming this session" hidden>
+                      <li class="identity-surface is-contested">
+                        <span class="identity-surface-line mono">ttys082 — 2 sessions claim it: Codex 8f3a (pid 41211) · Claude c21e (pid 41902)</span>
+                        <span class="identity-surface-conflict">lsof evidence conflicts</span>
+                      </li>
+                    </ul>
+                    <ul class="identity-hints" hidden>
+                      <li class="identity-hint">open files: ~/.cmux/sessions/codex-8f3a.jsonl · ~/.cmux/sessions/claude-c21e.jsonl</li>
+                      <li class="identity-hint">hint: lsof -p 41211,41902 | grep ttys082</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+
+            <div class="dw-spine" aria-label="Lineage" data-when="linked conflict dirty empty retained">
+              <div class="dw-spine-label"><span data-ico="git-merge"></span> Lineage</div>
+              <div class="dw-lin">
+                <div class="dw-node dw-d0">
+                  <span class="dw-rail"><span class="dw-glyph" aria-hidden="true"></span></span>
+                  <button type="button" class="dw-lin-name">orchestrator <span class="dw-lin-meta">· parent</span></button>
+                </div>
+                <div class="dw-node dw-cur">
+                  <span class="dw-rail"><span class="dw-glyph" aria-hidden="true"></span></span>
+                  <span class="dw-lin-name dw-cur-name">Grok · the-mountain-main #8f3a <span class="dw-lin-meta">· this</span></span>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <script>
+    /* Icons from src/web/dom-primitives.js ICON_PATHS — same viewBox / stroke. */
+    const SVGNS = "http://www.w3.org/2000/svg";
+    const ICON_PATHS = {
+      check: [["polyline", { points: "4.5 12.5 9.5 17.5 19.5 6.5", "stroke-linejoin": "miter" }]],
+      close: [["line", { x1: 6, y1: 6, x2: 18, y2: 18 }], ["line", { x1: 18, y1: 6, x2: 6, y2: 18 }]],
+      more: [["circle", { cx: 5, cy: 12, r: 1.4, fill: "currentColor", stroke: "none" }], ["circle", { cx: 12, cy: 12, r: 1.4, fill: "currentColor", stroke: "none" }], ["circle", { cx: 19, cy: 12, r: 1.4, fill: "currentColor", stroke: "none" }]],
+      caret: [["polyline", { points: "9 6 15 12 9 18" }]],
+      focus: [["circle", { cx: 12, cy: 12, r: 3 }], ["line", { x1: 12, y1: 3, x2: 12, y2: 7 }], ["line", { x1: 12, y1: 17, x2: 12, y2: 21 }], ["line", { x1: 3, y1: 12, x2: 7, y2: 12 }], ["line", { x1: 17, y1: 12, x2: 21, y2: 12 }]],
+      interrupt: [["rect", { x: 7, y: 5.5, width: 3.4, height: 13, rx: 0.6 }], ["rect", { x: 13.6, y: 5.5, width: 3.4, height: 13, rx: 0.6 }]],
+      archive: [["path", { d: "M4 7h16v11.5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7z", "stroke-linejoin": "miter" }], ["line", { x1: 2.5, y1: 7, x2: 21.5, y2: 7 }], ["line", { x1: 9, y1: 12, x2: 15, y2: 12 }]],
+      folder: [["path", { d: "M4 8.5a2 2 0 0 1 2-2h3.2l2 2H18a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8z" }]],
+      "folder-open": [["path", { d: "M4 8.5a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v1.5H4v-3.5z" }], ["path", { d: "M4 12.5v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" }]],
+      "git-branch": [["circle", { cx: 7.5, cy: 5.5, r: 2 }], ["circle", { cx: 7.5, cy: 18.5, r: 2 }], ["circle", { cx: 16.5, cy: 12, r: 2 }], ["path", { d: "M7.5 7.5v9M11 10.2a4 4 0 0 1 3.5 1.8" }]],
+      terminal: [["rect", { x: 3, y: 5, width: 18, height: 14, rx: 2 }], ["polyline", { points: "7 10 10 13 7 16" }], ["line", { x1: 12, y1: 16, x2: 17, y2: 16 }]],
+      shield: [["path", { d: "M12 3 5 6.5v5c0 4.1 2.9 7.2 7 8.5 4.1-1.3 7-4.4 7-8.5v-5z" }]],
+      "shield-alert": [["path", { d: "M12 3 5 6.5v5c0 4.1 2.9 7.2 7 8.5 4.1-1.3 7-4.4 7-8.5v-5z" }], ["line", { x1: 12, y1: 8, x2: 12, y2: 12 }], ["circle", { cx: 12, cy: 16, r: 0.9, fill: "currentColor", stroke: "none" }]],
+      copy: [["rect", { x: 8, y: 8, width: 11, height: 11, rx: 1.5 }], ["path", { d: "M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" }]],
+      "arrow-up-right": [["line", { x1: 7, y1: 17, x2: 17, y2: 7 }], ["polyline", { points: "7 7 17 7 17 17" }]],
+      paperclip: [["path", { d: "M15.5 7.5v7.2a3.5 3.5 0 0 1-7 0V6.8a2.3 2.3 0 0 1 4.6 0v7.5" }]],
+      "git-merge": [["circle", { cx: 7, cy: 6, r: 2 }], ["circle", { cx: 17, cy: 6, r: 2 }], ["circle", { cx: 12, cy: 18, r: 2 }], ["path", { d: "M7 8v4a4 4 0 0 0 4 4h1M17 8v4a4 4 0 0 1-4 4h-1" }]],
+      quarantine: [["path", { d: "M12 2.8 4.5 5.5v5.3c0 4.4 3.1 7.6 7.5 8.9 4.4-1.3 7.5-4.5 7.5-8.9V5.5z", "stroke-linejoin": "miter" }], ["rect", { x: 9.3, y: 11, width: 5.4, height: 4.4, rx: 0.4 }], ["path", { d: "M10.5 11V9.6a1.5 1.5 0 0 1 3 0V11" }]],
+    };
+    function svgChild(spec) {
+      const [tag, attrs] = spec;
+      const node = document.createElementNS(SVGNS, tag);
+      for (const [k, v] of Object.entries(attrs || {})) node.setAttribute(k, String(v));
+      return node;
+    }
+    function paintIcons(root = document) {
+      root.querySelectorAll("[data-ico]").forEach((el) => {
+        const name = el.getAttribute("data-ico");
+        const svg = document.createElementNS(SVGNS, "svg");
+        svg.setAttribute("viewBox", "0 0 24 24");
+        svg.setAttribute("fill", "none");
+        svg.setAttribute("stroke", "currentColor");
+        svg.setAttribute("stroke-width", "2");
+        svg.setAttribute("stroke-linecap", "round");
+        svg.setAttribute("stroke-linejoin", "round");
+        svg.setAttribute("class", "ico" + (el.className ? " " + el.className : ""));
+        const title = el.getAttribute("title");
+        if (title) {
+          const t = document.createElementNS(SVGNS, "title");
+          t.textContent = title;
+          svg.append(t);
+        }
+        const label = el.getAttribute("aria-label") || title;
+        if (label) {
+          svg.setAttribute("role", "img");
+          svg.setAttribute("aria-label", label);
+        } else {
+          svg.setAttribute("aria-hidden", "true");
+        }
+        for (const spec of ICON_PATHS[name] || ICON_PATHS.close) svg.append(svgChild(spec));
+        el.replaceWith(svg);
+      });
+    }
+
+    const pane = document.getElementById("inspector");
+    function setState(name) {
+      document.querySelectorAll(".mock-chrome [data-state]").forEach((btn) => {
+        const on = btn.dataset.state === name;
+        btn.classList.toggle("is-current", on);
+        btn.setAttribute("aria-pressed", String(on));
+      });
+      document.querySelectorAll("[data-when]").forEach((el) => {
+        const names = el.dataset.when.split(/\s+/);
+        el.hidden = !names.includes(name);
+      });
+      const dock = name === "conflict" ? "locked"
+        : name === "retained" ? "retained" : "linked";
+      document.querySelectorAll("[data-dock]").forEach((el) => {
+        el.hidden = el.dataset.dock !== dock;
+      });
+      pane.classList.toggle("dw-past", name === "retained");
+      pane.classList.toggle("dw-provider--codex", name !== "retained");
+      document.querySelectorAll("[data-load-route]").forEach((btn) => {
+        btn.setAttribute("aria-expanded", "false");
+        const wrap = btn.closest(".identity-block");
+        wrap?.querySelectorAll(".identity-surface-list, .identity-hints").forEach((n) => { n.hidden = true; });
+      });
+    }
+
+    document.querySelector(".mock-chrome").addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-state]");
+      if (btn) setState(btn.dataset.state);
+    });
+    document.querySelectorAll("[data-load-route]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const wrap = btn.closest(".identity-block");
+        const open = btn.getAttribute("aria-expanded") === "true";
+        btn.setAttribute("aria-expanded", String(!open));
+        wrap?.querySelectorAll(".identity-surface-list, .identity-hints").forEach((n) => { n.hidden = open; });
+      });
+    });
+    document.querySelectorAll("[data-scroll-route]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelector(".identity-block:not([hidden])")?.scrollIntoView({ block: "start", behavior: "smooth" });
+        const load = document.querySelector(".identity-block:not([hidden]) [data-load-route]");
+        if (load && load.getAttribute("aria-expanded") !== "true") load.click();
+      });
+    });
+    document.querySelectorAll("form.command-composer").forEach((form) => {
+      form.addEventListener("submit", (e) => e.preventDefault());
+    });
+    document.querySelectorAll(".artifact-copy").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const row = btn.closest("li, .evidence-value");
+        const text = btn.getAttribute("data-full-path")
+          || row?.querySelector("[data-full-path]")?.getAttribute("data-full-path")
+          || row?.querySelector(".artifact-path, code")?.textContent?.trim();
+        if (!text) return;
+        try {
+          await navigator.clipboard.writeText(text);
+          btn.classList.add("is-copied");
+          window.setTimeout(() => btn.classList.remove("is-copied"), 900);
+        } catch { /* clipboard blocked in some file:// contexts */ }
+      });
+    });
+
+    paintIcons();
+    const start = new URLSearchParams(location.search).get("state") || "linked";
+    setState(start);
+  </script>
+</body>
+</html>
