@@ -29,6 +29,9 @@ already exists, so on a fresh account `bun` can stay unfindable without them.
 gh repo clone emilio3435/the-ant-hill ~/anthill
 ```
 
+The `~/anthill` path is the historical checkout name — it is fine to keep; it is
+an ops compatibility surface.
+
 The repo is private, so `gh` must be authenticated first (`gh auth login` →
 GitHub.com → HTTPS → yes to "Authenticate Git"). A plain `git clone` over HTTPS
 will either prompt for a password GitHub no longer accepts, or fail with
@@ -52,7 +55,8 @@ running — closing it stops the server.
 running, `bun start` detects it and just opens the browser instead of
 starting a second server.
 
-Without cmux installed you'll see all three of these, in this order:
+Without cmux installed you'll see all three of these, in this order
+(the third line is the compatibility banner string the server prints today):
 
 ```
 cmux binary not found.
