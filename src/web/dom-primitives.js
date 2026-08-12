@@ -79,8 +79,10 @@ const ICON_PATHS = {
   caret: [["polyline", { points: "9 6 15 12 9 18" }]],
   // offline: dark node, severed rail
   offline: [["circle", { cx: 12, cy: 12, r: 9 }], ["line", { x1: 8, y1: 12, x2: 16, y2: 12 }]],
-  // focus: jump-to-pane crosshair
-  focus: [["circle", { cx: 12, cy: 12, r: 3 }], ["line", { x1: 12, y1: 3, x2: 12, y2: 7 }], ["line", { x1: 12, y1: 17, x2: 12, y2: 21 }], ["line", { x1: 3, y1: 12, x2: 7, y2: 12 }], ["line", { x1: 17, y1: 12, x2: 21, y2: 12 }]],
+  // focus: magnifying glass — locate the pane, don't decorate the control
+  focus: [["circle", { cx: 11, cy: 11, r: 6.5 }], ["line", { x1: 16.2, y1: 16.2, x2: 21, y2: 21 }]],
+  // send: paper plane — the composer’s primary verb
+  send: [["path", { d: "M22 2 11 13", "stroke-linejoin": "miter" }], ["path", { d: "M22 2 15 22 11 13 2 9z", "stroke-linejoin": "miter" }]],
   // interrupt: pause bars
   interrupt: [["rect", { x: 7, y: 5.5, width: 3.4, height: 13, rx: 0.6 }], ["rect", { x: 13.6, y: 5.5, width: 3.4, height: 13, rx: 0.6 }]],
   // archive: tray

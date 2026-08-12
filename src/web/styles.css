@@ -3280,8 +3280,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 /* Linked dock: a moss hairline marks the live control link; the lock story
    stays with the control banner, so the dock never repeats it. */
 .command-dock--linked { border-top-color: color-mix(in srgb, var(--moss) 55%, var(--line)); }
-.command-dock-ready { color: var(--moss); font-weight: 600; }
-.command-dock-hint { color: var(--faint-strong); }
 /* A held dock is visibly held: the reason reads first, and the controls under it
    are dimmed so "enabled-looking" and "actually sendable" cannot diverge. */
 .command-dock.is-held { border-top-color: color-mix(in srgb, var(--ember) 55%, var(--line)); }
@@ -3298,11 +3296,11 @@ body.feed-frozen .programs { opacity: 0.62; }
   align-items: flex-end;
   gap: 0.45rem;
   min-width: 0;
-  padding: 0.3rem;
+  padding: 0.35rem 0.4rem 0.35rem 0.55rem;
   color: var(--ink);
   background: var(--surface);
   border: 1px solid var(--line-strong);
-  border-radius: 1.5rem;
+  border-radius: var(--radius-md);
   box-shadow: 0 8px 24px -20px rgba(18, 24, 32, 0.7);
   transition: border-color 150ms ease, box-shadow 150ms ease, background-color 150ms ease;
 }
@@ -3317,7 +3315,7 @@ body.feed-frozen .programs { opacity: 0.62; }
   min-width: 0;
   min-height: 44px;
   max-height: 8rem;
-  padding: 0.7rem 0.75rem;
+  padding: 0.55rem 0.45rem;
   font: inherit;
   font-size: 14px;
   line-height: 1.45;
@@ -3327,7 +3325,7 @@ body.feed-frozen .programs { opacity: 0.62; }
   color: var(--ink);
   background: transparent;
   border: 0;
-  border-radius: 1.15rem;
+  border-radius: 6px;
 }
 .command-composer textarea::placeholder { color: var(--faint-strong); }
 .command-composer textarea:disabled {
@@ -3339,17 +3337,30 @@ body.feed-frozen .programs { opacity: 0.62; }
   box-shadow: none;
 }
 .command-send {
+  flex: none;
   align-self: flex-end;
-  min-width: 5.25rem;
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  min-width: 44px;
   min-height: 44px;
-  padding-inline: 1.05rem;
-  border-radius: 999px;
-  font-weight: 600;
-  transition: transform 120ms ease, box-shadow 150ms ease, background-color 150ms ease;
+  padding: 0;
+  color: var(--muted);
+  background: var(--color-surface-card);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  cursor: pointer;
 }
-.command-send.primary { box-shadow: 0 7px 16px -8px color-mix(in srgb, var(--color-brand-control) 72%, transparent); }
-.command-send.primary:hover:not(:disabled) { transform: translateY(-1px); }
-.command-send.primary:active:not(:disabled) { transform: translateY(0); }
+.command-send .ico { width: 1.2rem; height: 1.2rem; }
+.command-send.primary {
+  color: var(--color-text-on-brand);
+  background: var(--color-brand-control);
+  border-color: var(--color-brand-control);
+  box-shadow: 0 6px 14px -8px color-mix(in srgb, var(--color-brand-control) 70%, transparent);
+}
+.command-send.primary:hover:not(:disabled) { background: var(--color-brand-control-hover); border-color: var(--color-brand-control-hover); }
+.command-send:disabled { color: var(--faint); background: var(--sand); border-color: var(--line); cursor: not-allowed; }
+.command-send:focus-visible { outline: 2px solid var(--color-interactive); outline-offset: 2px; }
 .dock-group { display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; }
 .command-dock > .dock-group { gap: 0; }
 .command-dock > .dock-group > .dock-group-label {
@@ -3362,46 +3373,33 @@ body.feed-frozen .programs { opacity: 0.62; }
   text-transform: uppercase;
   color: var(--faint-strong);
 }
-/* Navigation and session management sit below the primary composer. The
-   hairline, smaller type and transparent controls make this read as a utility
-   toolbar rather than a second call-to-action row. */
+/* Session verbs sit under the composer as the same 44px icon tiles as Send.
+   No status copy, no stadium radius — the glyph is the control. */
 .command-dock-secondary {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
+  gap: 0.35rem;
   min-height: 44px;
-  padding-top: 0.2rem;
-  border-top: 1px solid var(--line);
-  font-size: 11.5px;
-  color: var(--faint-strong);
-}
-.command-dock-context { display: flex; align-items: center; gap: 0.55rem; min-width: 0; }
-.command-dock-ready::before {
-  content: "";
-  display: inline-block;
-  width: 0.42rem;
-  height: 0.42rem;
-  margin-right: 0.35rem;
-  border-radius: 50%;
-  background: currentColor;
-  vertical-align: 0.05rem;
+  padding-top: 0.15rem;
 }
 .command-dock-cluster {
-  display: inline-flex; align-items: center; gap: 0.1rem;
+  display: inline-flex; align-items: center; gap: 0.35rem;
   border: 0;
   background: transparent;
   overflow: visible;
 }
 .command-dock-cluster .dock-tool {
-  min-height: 44px; padding: 0.25rem 0.55rem;
-  border-radius: 999px;
-  border: 0;
+  width: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--color-surface-card);
 }
-.command-dock-cluster > :first-child,
-.command-dock-cluster > :first-child .dock-tool { border-left: 0; }
-/* The armed confirm strip replaces its tool in place; inside the pill it must
-   flow inline, not wrap to a full-width row. */
+.command-dock-cluster .dock-tool .ico { width: 1.2rem; height: 1.2rem; }
+/* The armed confirm strip replaces its tool in place. */
 .command-dock-cluster .command-confirm { flex: none; align-self: center; padding: 0 0.5rem; }
 .command-dock-cluster .command-dock-more { border: 0; padding: 0; }
 .dock-tool {
@@ -3428,14 +3426,16 @@ body.feed-frozen .programs { opacity: 0.62; }
   width: 44px;
   min-height: 44px;
   padding: 0;
-  border-radius: 999px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-card);
   cursor: pointer;
-  color: var(--faint-strong);
+  color: var(--muted);
   list-style: none;
 }
 .command-dock-more > summary::-webkit-details-marker { display: none; }
 .command-dock-more > summary:hover { color: var(--ink); background: var(--sand); }
-.command-dock-more > summary .ico { width: 1rem; height: 1rem; }
+.command-dock-more > summary .ico { width: 1.2rem; height: 1.2rem; }
 .command-dock-more[open] > .dock-tool {
   position: absolute;
   right: 0;
@@ -3744,10 +3744,6 @@ body.feed-frozen .programs { opacity: 0.62; }
   .readings-stack { flex: 1 1 auto; border-left: 0; border-top: 1px solid var(--line-strong); }
   .health-tldr-lane { flex: 1 1 auto; }
   .rail-inner.is-no-tldr .readings-grid { grid-template-columns: 1fr 1fr; }
-}
-
-@media (max-width: 639px) {
-  .command-dock-hint { display: none; }
 }
 
 @media (max-width: 720px) {
@@ -5308,8 +5304,7 @@ body.feed-frozen .programs { opacity: 0.62; }
 .notify-incomplete,
 .notify-instrument { background: var(--color-status-warning-tint); }
 .notify-incomplete { color: var(--color-status-warning-text); }
-.notify-switch.is-on,
-.command-dock-ready { color: var(--color-status-success-text); }
+.notify-switch.is-on { color: var(--color-status-success-text); }
 .notify-quiet:hover,
 .notify-act:hover,
 .notify-row-acts .dock-tool:hover { background: var(--color-surface-subtle); color: var(--color-interactive); }
