@@ -9,9 +9,40 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fakeStorage } from "./helpers/fake-dom";
 
 const WEB = join(import.meta.dir, "../src/web");
 const read = (name: string) => readFileSync(join(WEB, name), "utf8");
+
+/* Whole @media block bodies for one query, brace-balanced, all occurrences.
+   The A11Y-1 parser above slices to the NEXT @media, which misses rules in a
+   later block for the same query; the collapse rules live in their own blocks. */
+export function mediaBlocks(css: string, query: string): string {
+  const out: string[] = [];
+  const needle = "@media " + query;
+  let idx = 0;
+  while ((idx = css.indexOf(needle, idx)) !== -1) {
+    const open = css.indexOf("{", idx);
+    let depth = 1;
+    let i = open + 1;
+    while (i < css.length && depth > 0) {
+      if (css[i] === "{") depth += 1;
+      else if (css[i] === "}") depth -= 1;
+      i += 1;
+    }
+    out.push(css.slice(open + 1, i - 1));
+    idx = i;
+  }
+  return out.join("\n");
+}
+
+/* Flat {selector, body} rules, comments stripped. Good enough for a stylesheet
+   with no nesting outside @media. */
+export function cssRules(cssText: string): Array<{ selector: string; body: string }> {
+  const bare = cssText.replace(/\/\*[\s\S]*?\*\//g, "").replace(/@media[^{]*\{/g, "");
+  return [...bare.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+    .map((m) => ({ selector: m[1].trim(), body: m[2] }));
+}
 
 describe("S3 — context spread preference must persist", () => {
   /* Mutation that stayed GREEN across the whole CI-relevant suite: drop
@@ -152,5 +183,151 @@ describe("A11Y-1 — panel geometry at 420px, not just CSS text", () => {
       panelUsesViewportWidth: false,
     }));
     expect(centerButFill).toBe(0);
+  });
+});
+
+/* ---------- header collapse — preference honesty ----------
+   The preference must parse strictly (only the literal "true" collapses),
+   default to expanded on anything else, and fail soft when storage is absent
+   or throwing. Driven through the real load/save functions, not source regex:
+   a regex showing getItem is not persistence evidence. */
+
+describe("header collapse — the preference parses strictly and fails soft", () => {
+  test("parseHeaderCollapsed accepts only the literal string 'true'", async () => {
+    // @ts-expect-error browser client has no declaration
+    await import("../src/web/app.js");
+    const M = (globalThis as any).TheAntHill;
+    expect(M.parseHeaderCollapsed("true")).toBe(true);
+    for (const raw of [null, undefined, "", "false", "TRUE", "True", "1", "yes", " true", '{"collapsed":true}']) {
+      expect(M.parseHeaderCollapsed(raw), JSON.stringify(raw)).toBe(false);
+    }
+  });
+
+  test("load resolves expanded on a missing key and on a throwing store; save survives a throwing store and writes literals", async () => {
+    // @ts-expect-error browser client has no declaration
+    await import("../src/web/app.js");
+    const M = (globalThis as any).TheAntHill;
+    const G = globalThis as unknown as Record<string, any>;
+    const realLS = G.localStorage;
+    try {
+      G.localStorage = fakeStorage();
+      M.state.headerCollapsed = true; // stale value the load must overwrite
+      M.loadHeaderCollapsed();
+      expect(M.state.headerCollapsed).toBe(false);
+
+      G.localStorage = fakeStorage({ "mtn3-header-collapsed": "true" });
+      M.loadHeaderCollapsed();
+      expect(M.state.headerCollapsed).toBe(true);
+
+      G.localStorage = fakeStorage({ "mtn3-header-collapsed": "TRUE" });
+      M.loadHeaderCollapsed();
+      expect(M.state.headerCollapsed).toBe(false);
+
+      G.localStorage = fakeStorage({}, ["getItem"]);
+      M.state.headerCollapsed = true;
+      expect(() => M.loadHeaderCollapsed()).not.toThrow();
+      expect(M.state.headerCollapsed).toBe(false);
+
+      G.localStorage = fakeStorage({}, ["setItem"]);
+      M.state.headerCollapsed = true;
+      expect(() => M.saveHeaderCollapsed()).not.toThrow();
+
+      const store = fakeStorage();
+      G.localStorage = store;
+      M.state.headerCollapsed = true;
+      M.saveHeaderCollapsed();
+      expect(store.store.get("mtn3-header-collapsed")).toBe("true");
+      M.state.headerCollapsed = false;
+      M.saveHeaderCollapsed();
+      expect(store.store.get("mtn3-header-collapsed")).toBe("false");
+    } finally {
+      if (realLS === undefined) delete G.localStorage; else G.localStorage = realLS;
+      M.state.headerCollapsed = false;
+    }
+  });
+
+  test("the storage key is declared in the catalog and loaded in boot() before the first fetch", () => {
+    const catalogs = read("client-catalogs.js");
+    const app = read("app.js");
+    expect(catalogs).toMatch(/export const HEADER_COLLAPSED_STORAGE_KEY\s*=\s*"mtn3-header-collapsed"/);
+    const bootBody = app.match(/function boot\(\)\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
+    expect(bootBody).toContain("loadHeaderCollapsed()");
+    /* Loading after the first snapshot request is a preference that loses the
+       race to the first paint. */
+    expect(bootBody.indexOf("loadHeaderCollapsed()")).toBeLessThan(bootBody.indexOf("fetchSnapshot()"));
+    expect(bootBody).toMatch(/\$\("header-summary-toggle"\)\.addEventListener\("click",\s*toggleHeaderCollapsed\)/);
+  });
+});
+
+/* ---------- header collapse — compact layout strategy ----------
+   Source-contract layer only: these prove the declared strategy exists and is
+   scoped to the collapsed body state. Real Chromium in
+   docs/header-collapse-geometry-gate owns every geometry claim. */
+
+describe("header collapse — compact layout strategy stays collapsed-scoped", () => {
+  const css = read("styles.css");
+
+  test("collapsed rules exist and never touch RHSP, workboard, or scroll-owner selectors", () => {
+    const collapsedRules = cssRules(css).filter((rule) => rule.selector.includes("header-summary-collapsed"));
+    expect(collapsedRules.length).toBeGreaterThan(0);
+    const fence = [
+      ".pane-inspector", "#inspector", ".drawer-", ".command-composer",
+      ".app-body", ".ops-stage", ".pane-list", "#programs", ".workboard",
+    ];
+    for (const rule of collapsedRules) {
+      for (const banned of fence) {
+        expect(rule.selector.includes(banned), rule.selector).toBe(false);
+      }
+    }
+    /* And the compact container's own rules stay inside the container: every
+       .compact-summary selector is either the container itself or its
+       descendants — never a sibling/ancestor combinator that could restyle
+       expanded chrome. */
+    const compactRules = cssRules(css).filter((rule) => rule.selector.includes(".compact-summary"));
+    expect(compactRules.length).toBeGreaterThan(0);
+    for (const rule of compactRules) {
+      for (const part of rule.selector.split(",")) {
+        const s = part.trim();
+        if (!s.includes(".compact-summary")) continue;
+        expect(/\.compact-summary[^ ]*\s*[+~>]?/.test(s), s).toBe(true);
+        expect(s.includes("~ ") || s.includes("+ "), s).toBe(false);
+      }
+    }
+  });
+
+  test("desktop row, intermediate wrap, and mobile two-column strategies exist at the locked boundaries", () => {
+    /* Desktop base: the compact face is a flex row. */
+    const base = cssRules(css).find((rule) => rule.selector.trim() === ".compact-summary");
+    expect(base, "base .compact-summary rule").toBeTruthy();
+    expect(base!.body).toMatch(/display:\s*flex/);
+
+    /* Intermediate 721–1024: collapsed masthead may wrap onto a second line. */
+    const mid = mediaBlocks(css, "(max-width: 1024px)");
+    expect(mid).toContain("header-summary-collapsed");
+    expect(mid).toMatch(/header-summary-collapsed[^{]*\{[^}]*flex-wrap:\s*wrap/);
+
+    /* Mobile <=720: compact readings become a two-column grid. minmax(0, …)
+       is part of the contract — bare 1fr tracks keep a content min-width
+       floor, which measured 436px of masthead on a 390px viewport. */
+    const mobile = mediaBlocks(css, "(max-width: 720px)");
+    expect(mobile).toContain("header-summary-collapsed");
+    expect(mobile).toMatch(/header-summary-collapsed[^{]*\.compact-summary[^{]*\{[^}]*grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)/);
+  });
+
+  test("the compact container hides expanded-only sublabels and gauges, and declares no font family", () => {
+    const rules = cssRules(css);
+    const hides = (cls: string) => rules.some((rule) =>
+      rule.selector.split(",").some((part) => part.includes(".compact-summary") && part.includes(cls))
+      && /display:\s*none/.test(rule.body));
+    expect(hides(".reading-sub"), ".reading-sub").toBe(true);
+    expect(hides(".ctx-gauge"), ".ctx-gauge").toBe(true);
+    expect(hides(".context-toggle"), ".context-toggle").toBe(true);
+    /* Shipped fonts and weights only: the compact face inherits type from the
+       existing reading classes and may resize, never re-family or re-weight. */
+    const compactish = rules.filter((rule) =>
+      rule.selector.includes(".compact-summary") || rule.selector.includes("header-summary-collapsed"));
+    for (const rule of compactish) {
+      expect(/font-family|font-weight|font:/.test(rule.body), rule.selector).toBe(false);
+    }
   });
 });

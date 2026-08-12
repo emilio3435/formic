@@ -5012,3 +5012,119 @@ body.feed-frozen .programs { opacity: 0.62; }
   .control-banner-why,
   .control-banner-next { margin: 0; }
 }
+
+/* ---------------------------------------------------------------------------
+   Header collapse — the masthead's compact summary face.
+
+   Every rule in this section is scoped to body.header-summary-collapsed or to
+   the .compact-summary container, which only carries content while collapsed
+   (the global [hidden] guard excludes it from expanded layout entirely).
+   Expanded geometry is under a one-pixel stability contract, so nothing here
+   may match expanded chrome — and nothing here may name the RHSP, workboard,
+   or scroll-owner selectors at all.
+   ------------------------------------------------------------------------- */
+
+/* Desktop three-region row: identity | compact readings | controls · Expand. */
+.compact-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+/* The face borrows the reading cells' own markup and type tokens; compact
+   means label and primary value share one baseline while the explanatory
+   chrome (sublabels, gauges, toggles) stays with the expanded rail. */
+.compact-summary .reading {
+  flex: 0 1 auto;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 0.4rem;
+  padding: 0.2rem 0.85rem;
+  border-right: 1px solid var(--line);
+  white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.compact-summary .reading:last-child { border-right: 0; }
+.compact-summary .reading-value { font-size: 0.95rem; }
+.compact-summary .reading-sub,
+.compact-summary .ctx-gauge,
+.compact-summary .context-toggle,
+.compact-summary .spread-toggle { display: none; }
+/* The calm fleet keeps its one moss sentence — same line, smaller frame. */
+.compact-summary .pulse-calm { padding: 0.2rem 0.5rem; background: none; }
+
+/* While collapsed, the disclosure moves to the row's right edge. It is FIRST
+   in the DOM so the expanded signals row keeps every shipped control
+   rectangle; order is a collapsed-only presentation choice. */
+body.header-summary-collapsed .header-summary-toggle { order: 9; }
+
+@media (min-width: 1025px) {
+  /* Desktop only: identity yields the middle of the row to the readings.
+     Measured at 721px, pinning the scene's basis forced the scene+signals
+     row to wrap by ~7px and stacked three rows; below 1025 the scene keeps
+     its shrinkable default and the compact face takes its own line. */
+  body.header-summary-collapsed .masthead-scene { flex: 0 0 auto; }
+}
+
+@media (max-width: 1024px) {
+  /* Intermediate 721–1024: the compact readings may take a second line under
+     the identity/controls row rather than forcing a one-row squeeze. The
+     inherited 1rem row gap is dropped — measured, it alone spent 16px of the
+     104px budget. */
+  body.header-summary-collapsed .masthead-inner { flex-wrap: wrap; gap: 0 1rem; }
+  /* Zero flex-basis is load-bearing: wrapping breaks lines on CONTENT size,
+     so at 721px the 177px identity plus the 435px controls overflowed the
+     622px band by ~7px and split into three rows. With basis 0 the first
+     line always fits and the identity grows into whatever the controls
+     leave over. */
+  body.header-summary-collapsed .masthead-scene { flex: 1 1 0; }
+  body.header-summary-collapsed .compact-summary {
+    order: 5;
+    flex: 1 1 100%;
+    border-top: 1px solid var(--line);
+  }
+}
+
+@media (max-width: 720px) {
+  /* Mobile: a two-column compact grid between the identity row and the
+     controls row — the masthead is already a column at this width, so DOM
+     order (scene → compact → signals) is the layout. minmax(0, …) is
+     load-bearing: bare 1fr tracks keep a content min-width floor, and the
+     measured grid forced the masthead to 436px on a 390px viewport. */
+  body.header-summary-collapsed .masthead-inner { gap: 0; }
+  body.header-summary-collapsed .compact-summary {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    order: 0;
+    border-top: 0;
+    padding: 0.2rem 1rem 0.4rem;
+    overflow: visible;
+  }
+  body.header-summary-collapsed .compact-summary .reading {
+    border-right: 0;
+    padding: 0.2rem 0;
+    white-space: normal;
+  }
+  /* BOTH modes, mobile only, by explicit owner decision (2026-08-11): the
+     shipped right-packed signals row clips its leftmost control once the
+     disclosure joins it — measured at 390px expanded, the toggle sat at
+     x = -53.6 behind body overflow-x:hidden, an unreachable REQUIRED control.
+     A visible, operable disclosure outranks exact expanded pixel parity at
+     phone widths. Measured at 390px, the four controls need <=326px in one
+     44px-tall row; 11px type with the badge's 1rem legacy margin still
+     summed ~370px and wrapped, so the row runs at 10px with the margin
+     zeroed inside it. flex-wrap stays as the fail-visible fallback — a
+     future longer label wraps into view instead of clipping. Desktop and
+     intermediate expanded geometry are untouched. */
+  .masthead-signals { flex-wrap: wrap; gap: 0.25rem; }
+  .masthead-signals .btn {
+    padding: 0.25rem 0.4rem;
+    font-size: 10px;
+    min-height: 44px;
+  }
+  .masthead-signals .conn { margin: 0; }
+}
