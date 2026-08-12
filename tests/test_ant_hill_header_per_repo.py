@@ -178,6 +178,46 @@ class RuntimeTests(unittest.TestCase):
             popen.assert_not_called()
             self.assertTrue(runtime.safety_circuit_open(safety_path))
 
+    def test_timeout_stops_the_process_group_and_accounts_for_post_timeout_leaks(self):
+        with tempfile.TemporaryDirectory() as root:
+            safety_path = pathlib.Path(root) / runtime.SAFETY_CIRCUIT_FILENAME
+
+            class TimeoutProcess:
+                pid = 4321
+                returncode = 0
+
+                @staticmethod
+                def poll():
+                    return None
+
+                @staticmethod
+                def communicate(_prompt=None, timeout=None):
+                    if timeout == runtime.DEFAULT_TIMEOUT_SECONDS:
+                        raise subprocess.TimeoutExpired("codex", timeout)
+                    return "", ""
+
+            with patch.object(
+                runtime,
+                "persistent_codex_sessions",
+                side_effect=[set(), {"leaked-session"}],
+            ), patch.object(
+                runtime,
+                "visible_automation_count",
+                side_effect=[0, 1],
+            ), patch.object(
+                runtime.subprocess, "Popen", return_value=TimeoutProcess()
+            ), patch.object(runtime.os, "killpg") as killpg:
+                with self.assertRaises(runtime.IsolationViolation) as raised:
+                    runner(safety_path)("prompt")
+
+            killpg.assert_called_once_with(4321, runtime.signal.SIGTERM)
+            self.assertEqual(raised.exception.persistent_session_delta, 1)
+            self.assertEqual(raised.exception.visible_session_delta, 1)
+            circuit = json.loads(safety_path.read_text())
+            self.assertTrue(circuit["open"])
+            self.assertEqual(circuit["persistentSessionDelta"], 1)
+            self.assertEqual(circuit["visibleSessionDelta"], 1)
+
 
 class HeaderSummarizerTests(unittest.TestCase):
     def test_shared_safety_circuit_blocks_a_second_invocation(self):
@@ -309,6 +349,185 @@ class HeaderSummarizerTests(unittest.TestCase):
         }
         repos = header.active_repositories(snapshot, now_ms=now_ms)
         self.assertEqual([item["id"] for item in repos[0][1]], ["codex:hot"])
+
+    def test_disabled_failed_in_flight_and_budget_fallbacks_choose_exact_contents(self):
+        cached = {
+            "repo": "Home",
+            "summary": "Home: cached operator brief remains authoritative while generation is unavailable",
+            "blocker": "question pending",
+            "signal": "needs-you",
+        }
+        cached_text = json.dumps(cached, sort_keys=True, separators=(",", ":"))
+        now = 1_786_290_000.0
+        base_agents = [agent()]
+
+        with tempfile.TemporaryDirectory() as root:
+            summary_root = pathlib.Path(root)
+            disabled = header.HeaderSummarizer(
+                summary_root / "disabled",
+                lambda _prompt: self.fail("disabled summarizer invoked"),
+                model_enabled=False,
+            )
+            disabled_path = disabled._state_path("Home")
+            disabled_path.write_text(json.dumps({"summary": cached_text}))
+            disabled_result = disabled.summarize("Home", base_agents)
+            self.assertEqual(disabled_result["outcome"], "skipped_disabled")
+            self.assertEqual(disabled_result["summary"], cached_text)
+            self.assertEqual(disabled_result["structured"], cached)
+
+            no_cache = header.HeaderSummarizer(
+                summary_root / "disabled-no-cache",
+                lambda _prompt: self.fail("disabled summarizer invoked"),
+                model_enabled=False,
+            )
+            heuristic = header.heuristic_structured("Home", base_agents)
+            no_cache_result = no_cache.summarize("Home", base_agents)
+            self.assertEqual(no_cache_result["structured"], heuristic)
+            self.assertEqual(json.loads(no_cache_result["summary"]), heuristic)
+
+            def succeed(_prompt):
+                return {
+                    "summary": json.dumps(
+                        {
+                            "summary": cached["summary"],
+                            "blocker": cached["blocker"],
+                            "signal": cached["signal"],
+                        }
+                    ),
+                    "threadId": "header-seed",
+                    "usage": {},
+                    "persistentSessionDelta": 0,
+                    "visibleSessionDelta": 0,
+                }
+
+            summarizer = header.HeaderSummarizer(
+                summary_root / "active", succeed, now=lambda: now
+            )
+            seeded = summarizer.summarize("Home", base_agents)
+            self.assertEqual(seeded["outcome"], "success")
+            state_path = summarizer._state_path("Home")
+            state = json.loads(state_path.read_text())
+
+            state_path.write_text(
+                json.dumps(
+                    {
+                        **state,
+                        "outcome": "in_flight",
+                        "claimedAtEpoch": now,
+                    }
+                )
+            )
+            in_flight = summarizer.summarize("Home", base_agents)
+            self.assertEqual(in_flight["outcome"], "skipped_in_flight")
+            self.assertEqual(in_flight["summary"], cached_text)
+            self.assertEqual(in_flight["structured"], cached)
+
+            state_path.write_text(json.dumps(state))
+            changed_agents = [agent(task="Changed evidence for the next cycle")]
+            cycle_budget = summarizer.summarize(
+                "Home", changed_agents, allow_invoke=False
+            )
+            self.assertEqual(cycle_budget["outcome"], "skipped_cycle_budget")
+            self.assertEqual(cycle_budget["summary"], cached_text)
+            self.assertEqual(cycle_budget["structured"], cached)
+
+            summarizer.runner = lambda _prompt: (_ for _ in ()).throw(
+                RuntimeError("invalid model output")
+            )
+            failed = summarizer.summarize("Home", changed_agents)
+            self.assertEqual(failed["outcome"], "failed")
+            self.assertEqual(failed["summary"], cached_text)
+            self.assertEqual(
+                failed["structured"],
+                header.heuristic_structured("Home", changed_agents),
+            )
+
+
+class MainOrchestrationTests(unittest.TestCase):
+    @staticmethod
+    def monitor_envelope(path):
+        event = json.loads(path.read_text().strip())
+        text = event["message"]["content"][0]["text"]
+        return json.loads(text.split("] ", 1)[1])
+
+    def test_fleet_failure_writes_valid_repo_output_and_empty_input_writes_all_clear(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = pathlib.Path(root)
+            summary_root = root_path / "summaries"
+            monitor = root_path / "monitor.jsonl"
+
+            class FleetFailureRunner:
+                def __call__(self, prompt):
+                    if "FLEET priority brief" in prompt:
+                        raise RuntimeError("fleet unavailable")
+                    return {
+                        "summary": json.dumps(
+                            {
+                                "summary": "Home: the drawer ribbon is ready for review and no operator blocker is currently reported",
+                                "blocker": "all-clear",
+                                "signal": "ok",
+                            }
+                        ),
+                        "threadId": "repo-summary",
+                        "usage": {},
+                        "persistentSessionDelta": 0,
+                        "visibleSessionDelta": 0,
+                    }
+
+            snapshot = {"programs": [{"name": "Home", "agents": [agent()]}]}
+            with patch.object(header.core, "fetch_json", return_value=snapshot), patch.object(
+                header.core, "CodexRunner", return_value=FleetFailureRunner()
+            ), patch.object(header.core, "install_stop_handlers"), patch.object(
+                header, "header_model_enabled", return_value=True
+            ):
+                exit_code = header.main(
+                    [
+                        "--summary-root",
+                        str(summary_root),
+                        "--monitor",
+                        str(monitor),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            envelope = self.monitor_envelope(monitor)
+            self.assertEqual(envelope["v"], 3)
+            self.assertNotIn("fleet", envelope)
+            self.assertEqual(envelope["repos"][0]["repo"], "Home")
+            self.assertEqual(envelope["repos"][0]["signal"], "ok")
+
+            empty_summary_root = root_path / "empty-summaries"
+            empty_monitor = root_path / "empty-monitor.jsonl"
+            with patch.object(
+                header.core, "fetch_json", return_value={"programs": []}
+            ), patch.object(
+                header.core, "CodexRunner", return_value=FleetFailureRunner()
+            ), patch.object(header.core, "install_stop_handlers"), patch.object(
+                header, "header_model_enabled", return_value=False
+            ):
+                empty_exit = header.main(
+                    [
+                        "--summary-root",
+                        str(empty_summary_root),
+                        "--monitor",
+                        str(empty_monitor),
+                    ]
+                )
+
+            self.assertEqual(empty_exit, 0)
+            all_clear = self.monitor_envelope(empty_monitor)
+            self.assertEqual(all_clear["v"], 3)
+            self.assertEqual(
+                all_clear["repos"],
+                [
+                    {
+                        "repo": "all-clear",
+                        "summary": "all-clear: 0 live=0w+0i · no active repository work · no blockers reported",
+                        "blocker": "all-clear",
+                        "signal": "all-clear",
+                    }
+                ],
+            )
 
 
 class AccountingAndLockTests(unittest.TestCase):
