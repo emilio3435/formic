@@ -1,16 +1,20 @@
 # Security boundary
 
-Ant Hill can focus the operator's cmux terminals, type text into them, and press
+Formic can focus the operator's cmux terminals, type text into them, and press
 Enter. If the selected terminal is a shell, that text can be a shell command.
 It can also send Escape to interrupt a terminal. Every security decision below
 starts with that authority.
+
+> Compatibility note: startup banners, script names, and launch labels may still
+> say `The Ant Hill` / `anthill`. Those identifiers remain for ops compatibility
+> and do not change the boundary described here.
 
 ## Accepted boundary
 
 **Loopback plus exact Origin defends against browser-based attacks; any process
 running as the operator is trusted.**
 
-This is a deliberate same-UID trust decision. Ant Hill does not authenticate
+This is a deliberate same-UID trust decision. Formic does not authenticate
 one local process to another. There is no bearer token, pairing step, or
 separate-user broker.
 
@@ -26,7 +30,7 @@ separate-user broker.
   attention, triage, recollect, cleanup proposal, and other state-changing
   routes require the browser-supplied `Origin` to equal the loopback request
   origin. This stops a hostile website opened in the operator's browser from
-  issuing changes to Ant Hill. A local process can construct the same header,
+  issuing changes to Formic. A local process can construct the same header,
   so this is browser CSRF protection, not local caller authentication. The
   cleanup proposal route may write a plan artifact, but has no confirm or
   deletion capability.
@@ -54,7 +58,7 @@ separate-user broker.
   credentials in diagnostic output. It does not make the endpoint private from
   other processes running as the operator.
 
-- **Fail-closed terminal identity.** Ant Hill requires observed routing evidence
+- **Fail-closed terminal identity.** Formic requires observed routing evidence
   before enabling a terminal control. Missing, conflicting, stale, child-only,
   or ambiguous evidence disables control instead of inventing a binding.
   Unique-cwd fallback is allowed only when one active source and one unclaimed,
@@ -86,7 +90,7 @@ differs from cmux's UID. Running the broker as another user or root therefore
 cannot control this cmux, while changing cmux to `allowAll` would remove the
 boundary rather than strengthen it.
 
-Ant Hill consequently does not defend against a compromised Claude, Codex,
+Formic consequently does not defend against a compromised Claude, Codex,
 Cursor, shell script, editor extension, or other process if it runs as the
 operator. It also does not defend against root, Accessibility-authorized UI
 automation, or a compromised cmux application.
@@ -103,7 +107,7 @@ automation, or a compromised cmux application.
 
 ## Dogfooding on another Mac
 
-The other Mac inherits the same boundary; installing Ant Hill does not create
+The other Mac inherits the same boundary; installing Formic does not create
 local caller authentication. Keep it bound to loopback, do not tunnel the port,
 and understand that every process run as that Mac's operator account is trusted
 to focus and type into cmux terminals. If the Mac is shared or has additional
