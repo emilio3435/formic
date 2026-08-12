@@ -257,6 +257,15 @@ describe("header collapse — the preference parses strictly and fails soft", ()
     expect(bootBody.indexOf("loadHeaderCollapsed()")).toBeLessThan(bootBody.indexOf("fetchSnapshot()"));
     expect(bootBody).toMatch(/\$\("header-summary-toggle"\)\.addEventListener\("click",\s*toggleHeaderCollapsed\)/);
   });
+
+  test("syncHeaderDisclosure does not insertBefore the toggle when it is already in the mode slot", () => {
+    const app = read("app.js");
+    const body = app.match(/function syncHeaderDisclosure\(\)\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
+    expect(body).toContain("alreadyPlaced");
+    expect(body).toMatch(/firstElementChild/);
+    expect(body).toMatch(/lastElementChild/);
+    expect(body).toMatch(/if\s*\(\s*!alreadyPlaced\s*\)/);
+  });
 });
 
 /* ---------- header collapse — compact layout strategy ----------

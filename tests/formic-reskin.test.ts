@@ -439,7 +439,8 @@ describe("Formic reskin RED contracts", () => {
       app.includes('$("settings-toggle").addEventListener("click"'),
       "FORMIC-INTERACTION-RED: Settings click wiring must survive the reskin",
     ).toBe(true);
-    expect(app.includes("setTldrView"), "FORMIC-INTERACTION-RED: TL;DR facets must continue to call setTldrView").toBe(true);
+    expect(app.includes("setTldrView"), "FORMIC-INTERACTION-RED: TL;DR paging helper must remain").toBe(true);
+    expect(app.includes("filterBoardToTldrRepo"), "FORMIC-INTERACTION-RED: proof rows/chips must filter the board without paging the header").toBe(true);
     expect(
       app.includes('grid.textContent = ""'),
       "FORMIC-INTERACTION-RED: cleanup live region must remain outside the readings paint",
@@ -450,8 +451,12 @@ describe("Formic reskin RED contracts", () => {
       "FORMIC-INTERACTION-RED: attention count must be added without removing TL;DR facet actions",
     ).toBe(true);
     expect(
-      allLane.includes("setTldrView"),
-      "FORMIC-INTERACTION-RED: ALL-lane repo rows must still call setTldrView",
+      allLane.includes("filterBoardToTldrRepo"),
+      "FORMIC-INTERACTION-RED: ALL-lane proof rows/chips must filter the board, not page the fleet TL;DR",
     ).toBe(true);
+    expect(
+      allLane.includes("setTldrView"),
+      "FORMIC-INTERACTION-RED: ALL-lane must not page the dossier from proof rows, chips, or the next chevron",
+    ).toBe(false);
   });
 });
