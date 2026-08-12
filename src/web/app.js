@@ -8710,9 +8710,7 @@ function providerMark(agent) {
   return el("img", { class: "provider-mark" + (mark.raster ? " provider-mark-raster" : ""), src: mark.src, alt: label, title: label });
 }
 
-// Shared control vocabulary — the icon key + human state word for each access
-// state. The agent row folds Access into its aria-label; the drawer status line
-// renders it visibly (renderStatusLine), so both constants stay live.
+// Shared control vocabulary for row and control-surface state.
 const CONTROL_ICONS = { linked: "linked", quarantined: "quarantine", "observed-only": "observed" };
 
 /* What the Status cell should say, given the tab the operator is already in.
@@ -10058,13 +10056,25 @@ function fullSourceDetail(agent) {
 /* Ember-outline gate chip for the verdict head — names the blocker when the
    outcome is blocked. Indicator ink + outline, never a filled banner. */
 function verdictGate(agent, outcome) {
-  if (outcome !== "blocked") return null;
-  const gate = (agent.gates || []).find((g) => typeof g === "string" && g.trim());
-  const text = gate ? conciseText(gate, 64)
-    : agent.statusReason ? conciseText(agent.statusReason, 64)
-      : OUTCOME_LABELS.blocked;
-  return el("span", { class: "verdict-gate", title: agent.statusReason || gate || null },
-    icon("warning"), text);
+  const hazards = [];
+  for (const gate of agent.gates || []) {
+    if (typeof gate === "string" && gate.trim()) hazards.push(conciseText(gate.trim(), 64));
+  }
+  const liveness = livenessView(agent);
+  if (liveness?.key === "died") hazards.push("Process died");
+  if (deriveControlState(agent) === "quarantined") hazards.push("Control quarantined");
+  if (outcome !== "healthy" && hazards.length === 0) {
+    hazards.push(OUTCOME_LABELS[outcome] || outcome);
+  }
+  const unique = [...new Set(hazards)];
+  if (!unique.length) return null;
+  const detail = unique.join(" · ");
+  return el("span", {
+    class: "drawer-session-hazard",
+    title: detail,
+    "aria-label": (unique.length === 1 ? "Hazard: " : `Hazards (${unique.length}): `) + detail,
+    text: "!",
+  });
 }
 
 /* ---------- attention: acknowledge / dismiss / snooze ----------
@@ -10269,7 +10279,6 @@ function headSubParts(agent, program, titleText) {
 
 function renderAgentDrawer(pane, view) {
   const { agent, program } = view;
-  const activity = deriveActivity(agent);
   const outcome = deriveOutcome(agent);
   const control = deriveControlState(agent);
 
@@ -10338,23 +10347,65 @@ function renderAgentDrawer(pane, view) {
   const runText = [harnessLabel, modelLabel]
     .filter((part) => part && !titleFacts.has(part.toLowerCase()))
     .join(" / ");
-  const runMark = (() => { try { return harnessMark(agent); } catch { return icon("box", { label: "" }); } })();
-  const modelMark = (() => { try { return agentMark(agent); } catch { return icon("cpu", { label: "" }); } })();
   const facts = el("dl", { class: "drawer-session-facts", "aria-label": "Session facts" });
   let hasFacts = false;
+  const liveness = livenessView(agent);
+  const hazard = verdictGate(agent, outcome);
+  if (agent.updatedAt || liveness || hazard) {
+    hasFacts = true;
+    const processValue = el("dd", { class: "drawer-session-process", role: "status" });
+    if (liveness?.key === "running") {
+      processValue.append(el("span", {
+        class: "drawer-process-dot status-line-liveness liveness-running",
+        title: liveness.detail,
+        "aria-label": liveness.label,
+      }));
+    } else if (liveness) {
+      processValue.append(el("span", {
+        class: "drawer-process-state status-line-liveness liveness-" + liveness.key,
+        title: liveness.detail,
+        text: liveness.label,
+      }));
+    }
+    if (agent.updatedAt) {
+      processValue.append(el("span", {
+        class: "drawer-session-age",
+        dataset: { ago: agent.updatedAt },
+        text: agoText(agent.updatedAt),
+      }));
+    }
+    if (hazard) processValue.append(hazard);
+    facts.append(el("div", { class: "drawer-session-fact drawer-session-status" },
+      el("dt", { text: "Status" }), processValue));
+  }
   if (runText) {
     hasFacts = true;
     facts.append(el("div", { class: "drawer-session-fact drawer-session-run-fact" },
       el("dt", { text: "Run" }),
-      el("dd", { class: "drawer-session-run" }, runMark, modelMark, runText)));
+      el("dd", { class: "drawer-session-run" },
+        harnessAgentMarks(agent),
+        el("span", { class: "drawer-session-run-label", text: runText }))));
   }
   if (contextPct != null || contextMagnitude) {
     hasFacts = true;
+    const contextLabel = [
+      contextPct != null ? (contextPct === 0 ? "<1%" : contextPct + "%") : "",
+      contextMagnitude,
+    ].filter(Boolean).join(" · ");
+    const contextValue = el("dd", { class: "drawer-session-context-value", title: contextLabel },
+      contextPct != null
+        ? svgGauge(contextPct, "drawer-context-gauge", { label: `Context used: ${contextPct}%` })
+        : null,
+      el("span", { class: "drawer-session-context-reading" },
+        contextPct != null
+          ? el("span", { class: "drawer-session-context-pct", text: contextPct === 0 ? "<1%" : contextPct + "%" })
+          : null,
+        contextMagnitude
+          ? el("span", { class: "drawer-session-context-capacity", text: contextMagnitude })
+          : null));
     facts.append(el("div", { class: "drawer-session-fact drawer-session-context" },
       el("dt", { text: "Context" }),
-      el("dd", {}, contextPct != null ? (contextPct === 0 ? "<1%" : contextPct + "%") : null,
-        contextPct != null && contextMagnitude ? " · " : null,
-        contextMagnitude || null)));
+      contextValue));
   }
   if (sessionText) {
     hasFacts = true;
@@ -10371,9 +10422,6 @@ function renderAgentDrawer(pane, view) {
            two can never disagree about what the title said. */
         title,
         tag ? el("span", { class: "inspector-tag mono", text: "#" + tag }) : null),
-      el("div", { class: "drawer-session-state" },
-        renderStatusLine(agent, activity, outcome, control),
-        verdictGate(agent, outcome)),
       el("section", { class: "drawer-task-summary", "aria-labelledby": "drawer-task-label" },
         el("span", { id: "drawer-task-label", class: "drawer-task-label", text: "Task" }),
         taskObjective
@@ -10385,12 +10433,9 @@ function renderAgentDrawer(pane, view) {
               el("summary", { class: "drawer-task-brief-summary" }, "Full brief"),
               el("pre", { class: "drawer-task-brief-body", text: fullTask }))
           : null),
-      hasFacts
-        ? el("details", { class: "drawer-session-details" },
-            el("summary", { class: "drawer-session-details-summary" }, "Session details"),
-            facts)
-        : null),
-    el("div", { class: "verdict-side" }, closeButton())));
+      ),
+    el("div", { class: "verdict-side" }, closeButton()),
+    hasFacts ? facts : null));
 
   const attentionBlock = renderAttentionBlock(agent);
   if (attentionBlock) shellHead.append(attentionBlock);
@@ -10697,89 +10742,6 @@ function renderEvidenceShelf(agent) {
   body.classList.add("shelf-body");
   section.append(body);
   return section;
-}
-
-/* One line under the title, and it earns every word it prints.
-
-   It used to read "Working · Healthy · View only" on almost every agent. Measured
-   against the live board: `outcome` is `healthy` on 243/243, so that word carried
-   zero bits; `activity` is the word already printed on the row the operator just
-   clicked; and `control` is stated again, with its reason and its remedy, by
-   renderControlBanner directly below. Three items, no information.
-
-   What this line answers instead is the question the drawer could not answer at
-   all: "went quiet 20 minutes ago — dead, or thinking?" That is time-since-update
-   plus process liveness. `statusReason` is 100% populated on the wire and was
-   rendered on zero agents; it is the sentence that says which. */
-function renderStatusLine(agent, activity, outcome, control) {
-  /* The activity word is emitted ALWAYS and hidden by CSS only at the widths
-     where the roster row that carries it is actually beside the drawer. Below
-     1025px the drawer is a full-viewport sheet and the roster is completely
-     covered — measured, not assumed — so deleting the word outright left an
-     operator on a 1024px window unable to tell whether the session they were
-     reading was running or parked. It also never reached a screen reader at any
-     width, because the age text encoded activity only as a colour. */
-  const line = el("div", {
-    class: "status-line",
-    role: "status",
-    "aria-label": "Session status: " + (ACTIVITY_LABELS[activity] || activity),
-  });
-  line.append(el("span", {
-    class: "status-line-activity act-" + activity,
-    text: ACTIVITY_LABELS[activity] || activity,
-  }));
-  line.append(el("span", { class: "status-line-sep status-line-activity", "aria-hidden": "true", text: "·" }));
-
-  // Time since the source last moved — the live fact, not uptime. Uptime measured
-  // the wrong clock: it read 200h for an agent that had been silent for an hour.
-  if (agent.updatedAt) {
-    line.append(el("span", {
-      class: "status-line-live act-" + activity,
-      dataset: { ago: agent.updatedAt },
-      text: agoText(agent.updatedAt),
-    }));
-  }
-
-  /* statusReason only when it adds a fact the clock did not. On a working agent
-     it reads "Source activity within 3 minutes." directly beside "11s ago" —
-     the same observation at coarser precision, which is repeat information under
-     a different label. It earns its place on everything else, where it explains
-     a silence the clock can only measure ("No source activity in the last 45
-     minutes", "Archived by source or operator"). */
-  const reason = typeof agent.statusReason === "string" ? agent.statusReason.trim() : "";
-  if (reason && activity !== "working") {
-    line.append(el("span", { class: "status-line-sep", "aria-hidden": "true", text: "·" }));
-    line.append(el("span", { class: "status-line-item", text: conciseText(reason, 72) }));
-  }
-
-  /* Liveness is part of the same state sentence, not a second badge below it.
-     Some collectors already include the liveness words in statusReason (for
-     example "Quiet 20m · process live"). In that case the reason is the one
-     visible copy; otherwise append the provider-neutral liveness label here. */
-  const liveness = livenessView(agent);
-  const reasonText = normalizeCompareText(reason);
-  const livenessText = liveness ? normalizeCompareText(liveness.label) : "";
-  const reasonCarriesLiveness = Boolean(livenessText && reasonText.includes(livenessText));
-  if (liveness && !reasonCarriesLiveness) {
-    line.append(el("span", { class: "status-line-sep", "aria-hidden": "true", text: "·" }));
-    line.append(el("span", {
-      class: "status-line-item status-line-liveness liveness-" + liveness.key,
-      title: liveness.detail,
-      text: liveness.label,
-    }));
-  }
-
-  /* Escalations only: `outcome` speaks when it stops being healthy, which is
-     the whole point of deleting it from the nominal line. */
-  if (outcome !== "healthy") {
-    line.append(el("span", { class: "status-line-sep", "aria-hidden": "true", text: "·" }));
-    line.append(el("span", {
-      class: "status-line-item outcome-" + outcome,
-      text: OUTCOME_LABELS[outcome] || outcome,
-    }));
-  }
-
-  return line;
 }
 
 /* Quarantine / observed-only: one banner, not a disabled Focus card. It names

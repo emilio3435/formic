@@ -2991,7 +2991,7 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
     }
     // The live neighbours the cleanup must NOT touch stay put.
     expect(styles).toContain(".tm-track { fill: var(--line); }");            // SVG meter fill, shared
-    expect(styles).toContain(".status-line-item.control-linked");            // drawer status line, distinct selector
+    expect(styles).toContain(".drawer-session-process");                    // drawer ribbon status, distinct selector
   });
 
   test("(g) keyboard focus survives the alert rails — each alert state combines its rail with the focus ring", () => {
@@ -3143,12 +3143,13 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const row: any = withDom(() => M.renderAgentRow(stale, program));
     expect(findByClass(row, "row-stale")).toBeNull();
-    // Still spoken, and the drawer's state sentence carries the same live age;
+    // Still spoken, and the drawer ribbon carries the same live age;
     // Evidence no longer repeats it as a provenance fact.
     expect(row.attributes["aria-label"]).toContain("Quiet: updated");
     const pane = newNode("div");
     withDom(() => M.renderAgentDrawer(pane, { kind: "agent", agent: stale, program }));
-    expect(textOf(byClass(pane, "status-line"))).toContain("ago");
+    expect(textOf(byClass(pane, "drawer-session-age"))).toContain("ago");
+    expect(byClass(pane, "drawer-session-age")?.dataset?.ago).toBe(stale.updatedAt);
     expect(deepText(withDom(() => M.renderEvidence(stale)))).not.toContain("quiet since");
 
     // A fresh running row says nothing anywhere — silence is still earned.
@@ -4274,6 +4275,7 @@ describe("RHSP command header consolidation", () => {
       identity: { base: "Admin Hub UX Updates V3 - Highlight Row" },
       model: "sol 5.6",
       processLiveness: "running",
+      updatedAt: "2026-08-12T04:00:00.000Z",
       status: "waiting",
       lifecycle: "waiting",
       statusReason: "Quiet 12m · process live.",
@@ -4297,9 +4299,21 @@ describe("RHSP command header consolidation", () => {
     expect(headerText).toContain("Task");
     expect(headerText).toContain("Replace the redundant drawer header");
     expect(textOf(byClass(header, "drawer-session-run"))).toBe("Codex / sol 5.6");
-    expect(headerText.match(/Process live/gi)).toHaveLength(1);
+    expect(byClass(header, "drawer-session-state")).toBeNull();
+    expect(byClass(header, "status-line")).toBeNull();
+    const statusFact = byClass(header, "drawer-session-status");
+    const liveDot = byClass(statusFact, "drawer-process-dot");
+    expect(liveDot).not.toBeNull();
+    expect(liveDot?.attributes?.["aria-label"]).toBe("Process live");
+    expect(byClass(statusFact, "drawer-session-age")?.dataset?.ago).toBe("2026-08-12T04:00:00.000Z");
+    expect(headerText).not.toContain("Quiet 12m");
     expect(textOf(byClass(header, "drawer-session-context"))).toContain("Context28%");
     expect(headerText).toContain("71k / 258k");
+    const gauge = findAll(header, (node) => node.attributes?.role === "progressbar")[0];
+    expect(gauge?.attributes?.class).toBe("drawer-context-gauge");
+    expect(gauge?.attributes?.role).toBe("progressbar");
+    expect(gauge?.attributes?.["aria-valuenow"]).toBe("28");
+    expect(gauge?.attributes?.["aria-label"]).toBe("Context used: 28%");
     expect(textOf(byClass(header, "drawer-session-usage"))).toBe("Session2.2M");
     const sessionDetails = byClass(header, "drawer-session-details");
     expect(sessionDetails?.tagName).toBe("details");
@@ -4412,7 +4426,7 @@ describe("verdict head — act from the top (B2)", () => {
     expect(drawer).toContain("pane.append(grid)");
   });
 
-  test("the head carries the gate chip and exactly one Focus button exists", () => {
+  test("the ribbon carries hazards and exactly one Focus button exists", () => {
     const drawer = agentDrawer();
     const head = drawer.slice(0, drawer.indexOf("renderControlBanner(agent, control)"));
     expect(head).toContain("verdictGate(");
@@ -4422,11 +4436,10 @@ describe("verdict head — act from the top (B2)", () => {
     expect(head).not.toContain("headPrimaryAction(");
     expect(source).not.toContain("function headPrimaryAction(");
     expect(styles).toMatch(/\.command-dock\s*\{[^}]*position:\s*static/);
-    // The gate is ember ink + outline, never a filled banner.
-    const gateCss = styles.match(/\.verdict-gate\s*\{[^}]*\}/)?.[0] ?? "";
-    expect(gateCss).toContain("border: 1px solid color-mix(in srgb, var(--ember)");
+    // The hazard is an ember exclamation inside the facts ribbon.
+    const gateCss = styles.match(/\.drawer-session-hazard\s*\{[^}]*\}/)?.[0] ?? "";
+    expect(gateCss).toContain("border: 1px solid currentColor");
     expect(gateCss).toContain("color: var(--ember)");
-    expect(gateCss).toContain("background: none");
     // Touch sweep: the head action clears 44px below 1024px.
     const after = styles.slice(styles.indexOf("@media (max-width: 1024px)"));
     const block = after.slice(0, after.indexOf("@media (max-width: 720px)"));
@@ -4492,25 +4505,23 @@ describe("B2 review fixes — instance-scoped head keys + executable head logic"
   }
 
 
-  test("verdictGate: gate text with tooltip fallback; statusReason fallback; null when not blocked", () => {
-    // Visible text from gates; statusReason empty → the tooltip carries the
-    // gate text, never an empty title.
+  test("verdictGate: concrete hazards collapse to one accessible exclamation", () => {
     const gated = agent({ gates: ["needs-review"], statusReason: "" });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const chip: any = withDom(() => M.verdictGate(gated, "blocked"));
     expect(chip).not.toBeNull();
-    expect(chip.className).toBe("verdict-gate");
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect(chip.children.some((c: any) => c.textContent === "needs-review")).toBe(true);
+    expect(chip.className).toBe("drawer-session-hazard");
+    expect(chip.textContent).toBe("!");
     expect(chip.attributes.title).toBe("needs-review");
+    expect(chip.attributes["aria-label"]).toBe("Hazard: needs-review");
 
-    // No gate → statusReason carries both the visible text and the tooltip.
+    // An exceptional outcome still gets a warning even when no gate string exists.
     const reason = agent({ statusReason: "Blocked by CI gate on main." });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const chip2: any = withDom(() => M.verdictGate(reason, "blocked"));
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect(chip2.children.some((c: any) => c.textContent === "Blocked by CI gate on main.")).toBe(true);
-    expect(chip2.attributes.title).toBe("Blocked by CI gate on main.");
+    expect(chip2.textContent).toBe("!");
+    expect(chip2.attributes.title).toBe("Blocked");
 
     expect(withDom(() => M.verdictGate(agent(), "healthy"))).toBeNull();
   });
@@ -4659,6 +4670,10 @@ describe("command header session facts (B3)", () => {
     expect(drawer).toContain('class: "drawer-session-facts"');
     expect(drawer).toContain("drawer-session-context");
     expect(drawer).toContain("drawer-session-usage");
+    expect(drawer).toContain("drawer-session-status");
+    expect(drawer).toContain("drawer-context-gauge");
+    expect(drawer).not.toContain("drawer-session-state");
+    expect(drawer).not.toContain("renderStatusLine(");
     expect(drawer).not.toContain('class: "drawer-header-vitals"');
     const factsAt = drawer.indexOf('class: "drawer-session-facts"');
     const gridAt = drawer.indexOf('class: "drawer-grid"');
@@ -12151,7 +12166,8 @@ describe("W4-B: read endpoints, liveness, attention, triage lifecycle", () => {
       const pane = newNode("div");
       withDom(() => M.renderAgentDrawer(pane, { kind: "agent", agent: target, program: { id: "p", name: "P", agents: [target] } }));
       const state = byClass(pane, "status-line-liveness");
-      expect(textOf(state), word).toContain(label);
+      if (word === "running") expect(state.attributes["aria-label"], word).toBe(label);
+      else expect(textOf(state), word).toContain(label);
       expect(state.className.split(/\s+/), word).toContain(cls);
     }
     // The four labels are distinct words — "exited" must never read like "died".
@@ -12391,6 +12407,7 @@ describe("W4-B: read endpoints, liveness, attention, triage lifecycle", () => {
     withDom(() => M.renderAgentDrawer(pane, { kind: "agent", agent: asking, program }));
     expect(byClass(pane, "status-line-liveness")).not.toBeNull();
     expect(textOf(byClass(pane, "status-line-liveness"))).toContain("Died");
+    expect(byClass(pane, "drawer-session-hazard")).not.toBeNull();
     expect(byClass(pane, "attn-block")).not.toBeNull();
     expect(buttonsOf(byClass(pane, "attn-block")).map((b: any) => textOf(b)))
       .toEqual(["Acknowledge", "Dismiss", "Snooze 1 hour"]);
