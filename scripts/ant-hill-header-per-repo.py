@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate a change-driven, per-repository Ant Hill header with Luna — v3 structured."""
+"""Generate a change-driven, per-repository Ant Hill header with Luna."""
 
 from __future__ import annotations
 
@@ -18,15 +18,16 @@ from typing import Any, Callable
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
-CORE_PATH = REPO_ROOT / "scripts/ant-hill-task-refine.py"
+CORE_PATH = REPO_ROOT / "scripts/ant-hill-summary-runtime.py"
 sys.dont_write_bytecode = True
-CORE_SPEC = importlib.util.spec_from_file_location("ant_hill_refiner_core", CORE_PATH)
+CORE_SPEC = importlib.util.spec_from_file_location("ant_hill_summary_runtime", CORE_PATH)
 assert CORE_SPEC and CORE_SPEC.loader
 core = importlib.util.module_from_spec(CORE_SPEC)
 sys.modules[CORE_SPEC.name] = core
 CORE_SPEC.loader.exec_module(core)
 
-PROMPT_VERSION = "header-per-repo/v6"
+PROMPT_VERSION = "header-per-repo/v8"
+AUTOMATION_MARKER = f"ANT_HILL_AUTOMATION={PROMPT_VERSION}"
 PROMPT_PREFIX = "You are Ant Hill header summarizer per-repo."
 MAX_REPOSITORIES = 6
 MAX_INVOCATIONS_PER_CYCLE = 3
@@ -37,12 +38,24 @@ FLEET_SUMMARY_MIN_CHARS = 80
 # reasons over the last hour so Luna isn't summarizing hundreds of quiet chats.
 HEADER_LOOKBACK_MS = 60 * 60 * 1000
 DEFAULT_SNAPSHOT_URL = "http://127.0.0.1:4701/api/snapshot"
-DEFAULT_SUMMARY_ROOT = REPO_ROOT / "data/task-summaries"
+DEFAULT_SUMMARY_ROOT = REPO_ROOT / "data/header-summaries"
 DEFAULT_MONITOR = pathlib.Path.home() / ".prime/agent/sessions/ANT-HEARTBEAT-MONITOR.jsonl"
 
 
 def header_model_enabled(environment: Any = os.environ) -> bool:
     return environment.get("ANT_HILL_HEADER_SUMMARIZER_ENABLED") == "1"
+
+
+def eligible_header_agent(agent: dict[str, Any]) -> bool:
+    if agent.get("lifecycle") not in ("working", "waiting"):
+        return False
+    if agent.get("sessionKind") == "automation":
+        return False
+    evidence = "\n".join(
+        core.normalize_text(agent.get(field))
+        for field in ("task", "lastHumanMessage", "lastUserMessage", "statusReason")
+    )
+    return PROMPT_PREFIX not in evidence and AUTOMATION_MARKER not in evidence
 
 # Structured contract — frontend renders cards from this shape.
 # LLM must output ONLY a single JSON object: {"summary": str, "blocker": str, "signal": str}
@@ -183,9 +196,10 @@ def repo_evidence(agents: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def build_prompt(repo_name: str, evidence: list[dict[str, Any]]) -> str:
     return (
         f"{PROMPT_PREFIX}\n"
-        "ANT_HILL_AUTOMATION=header-per-repo/v6\n"
+        f"{AUTOMATION_MARKER}\n"
         "Goal: summarize this repository's agents active in the LAST 1 HOUR as ONE structured card.\n"
-        "You MUST output ONLY a single JSON object, no markdown, no prose before/after, no code fences.\n"
+        "Success means: the response is one JSON object matching the schema and grounded only in the supplied evidence.\n"
+        "Stop when: you have returned that single validated JSON object, with no markdown, preface, or code fence.\n"
         'Schema: {"summary": string, "blocker": string, "signal": string}\n'
         f"- summary: 140-220 chars, 2-3 sentences. MUST start with \"{repo_name}:\" exactly once "
         "(do NOT restate the repo name again after the colon). Narrate cause → blocker → next action. "
@@ -279,9 +293,10 @@ def build_fleet_prompt(repos: list[dict[str, Any]]) -> str:
     defer_hint = ", ".join(defer) if defer else "none"
     return (
         f"{PROMPT_PREFIX}\n"
-        "ANT_HILL_AUTOMATION=header-per-repo/v7-fleet\n"
+        f"{AUTOMATION_MARKER}\n"
         "Goal: write a FLEET priority brief for the operator — who acts first, what verb unblocks, what can wait.\n"
-        "You MUST output ONLY a single JSON object, no markdown, no prose before/after, no code fences.\n"
+        "Success means: the response is one JSON object matching the schema, naming a primary actor and a concrete unblock verb.\n"
+        "Stop when: you have returned that single validated JSON object, with no markdown, preface, or code fence.\n"
         'Schema: {"fleet": string}\n'
         "- fleet: 140-220 chars, 1-2 sentences. Answer: (1) who first (one *repo*), (2) what verb unblocks, "
         "(3) what can wait. Do NOT restate each repo's blocker or live counts — proof rows show those.\n"
@@ -689,7 +704,7 @@ def active_repositories(
         for agent in program.get("agents", []):
             if not isinstance(agent, dict):
                 continue
-            if not core.eligible_agent(agent):
+            if not eligible_header_agent(agent):
                 continue
             if not agent_within_header_window(agent, now_ms=now_ms):
                 continue
@@ -733,7 +748,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
-    lock = core.SingletonLock(args.summary_root / ".header-per-repo.lock")
+    lock = core.SingletonLock(
+        args.summary_root / ".header-per-repo.lock",
+        prompt_version=PROMPT_VERSION,
+    )
     if not lock.acquire():
         log("singleton already owned; duplicate header cycle exits without work")
         return 0
@@ -742,6 +760,9 @@ def main(argv: list[str] | None = None) -> int:
         runner = core.CodexRunner(
             REPO_ROOT,
             args.snapshot_url,
+            automation_origin=PROMPT_VERSION,
+            visible_markers=(PROMPT_PREFIX, AUTOMATION_MARKER),
+            component_name="header-summarizer",
             codex_bin=args.codex_bin,
             timeout_seconds=args.timeout,
             safety_path=core.safety_circuit_path(args.summary_root),
