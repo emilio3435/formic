@@ -7250,6 +7250,82 @@ describe("FE-B: harness-backed client behavior", () => {
   // network), so the assertions need one turn of the loop to see it land.
   const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
+  test("(3b3) Advanced exposes the fleet provider wait on the server's value", async () => {
+    await withState({
+      settingsPanelOpen: true,
+      settings: { version: 2, providerWaitMs: 15000 },
+      settingsPending: false,
+      snap: null,
+    }, () => withDom(() => {
+      M.renderSettingsPanel();
+      const panel = domById.get("settings-panel")!;
+      const select = byFkey(panel, "provider-wait");
+      expect(select).not.toBe(null);
+      expect(select.tagName).toBe("select");
+      expect(select.value).toBe("15000");
+      const options = findAll(select, (node) => node.tagName === "option");
+      expect(options.map((option) => option.value))
+        .toEqual(["3000", "5000", "7500", "10000", "15000"]);
+      expect(options.map(textOf))
+        .toEqual(["3 seconds", "5 seconds", "7.5 seconds", "10 seconds", "15 seconds"]);
+      expect(textOf(panel)).toContain("Provider wait");
+      expect(textOf(panel)).toContain("How long each refresh waits for provider scans before showing last-known data as degraded.");
+    }));
+  });
+
+  test("(3b4) Save writes the chosen fleet provider wait and Reset all restores 7.5 seconds", async () => {
+    const settings = {
+      version: 2,
+      activityFreshMinutes: 3,
+      activityQuietMinutes: 45,
+      scanWindowHours: 36,
+      historyRetentionDays: 30,
+      historyRecordLimit: 5000,
+      providerWaitMs: 15000,
+    };
+    const snap = snapshot();
+
+    await withState({
+      settingsPanelOpen: true,
+      settings,
+      settingsPending: false,
+      snap,
+    }, () => withRequests([
+      { status: 200, json: { ok: true, settings: { ...settings, providerWaitMs: 3000 }, scanWindowHours: 36 } },
+      { status: 200, json: snap },
+    ], async (calls) => {
+      M.renderSettingsPanel();
+      const panel = domById.get("settings-panel")!;
+      const select = byFkey(panel, "provider-wait");
+      select.value = "3000";
+      // The fake document does not index created descendants by id; give the
+      // real settingsValue lookup the same node a browser getElementById finds.
+      domById.set("setting-providerWaitMs", select);
+      await fire(byFkey(panel, "settings-save"));
+      await settle();
+      const post = calls.find((call) => call.url === "/api/settings" && call.method === "POST");
+      expect(post).toBeTruthy();
+      expect(post!.body.providerWaitMs).toBe(3000);
+    }));
+
+    await withState({
+      settingsPanelOpen: true,
+      settings,
+      settingsPending: false,
+      snap,
+    }, () => withRequests([
+      { status: 200, json: { ok: true, settings: { ...settings, providerWaitMs: 7500 }, scanWindowHours: 36 } },
+      { status: 200, json: snap },
+    ], async (calls) => {
+      M.renderSettingsPanel();
+      await fire(byFkey(domById.get("settings-panel")!, "settings-reset"));
+      await settle();
+      const post = calls.find((call) => call.url === "/api/settings" && call.method === "POST");
+      expect(post).toBeTruthy();
+      expect(post!.body.providerWaitMs).toBe(7500);
+    }));
+  });
+
   test("(3c) the review-worker chip writes the shared server setting", async () => {
     const snap = reviewBoard();
     await withState({
