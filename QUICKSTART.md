@@ -1,9 +1,12 @@
 # Quickstart
 
-The Ant Hill shows every AI coding session running on your Mac in one window —
+Formic shows every AI coding session running on your Mac in one window —
 which one is working, which one is stuck waiting on you. It reads the log files
 Claude Code, Codex, and Cursor already write. Nothing leaves `127.0.0.1`, and it
 never opens your source code.
+
+The public product name is Formic. Startup banners, scripts, and launchd labels may
+still say `The Ant Hill` / `anthill` — those are ops compatibility surfaces.
 
 **You need:** a Mac, and at least one of Claude Code / Codex CLI / Cursor already
 in use. Setup is about 10 minutes.
@@ -85,7 +88,7 @@ the two thresholds that decide what every session is called.
 
 One thing you will see that no other board shows: an **Unverified** section at
 the bottom of each program group. Those are sessions that have gone quiet with no
-process left to check, which is not the same as finished. Ant Hill says so rather
+process left to check, which is not the same as finished. Formic says so rather
 than filing them as ended, and that group deliberately ignores the lookback —
 it is a disclosure of what cannot be accounted for, not a list of recent things.
 
@@ -172,7 +175,7 @@ running you may still find **Send and Interrupt greyed out on a row where Focus
 works**. That is deliberate, and it is worth knowing before you meet it, because
 the row otherwise looks completely healthy.
 
-### What the Ant Hill promises never to do
+### What Formic promises never to do
 
 This is the part to read before you let anything type into your terminals. Each
 of these is a guarantee, not a missing feature:

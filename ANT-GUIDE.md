@@ -1,9 +1,12 @@
 # The Ant Guide
 
+Operator guide for **Formic** (the public product name). Filename and historical
+“Ant” wording in this guide’s title stay for continuity; the board itself is Formic.
+
 **You have several AI coding assistants running at once. This is the one screen
 that tells you which one needs you.**
 
-![The Ant Hill dashboard](docs/guide-shots/before-full.png)
+![Formic dashboard](docs/guide-shots/before-full.png)
 
 Open it at **http://127.0.0.1:4701** and leave it open. It updates itself.
 
@@ -21,7 +24,7 @@ anything. If it is completely empty, see *The board is empty* at the end.
 This guide is about *using* a dashboard that is already running. To install one
 on a new machine, see [QUICKSTART.md](./QUICKSTART.md).
 
-> **The one rule worth learning first.** When the Ant Hill does not know
+> **The one rule worth learning first.** When Formic does not know
 > something, it says so instead of showing a plausible number. A blank is
 > usually honest, not broken.
 
@@ -460,7 +463,7 @@ the board is written in.
 |---|---|
 | **Working** | Actively producing — source activity in the last few minutes. |
 | **Waiting** | Open but not producing: it finished a turn and is waiting on you, or it has gone quiet while its process is still live. |
-| **Unverified** | Silent for a while, and no matching process was found. Ant Hill cannot tell whether it is still alive — so it says that, instead of guessing. |
+| **Unverified** | Silent for a while, and no matching process was found. Formic cannot tell whether it is still alive — so it says that, instead of guessing. |
 | **Finished** | Ended with evidence: the source or hook recorded a session exit, a manifest lane moved to a newer session, you archived it, its process is confirmed gone, or its process is gone and its worktree was deleted. |
 
 **Unverified is the one worth understanding.** It is not a broken session and it
@@ -736,7 +739,7 @@ provider list*, above.
 your browser. "The board is stale" means the snapshot stopped updating.
 
 **cmux**
-: A separate terminal manager. With it, the Ant Hill knows which terminal window
+: A separate terminal manager. With it, Formic knows which terminal window
 each session lives in, which is what makes **Focus** and **Send** possible.
 Without it the dashboard still watches everything, and the write controls stay
 off — see *The promise behind that table*.
@@ -979,7 +982,7 @@ starts in the right place, not that the full term has been proven.
 <details>
 <summary><b>Costs are blank, or say "cost unavailable"</b></summary>
 
-Dollar figures come from a separate tool (OpenBurnBar). Without it, the Ant Hill
+Dollar figures come from a separate tool (OpenBurnBar). Without it, Formic
 shows cost as unavailable rather than inventing a `$0`. Token counts still work.
 
 </details>

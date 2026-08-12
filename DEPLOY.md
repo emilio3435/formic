@@ -1,4 +1,7 @@
-# The Ant Hill — deploy & ports rulebook
+# Formic — deploy & ports rulebook
+
+The public product name is Formic. LaunchAgent labels, script names, and log paths
+below still use `anthill` / Ant Hill as ops compatibility identifiers.
 
 The safety net that keeps a hand-fumbled deploy from taking down the live dashboard.
 When in doubt, use the scripts — they encode every rule below.
