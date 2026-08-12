@@ -2613,7 +2613,9 @@ body.feed-frozen .programs { opacity: 0.62; }
     grid-row: 1 / 2;
     max-width: none;
     max-height: none;
-    border: 1px solid color-mix(in srgb, var(--slate) 28%, var(--line));
+    border-top: 1px solid color-mix(in srgb, var(--slate) 28%, var(--line));
+    border-right: 1px solid color-mix(in srgb, var(--slate) 28%, var(--line));
+    border-bottom: 1px solid color-mix(in srgb, var(--slate) 28%, var(--line));
     border-radius: var(--radius-sm);
     background: color-mix(in srgb, var(--slate) 4%, var(--sand));
     box-shadow: none;
@@ -4966,7 +4968,9 @@ body.feed-frozen .programs { opacity: 0.62; }
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  border: 1px solid color-mix(in srgb, var(--slate) 28%, var(--line));
+  border-top: 1px solid color-mix(in srgb, var(--slate) 28%, var(--line));
+  border-right: 1px solid color-mix(in srgb, var(--slate) 28%, var(--line));
+  border-bottom: 1px solid color-mix(in srgb, var(--slate) 28%, var(--line));
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--slate) 4%, var(--sand));
 }
