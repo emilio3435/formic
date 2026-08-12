@@ -148,7 +148,7 @@ describe("health rail v2 DOM contract", () => {
     expect(M.stripTldrRepoPrefix("cooper-scheduler: cooper-scheduler has Draft Sheet waiting", "cooper-scheduler")).toBe("has Draft Sheet waiting");
   });
 
-  test("setTldrView syncs facetProgram so chevrons/chips filter the board", async () => {
+  test("setTldrView syncs facetProgram so repo-lane chevrons still page the dossier", async () => {
     const { M } = await setupRailDom();
     M.state.snap = twoRepoSnapFixture();
     M.state.facetProgram = "";
@@ -160,6 +160,73 @@ describe("health rail v2 DOM contract", () => {
     M.setTldrView("ALL");
     expect(M.state.tldrView).toBe("ALL");
     expect(M.state.facetProgram).toBe("");
+  });
+
+  test("proof row filters the board and keeps the fleet TL;DR", async () => {
+    const { doc, M } = await setupRailDom();
+    M.state.snap = twoRepoSnapFixture();
+    M.state.facetProgram = "";
+    M.state.uiReady = false;
+    M.renderHealthTldrLane();
+    const row = findClass(doc.byId("health-tldr-lane"), "tldr-proof-row");
+    expect(row).toBeTruthy();
+    fireClick(row);
+    expect(M.state.tldrView).toBe("ALL");
+    expect(M.state.facetProgram).toBe("p-a");
+    const lane = doc.byId("health-tldr-lane");
+    expect(lane.classList.contains("is-repo-scoped")).toBe(false);
+    expect(lane.attributes["aria-label"] || "").toMatch(/all repos/i);
+  });
+
+  test("chip filters the board, marks active, and does not page the rail", async () => {
+    const { doc, M } = await setupRailDom();
+    M.state.snap = twoRepoSnapFixture();
+    M.state.facetProgram = "";
+    M.state.uiReady = false;
+    M.renderHealthTldrLane();
+    fireClick(findChip(doc, "repoB"));
+    expect(M.state.tldrView).toBe("ALL");
+    expect(M.state.facetProgram).toBe("p-b");
+    expect(doc.byId("health-tldr-lane").classList.contains("is-repo-scoped")).toBe(false);
+    expect(findChip(doc, "repoB").classList.contains("is-active")).toBe(true);
+    expect(findChip(doc, "repoA").classList.contains("is-active")).toBe(false);
+  });
+
+  test("setFacetProgram does not rewrite the fleet TL;DR into a repo dossier", async () => {
+    const { doc, M } = await setupRailDom();
+    M.state.snap = twoRepoSnapFixture();
+    M.state.tldrView = "ALL";
+    M.state.uiReady = false;
+    M.state.facetProgram = "";
+    M.renderHealthTldrLane();
+    M.setFacetProgram("p-b");
+    expect(M.state.facetProgram).toBe("p-b");
+    expect(M.state.tldrView).toBe("ALL");
+    expect(doc.byId("health-tldr-lane").classList.contains("is-repo-scoped")).toBe(false);
+  });
+
+  test("clearing the program facet restores ALL if a chevron had paged the rail", async () => {
+    const { M } = await setupRailDom();
+    M.state.snap = twoRepoSnapFixture();
+    M.state.uiReady = false;
+    M.renderHealthTldrLane();
+    M.setTldrView("repoB");
+    expect(M.state.tldrView).toBe("repoB");
+    M.setFacetProgram("");
+    expect(M.state.facetProgram).toBe("");
+    expect(M.state.tldrView).toBe("ALL");
+  });
+
+  test("a snapshot tick with fleet TL;DR does not wipe a chip filter", async () => {
+    const { M } = await setupRailDom();
+    M.state.snap = twoRepoSnapFixture();
+    M.state.uiReady = false;
+    M.renderHealthTldrLane();
+    M.setFacetProgram("p-b");
+    expect(M.state.facetProgram).toBe("p-b");
+    M.applyTldrFacetSync("ALL");
+    expect(M.state.tldrView).toBe("ALL");
+    expect(M.state.facetProgram).toBe("p-b");
   });
 });
 
@@ -229,16 +296,20 @@ describe("pager + attention + staleness", () => {
     expect(textOf(findClass(doc.byId("health-tldr-lane"), "tldr-attention-count"))).toBe("all clear");
   });
 
-  test("clicking a chip jumps to that repo view; incoming data never yanks the view", async () => {
+  test("clicking a chip keeps the fleet header; incoming data never yanks the board filter", async () => {
     const { doc, M } = await setupRailDom();
     M.state.snap = twoRepoSnapFixture();
     M.state.tldrView = "ALL";
+    M.state.facetProgram = "";
     M.renderHealthTldrLane();
     fireClick(findChip(doc, "repoB"));
-    expect(M.state.tldrView).toBe("repoB");
+    expect(M.state.tldrView).toBe("ALL");
+    expect(M.state.facetProgram).toBe("p-b");
     M.state.snap = twoRepoSnapFixture({ repoA: "needs-you" });
+    M.applyTldrFacetSync("ALL");
     M.renderHealthTldrLane();
-    expect(M.state.tldrView).toBe("repoB");
+    expect(M.state.tldrView).toBe("ALL");
+    expect(M.state.facetProgram).toBe("p-b");
   });
 
   test("a heartbeat older than 7m marks the lane stale but keeps the story", async () => {
@@ -402,6 +473,50 @@ describe("header disclosure — collapse/expand state machine", () => {
       fireClick(toggle);
       expect(doc.byId("cleanup-status")).toBe(region);
       expect(region.textContent).toBe("sweep running");
+    });
+  });
+
+  test("a snapshot paint does not move the collapse toggle when it is already placed", async () => {
+    await withHeaderHarness(({ doc, M }) => {
+      M.state.snap = repoSnapFixture();
+      M.renderHealthRail();
+      const toggle = doc.byId("header-summary-toggle");
+      const signals = toggle.parent;
+      expect(signals.firstElementChild).toBe(toggle);
+      let moves = 0;
+      const orig = signals.insertBefore.bind(signals);
+      signals.insertBefore = (...args: unknown[]) => {
+        moves += 1;
+        return orig(...args);
+      };
+      M.renderHealthRail();
+      M.renderHealthRail();
+      expect(moves).toBe(0);
+      expect(signals.firstElementChild).toBe(toggle);
+      expect(doc.byId("header-summary-toggle")).toBe(toggle);
+    });
+  });
+
+  test("collapse moves the toggle once; later paints leave it at the end", async () => {
+    await withHeaderHarness(({ doc, M }) => {
+      M.state.snap = repoSnapFixture();
+      M.renderHealthRail();
+      const toggle = doc.byId("header-summary-toggle");
+      const signals = toggle.parent;
+      let moves = 0;
+      const orig = signals.insertBefore.bind(signals);
+      signals.insertBefore = (...args: unknown[]) => {
+        moves += 1;
+        return orig(...args);
+      };
+      fireClick(toggle);
+      expect(moves).toBe(1);
+      expect(signals.lastElementChild).toBe(toggle);
+      moves = 0;
+      M.renderHealthRail();
+      M.renderHealthRail();
+      expect(moves).toBe(0);
+      expect(signals.lastElementChild).toBe(toggle);
     });
   });
 });

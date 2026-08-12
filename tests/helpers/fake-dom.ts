@@ -24,6 +24,8 @@ export function makeNode(tag: string): any {
     get childElementCount() { return node.children.length; },
     get firstChild() { return node.children[0] || null; },
     get firstElementChild() { return node.children[0] || null; },
+    get lastChild() { return node.children[node.children.length - 1] || null; },
+    get lastElementChild() { return node.children[node.children.length - 1] || null; },
     get nextSibling() {
       if (!node.parent) return null;
       const i = node.parent.children.indexOf(node);
@@ -253,6 +255,7 @@ export async function setupRailDom(): Promise<{ doc: any; M: any }> {
   M.state.queueError = "";
   M.state.widgetCustomizerOpen = false;
   M.state.tldrView = "ALL";
+  M.state.facetProgram = "";
   M.state.cleanup = { running: false, error: "", view: null, at: 0 };
   M.state.cleaner = { sessionId: "", code: "", error: "", launching: false };
   M.state.headerCollapsed = false;

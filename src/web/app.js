@@ -1916,12 +1916,20 @@ function syncHeaderDisclosure() {
     toggle.setAttribute("aria-expanded", String(!collapsed));
     /* Keep DOM, visual and keyboard order in agreement. Collapsed puts Expand
        after the persistent controls; expanded restores the shipped first-control
-       geometry. Re-focus the same node because browsers drop focus on a move. */
+       geometry. Skip the move when the node is already there: Chromium still
+       detaches on insertBefore(node, node-or-same-slot), and this sync runs on
+       every rail paint — including snapshot ticks that do not change mode. */
     const signals = toggle.parentElement || toggle.parent;
     if (signals && typeof signals.insertBefore === "function") {
-      const heldFocus = document.activeElement === toggle;
-      signals.insertBefore(toggle, collapsed ? null : signals.firstElementChild);
-      if (heldFocus && typeof toggle.focus === "function") toggle.focus({ preventScroll: true });
+      const kids = signals.children || [];
+      const first = signals.firstElementChild || kids[0] || null;
+      const last = signals.lastElementChild || kids[kids.length - 1] || null;
+      const alreadyPlaced = collapsed ? last === toggle : first === toggle;
+      if (!alreadyPlaced) {
+        const heldFocus = document.activeElement === toggle;
+        signals.insertBefore(toggle, collapsed ? null : first);
+        if (heldFocus && typeof toggle.focus === "function") toggle.focus({ preventScroll: true });
+      }
     }
   }
 }
@@ -4110,6 +4118,7 @@ function renderHealthRail() {
     state.cleaner.error,
     envelopeRaw,
     state.tldrView || "ALL",
+    state.facetProgram || "",
     staleBucket,
     /* The disclosure mode. Without it, a toggle on a quiet fleet would sync
        the hidden states below and then hit an unchanged signature — leaving
@@ -4337,18 +4346,19 @@ function tldrRepoOrder(repos) {
   });
 }
 
-/** Derive program facet from TL;DR view (repo name → program id). ALL clears. */
+/** Derive program facet from a paged TL;DR view (repo name → program id).
+ *  ALL is the fleet header and does not own the board filter — snapshot ticks
+ *  must not wipe a chip/proof-row facet. setTldrView("ALL") clears explicitly. */
 function applyTldrFacetSync(view = state.tldrView) {
   const next = view || "ALL";
-  if (next === "ALL") {
-    state.facetProgram = "";
-    return;
-  }
+  if (next === "ALL") return;
   const program = programForTldrRepo(state.snap, next);
   state.facetProgram = program ? program.id : "";
 }
 
-/** When the Filters bar / drawer sets program scope, keep TL;DR on the same repo. */
+/** Board scope and the fleet TL;DR are independent. Setting a program filter
+ *  must not rebuild the masthead into a repo dossier. Clearing the filter
+ *  restores ALL if a chevron had paged the rail. */
 function applyFacetTldrSync(programId) {
   if (!programId) {
     if (state.tldrView !== "ALL") {
@@ -4356,16 +4366,20 @@ function applyFacetTldrSync(programId) {
       saveTldrView();
       state.paintSig.widgets = "";
     }
-    return;
   }
-  const scoped = ((state.snap && state.snap.programs) || []).find((p) => p.id === programId);
-  if (!scoped) return;
-  const name = programName(scoped) || scoped.name || scoped.id;
-  if (state.tldrView !== name) {
-    state.tldrView = name;
-    saveTldrView();
-    state.paintSig.widgets = "";
-  }
+}
+
+/** Proof rows and chips filter the tree. They do not page the TL;DR. */
+function filterBoardToTldrRepo(repoName) {
+  const program = programForTldrRepo(state.snap, repoName);
+  if (!program) return;
+  setFacetProgram(program.id);
+}
+
+function tldrRepoBoardActive(repoName) {
+  if (state.tldrView === repoName) return true;
+  const program = programForTldrRepo(state.snap, repoName);
+  return !!(program && state.facetProgram === program.id);
 }
 
 function setTldrView(view) {
@@ -4373,7 +4387,8 @@ function setTldrView(view) {
   state.tldrView = next;
   saveTldrView();
   state.paintSig.widgets = "";
-  applyTldrFacetSync(next);
+  if (next === "ALL") state.facetProgram = "";
+  else applyTldrFacetSync(next);
   /* Full board paint so the tree/filter bar follow the chevron; rail-only harnesses
      (unit tests) leave uiReady unset and only repaint the health rail. */
   if (state.uiReady) render();
@@ -4567,6 +4582,8 @@ function renderHealthTldrLane() {
     globalThis.TheAntHill.stripTldrRepoPrefix = stripTldrRepoPrefix;
     globalThis.TheAntHill.setTldrView = setTldrView;
     globalThis.TheAntHill.applyTldrFacetSync = applyTldrFacetSync;
+    globalThis.TheAntHill.applyFacetTldrSync = applyFacetTldrSync;
+    globalThis.TheAntHill.filterBoardToTldrRepo = filterBoardToTldrRepo;
     globalThis.TheAntHill.setFacetProgram = setFacetProgram;
     globalThis.TheAntHill.repoScopedReadings = repoScopedReadings;
     globalThis.TheAntHill.tldrRepoOrder = tldrRepoOrder;
@@ -4599,7 +4616,7 @@ function renderTldrAllLane(lane, parsed, time, attentionCount) {
     class: "chev",
     "aria-label": first ? `Filter board to ${first.repo}` : "Next repo view",
     text: "›",
-    onclick: () => { if (first) setTldrView(first.repo); },
+    onclick: () => { if (first) filterBoardToTldrRepo(first.repo); },
   });
   if (!first) next.setAttribute("disabled", "");
 
@@ -4644,7 +4661,7 @@ function renderTldrAllLane(lane, parsed, time, attentionCount) {
         class: "tldr-proof-row " + sigClass,
         role: "listitem",
         title: (repo.summary || "") + " — click to filter board",
-        onclick: () => setTldrView(repo.repo),
+        onclick: () => filterBoardToTldrRepo(repo.repo),
       },
         el("span", { class: "tldr-proof-rail", "aria-hidden": "true" }),
         el("span", { class: "tldr-proof-name", text: repo.repo }),
@@ -4663,13 +4680,13 @@ function renderTldrAllLane(lane, parsed, time, attentionCount) {
   const mentioned = new Set(parsed.repos.map((r) => String(r.repo).toLowerCase()));
   for (const repo of ordered) {
     const name = repo.repo;
-    const active = state.tldrView === name;
+    const active = tldrRepoBoardActive(name);
     strip.append(el("button", {
       type: "button",
       class: "tldr-chip " + tldrCardSignalClass(repo.signal) + (active ? " is-active" : ""),
       role: "listitem",
       title: `Filter board to ${name}`,
-      onclick: () => setTldrView(name),
+      onclick: () => filterBoardToTldrRepo(name),
     }, el("span", { class: "dot" }), name));
   }
   const quiet = [...liveRepoNames(state.snap)].filter((name) => !mentioned.has(name)).length;
@@ -5775,10 +5792,11 @@ function passesLens(agent, values, matches) {
 }
 
 /* Set from the program drawer ("Only this program"), cleared from the Filters
-   bar, or driven by the TL;DR chevrons/chips (shared scope). Programs are
-   unbounded, so there is no always-on chip list for them — the bar carries one
-   clear-chip while the lens is active, which is the whole disclosure obligation:
-   a narrowing is always one visible control from off. */
+   bar, or driven by the TL;DR proof rows/chips (board scope only — the fleet
+   story stays). Chevrons on a repo lane still call setTldrView to page the
+   dossier. Programs are unbounded, so there is no always-on chip list for them
+   — the bar carries one clear-chip while the lens is active, which is the whole
+   disclosure obligation: a narrowing is always one visible control from off. */
 function setFacetProgram(programId) {
   const next = state.facetProgram === programId ? "" : programId;
   if (next === state.facetProgram) return;
