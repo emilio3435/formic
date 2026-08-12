@@ -2419,10 +2419,8 @@ body.feed-frozen .programs { opacity: 0.62; }
 
 .pane-inspector {
   --inspector-pad-x: 1.2rem;
-  /* One pinned band above the desk head: the vitals row (the verdict head
-     scrolls). 8px + 23.2px pill + 10px + 1px border. The desk head's sticky
-     `top` derives from this — change them together or a seam opens. */
-  --drawer-vitals-h: 42px;
+  /* One pinned band above the desk head used to live here. Session facts now
+     sit in the command header, so this offset token is gone. */
   flex: none;
   width: min(var(--inspector-w), 100%);
   min-height: 0;        /* let the flex child scroll instead of clipping at the fold */
@@ -2993,31 +2991,7 @@ body.feed-frozen .programs { opacity: 0.62; }
    rule (`*, *::before, *::after { animation: none !important }`) below. */
 
 .inspector-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; }
-/* Sticky drawer head — control-room band, one scroll container.
-   The pane itself scrolls; the head sticks top with opaque canvas and a
-   hairline rule so transcript prose never ghosts through. Matches dock. */
-.inspector-head.sticky-head {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  background: var(--surface);
-  border-bottom: 1px solid var(--line);
-  margin: calc(-1.15rem) calc(-1 * var(--inspector-pad-x)) 0.6rem;
-  padding: 0.9rem var(--inspector-pad-x) 0.75rem;
-}
-.drawer-section-head {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  background: var(--surface);
-  border-bottom: 1px solid var(--line);
-  padding: 0.45rem 0 0.4rem;
-  margin-bottom: 0.6rem;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
+/* The pane itself scrolls. Session facts live in the command header. */
 .drawer-doc,
 .drawer-desk {
   display: flex;
@@ -3211,23 +3185,6 @@ body.feed-frozen .programs { opacity: 0.62; }
    terminals that claim this session. Instrument type, no color flood: the one
    contested row takes ember ink on its rail, everything else stays neutral. */
 .identity-block { margin-top: 0.85rem; }
-.identity-verdict { margin: 0 0 0.2rem; color: var(--ink); font-weight: 600; font-size: 12.5px; }
-.identity-reason { margin: 0 0 0.5rem; color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
-.identity-steps {
-  list-style: none; margin: 0 0 0.6rem; padding: 0 0 0 0.7rem;
-  border-left: 1px solid var(--line); display: grid; gap: 0.4rem;
-}
-.identity-step { display: grid; gap: 0.1rem; font-size: 12px; }
-.identity-step-tier { color: var(--ink); font-weight: 600; }
-.identity-step-outcome {
-  color: var(--muted); font-family: var(--font-mono); font-size: 11px;
-  letter-spacing: 0.02em; text-transform: uppercase;
-}
-.identity-step--quarantined .identity-step-outcome,
-.identity-step--ambiguous .identity-step-outcome,
-.identity-step--rejected .identity-step-outcome { color: var(--failed); }
-.identity-step--matched .identity-step-outcome { color: var(--moss); }
-.identity-step-detail { color: var(--muted); overflow-wrap: anywhere; }
 .identity-note { margin: 0 0 0.5rem; color: var(--muted); font-size: 12px; }
 .identity-error { margin: 0 0 0.4rem; color: var(--failed); font-size: 12px; overflow-wrap: anywhere; }
 .identity-surfaces { display: grid; gap: 0.4rem; justify-items: start; }
@@ -3494,16 +3451,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .chat-turn--assistant .chat-turn-body {
   border-left: 2px solid color-mix(in srgb, var(--moss) 45%, var(--line));
 }
-.evidence-control-link { display: flex; flex-direction: column; gap: 0.4rem; }
-.evidence-control-sentence { margin: 0; font-size: 13.5px; line-height: 1.4; }
-.evidence-ids { display: flex; flex-wrap: wrap; gap: 0.35rem; }
-.evidence-copy-id { min-height: 30px; font-size: 11.5px; }
-/* Tighter than a standalone .btn.sm because these three are one set, and the
-   set reads as a row or not at all. At the shelf's 1440px width the inherited
-   0.65rem gutters put the row 2px over the panel and wrapped the last button
-   onto a line of its own, straight across the scroll fold. Carries .btn to
-   outrank the .btn.sm shorthand it is narrowing. */
-.evidence-ids .btn.evidence-copy-id { padding-inline: 0.45rem; }
 .detail-grid { display: grid; grid-template-columns: 8rem 1fr; gap: 0.45rem 0.8rem; margin: 0; }
 .detail-grid dt { font: 500 11px/1.2 var(--font-mono); letter-spacing: 0.07em; text-transform: uppercase; color: var(--faint-strong); padding-top: 0.1rem; }
 .detail-grid dd { margin: 0; font-size: 13.5px; overflow-wrap: anywhere; }
@@ -3555,7 +3502,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 
 .artifact-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.3rem; }
 .artifact-list li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 0.45rem; min-width: 0; font-size: 12.5px; }
-.artifact-kind { font-family: var(--font-mono); font-size: 10px; color: var(--faint-strong); text-transform: uppercase; letter-spacing: 0.06em; display: inline-flex; align-items: center; gap: 4px; }
 .artifact-path { min-width: 0; font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .artifact-copy {
   appearance: none;
@@ -4681,24 +4627,8 @@ body.feed-frozen .programs { opacity: 0.62; }
 
 /* ---------- 65/35 integration layer ---------- */
 
-.drawer-section-head .section-title { margin: 0; flex: 1; }
-.evidence-path-line {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-.evidence-path-line code {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .evidence-path-copy { flex: none; margin-left: auto; }
 .git-line { display: flex; align-items: center; gap: 6px; }
-.git-dirty, .git-clean { font: 500 11px var(--font-mono); }
-.git-clean { color: var(--moss); }
-.git-none { color: var(--faint-strong); }
 
 /* The 8rem label column was sized for the fixed 380px desk; on the wide 35% track
    the value column measures 181px at a 1025px viewport and the labels starve
@@ -5039,38 +4969,6 @@ body.feed-frozen .programs { opacity: 0.62; }
   border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--slate) 4%, var(--sand));
 }
-.drawer-evidence-head {
-  display: grid;
-  grid-template-columns: 32px minmax(0, 1fr);
-  justify-content: stretch;
-  gap: 9px;
-  z-index: 1;
-  margin: 0;
-  padding: 11px 12px;
-  border-bottom-color: color-mix(in srgb, var(--slate) 24%, var(--line));
-  background: color-mix(in srgb, var(--slate) 8%, var(--raise));
-}
-.drawer-evidence-mark {
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  border: 1px solid color-mix(in srgb, var(--slate) 28%, var(--line));
-  border-radius: 7px;
-  color: var(--slate);
-  background: var(--raise);
-}
-.drawer-evidence-mark .ico { width: 16px; height: 16px; }
-.drawer-evidence-title { min-width: 0; }
-.drawer-evidence-kicker {
-  display: block;
-  margin-bottom: 2px;
-  color: var(--faint-strong);
-  font: 500 9.5px/1.2 var(--font-mono);
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-}
-.drawer-evidence-head .section-title { color: var(--ink); font-size: 15px; }
 .drawer-evidence-body { display: block; padding: 10px; }
 .evidence-inspector-panel { display: grid; gap: 9px; }
 .evidence-section {
@@ -5098,31 +4996,10 @@ body.feed-frozen .programs { opacity: 0.62; }
 }
 .evidence-section .directory-relation-note { margin-bottom: 0; }
 .identity-block.evidence-section { margin-top: 0; }
-.evidence-empty {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  gap: 10px;
-  align-items: center;
-  padding: 12px;
-  border: 1px dashed var(--line-strong);
-  border-radius: 7px;
-  background: var(--raise);
-}
-.evidence-empty-mark {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 7px;
-  color: var(--slate);
-  background: color-mix(in srgb, var(--slate) 9%, var(--raise));
-}
-.evidence-empty strong { display: block; margin-bottom: 2px; font-size: 12.5px; }
 
 @media (min-width: 861px) {
   .drawer-grid .drawer-doc,
   .drawer-grid .drawer-desk { min-height: 0; }
-  .drawer-grid .drawer-desk .drawer-section-head { top: 0; }
 }
 @media (max-width: 860px) {
   /* The fixed sheet keeps one bounded chat app and switches its second region
@@ -5154,7 +5031,6 @@ body.feed-frozen .programs { opacity: 0.62; }
     overflow-y: auto;
     overscroll-behavior: contain;
   }
-  .drawer-section-head { position: static; }
 }
 
 /* ---------- Formic dashboard semantic pass ----------
@@ -5439,3 +5315,211 @@ body.feed-frozen .programs { opacity: 0.62; }
   }
   .masthead-signals .conn { margin: 0; }
 }
+
+/* Implementation CSS delta for the Evidence column.
+   Append to src/web/styles.css. Tokens stay Formic; this is the exhibit
+   chrome renderEvidence would add. Scoped to .drawer-desk so roster
+   .section-title is untouched. */
+
+/* CWD-COPY-1 sentence. Class exists in app.js; styles.css has no rule today. */
+.directory-relation-note {
+  margin: 0.15rem 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+/* CSP-safe stand-in for the inline flex wrapper renderEvidence uses on path rows. */
+.evidence-value {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* Debug commandHints[] are fetched but never painted. Same ramp as identity-note. */
+.identity-hints {
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.2rem;
+  width: 100%;
+}
+.identity-hint {
+  font: 500 11.5px/1.4 var(--font-mono);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.inspector-panel > .identity-block { margin-top: 0; }
+.drawer-desk .inspector-panel { gap: 1.15rem; }
+
+/* ---------- exhibit heads ----------
+   Nouns: 16px filled/official marks inline, same optical size as harness
+   logos. No tile, rail, or border. Verbs (copy, ↗, dock) stay stroke ICON_PATHS.
+   Titles: 14.5px UI face, sentence case, no hairline. */
+.exhibit-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0 0 0.5rem;
+  min-width: 0;
+}
+.exhibit-mark {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+.exhibit-mark img {
+  width: 16px;
+  height: 16px;
+  display: block;
+  object-fit: contain;
+}
+.exhibit-mark.git-dirty::after {
+  content: "";
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warn);
+  box-shadow: 0 0 0 2px var(--raise);
+}
+
+.drawer-desk .exhibit-head .section-title {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  font: 600 14.5px/1.15 var(--font-ui);
+  letter-spacing: -0.02em;
+  text-transform: none;
+  color: var(--ink);
+  border: 0;
+  padding: 0;
+  gap: 0;
+}
+.drawer-desk .exhibit-head .section-title .rule { display: none; }
+
+.git-line .ico { width: var(--icon-sm); height: var(--icon-sm); flex: none; }
+
+/* In-tree files under Workspace, and PR rows. Labeled card, not an inline chip. */
+.exhibit > .artifact-list { margin-top: 0.55rem; }
+.drawer-desk .artifact-list {
+  gap: 0.45rem;
+}
+.drawer-desk .artifact-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  column-gap: 0.45rem;
+  row-gap: 0.12rem;
+  align-items: center;
+  padding: 0.55rem 0.6rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--raise);
+  box-shadow: var(--shadow-soft);
+}
+.artifact-label {
+  font: 600 13.5px/1.25 var(--font-ui);
+  color: var(--ink);
+  min-width: 0;
+}
+.drawer-desk .artifact-path {
+  grid-column: 1;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+a.artifact-path {
+  color: var(--slate);
+  text-decoration: none;
+}
+a.artifact-path:hover { text-decoration: underline; }
+.artifact-copy {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  width: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--faint-strong);
+  cursor: pointer;
+}
+.artifact-copy:hover { color: var(--ink); background: var(--sand); }
+.artifact-copy .ico { width: 0.9rem; height: 0.9rem; }
+
+/* Route disclosure sits in the exhibit head, top-right. */
+.identity-expand {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--faint-strong);
+  cursor: pointer;
+}
+.identity-expand:hover { color: var(--ink); background: var(--sand); }
+.identity-expand .ico { width: 0.95rem; height: 0.95rem; transition: transform 150ms ease; }
+.identity-expand[aria-expanded="true"] .ico { transform: rotate(90deg); }
+.exhibit-head .route-chip { margin-left: 0.15rem; }
+
+.route-chip {
+  flex: none;
+  font: 500 10px/1 var(--font-mono);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  padding: 0.28rem 0.5rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--raise);
+  color: var(--muted);
+}
+.route-chip--exact {
+  color: var(--moss);
+  background: var(--moss-soft);
+  border-color: color-mix(in srgb, var(--moss) 40%, var(--line));
+}
+.route-chip--lock {
+  color: var(--failed);
+  background: var(--ember-soft);
+  border-color: color-mix(in srgb, var(--failed) 30%, var(--line));
+}
+.route-bind {
+  display: grid;
+  gap: 0.12rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--raise);
+}
+.route-bind + .route-bind { margin-top: 0.4rem; }
+.route-bind-kicker {
+  font: 500 10.5px/1.2 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--moss);
+}
+.route-bind--lock .route-bind-kicker,
+.route-bind--warn .route-bind-kicker { color: var(--failed); }
+.route-bind p { margin: 0; font-size: 12.5px; color: var(--body); overflow-wrap: anywhere; }
+.exhibit > .evidence-value { margin: 0; }
+.route-bind + .identity-note { margin-top: 0.5rem; }

@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="History">
+  <path fill="#5e6b7a" d="M6.2 4.4h11.6c.88 0 1.6.72 1.6 1.6v13.2c0 .88-.72 1.6-1.6 1.6H6.2c-.88 0-1.6-.72-1.6-1.6V6c0-.88.72-1.6 1.6-1.6Z"/>
+  <path fill="#eef2f5" d="M7.4 8.1h9.2v1.5H7.4V8.1Zm0 3.2h9.2v1.5H7.4v-1.5Zm0 3.2h6.4v1.5H7.4v-1.5Z"/>
+  <path fill="#3d4a56" d="M8.1 2.6h7.8c.5 0 .9.4.9.9v1.4H7.2V3.5c0-.5.4-.9.9-.9Z"/>
+</svg>

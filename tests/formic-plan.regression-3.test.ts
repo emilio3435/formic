@@ -10,8 +10,8 @@ test("[FORMIC-INSPECTOR-CSP] inspector markup uses stylesheet classes only", () 
   const styles = readFileSync(resolve(import.meta.dir, "../src/web/styles.css"), "utf8");
 
   expect(app).not.toMatch(/\bstyle\s*:\s*["'`]/);
-  expect(app).toContain('class: "evidence-path-line"');
+  expect(app).toContain('class: "evidence-value"');
   expect(app).toContain('class: "shelf-rail-tail"');
-  expect(styles).toMatch(/\.evidence-path-line\s*\{[^}]*display:\s*flex[^}]*align-items:\s*center[^}]*gap:\s*6px/s);
+  expect(styles).toMatch(/\.evidence-value\s*\{[^}]*display:\s*flex[^}]*align-items:\s*center[^}]*gap:\s*6px/s);
   expect(styles).toMatch(/\.shelf-rail-tail\s*\{[^}]*display:\s*flex[^}]*align-items:\s*center[^}]*gap:\s*8px/s);
 });

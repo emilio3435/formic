@@ -60,6 +60,210 @@ test("CWD-COPY-1 linked controls stay exact while directory provenance is neutra
   expect(findAll(row, (node) => node.attributes?.role === "img")).toHaveLength(0);
 });
 
+describe("Evidence column exhibits", () => {
+  function extractFn(signature: string): string {
+    const start = source.indexOf(signature);
+    if (start === -1) return "";
+    const braceStart = source.indexOf("{", start);
+    if (braceStart === -1) return "";
+    let depth = 0;
+    for (let i = braceStart; i < source.length; i++) {
+      const ch = source[i];
+      if (ch === "{") depth++;
+      else if (ch === "}") {
+        depth--;
+        if (depth === 0) return source.slice(start, i + 1);
+      }
+    }
+    return "";
+  }
+
+  const TRACE = {
+    resolution: "ambiguous" as const,
+    reason: "cmux 6952219A-6C2F-4A61-9C0E-1F0B2D3E4A55 has conflicting open agent session files on ttys082.",
+    surfaceId: "SURFACE-82",
+    steps: [
+      { tier: "recorded", outcome: "skipped", detail: "No recorded cmux target IDs on this source." },
+      { tier: "session", outcome: "quarantined", detail: "ttys082 has open session files for two providers." },
+      { tier: "cwd", outcome: "no-match", detail: "Two terminals report the same working folder." },
+    ],
+  };
+
+  test("omits Git when the object is absent and never paints emoji lights", () => {
+    const evidence = withDom(() => M.renderEvidence(agent({ cwd: "/repos/session" })));
+    expect(byEvidenceSection(evidence, "git")).toBeNull();
+    const text = textOf(evidence);
+    expect(text).not.toContain("— no git");
+    expect(text).not.toContain("⚪");
+    expect(text).not.toContain("🟡");
+    expect(text).not.toContain("🟢");
+  });
+
+  test("omits a transcript artifact the conversation foot already owns", () => {
+    const selected = agent({
+      cwd: "/repos/session",
+      artifacts: [
+        { kind: "transcript", label: "CODEX transcript", path: "/tmp/session.jsonl" },
+        { kind: "file", label: "Notes", path: "/repos/session/notes.md" },
+      ],
+    });
+    const evidence = withDom(() => M.renderEvidence(selected));
+    const text = textOf(evidence);
+    expect(text).not.toContain("/tmp/session.jsonl");
+    expect(text).toContain("notes.md");
+    expect(text).not.toContain("/repos/session/notes.md");
+  });
+
+  test("in-tree files under cwd render the relative suffix only", () => {
+    const evidence = withDom(() => M.renderEvidence(agent({
+      cwd: "/repos/session",
+      artifacts: [{ kind: "file", label: "Report", path: "/repos/session/docs/REPORT.md" }],
+    })));
+    const text = textOf(evidence);
+    expect(text).toContain("docs/REPORT.md");
+    expect(text).not.toContain("/repos/session/docs/REPORT.md");
+    expect(byClass(evidence, "artifact-label") && textOf(byClass(evidence, "artifact-label"))).toBe("Report");
+  });
+
+  test("Pull request is its own omit-empty exhibit", () => {
+    const withPr = withDom(() => M.renderEvidence(agent({
+      cwd: "/repos/session",
+      pullRequestUrls: ["https://github.com/example/the-mountain/pull/42"],
+    })));
+    expect(byEvidenceSection(withPr, "pr")).not.toBeNull();
+    expect(textOf(withPr)).toContain("Pull request");
+    expect(textOf(withPr)).toContain("the-mountain/pull/42");
+    const empty = withDom(() => M.renderEvidence(agent({ cwd: "/repos/session", pullRequestUrls: [] })));
+    expect(byEvidenceSection(empty, "pr")).toBeNull();
+  });
+
+  test("quarantined sessions still land a Route exhibit without identityTrace", () => {
+    const quarantined = agent({
+      controlState: "quarantined",
+      target: { resolution: "ambiguous", surfaceId: "SURFACE-82" },
+    });
+    const evidence = withDom(() => M.renderEvidence(quarantined));
+    expect(byEvidenceSection(evidence, "route")).not.toBeNull();
+    expect(byClass(evidence, "identity-block")).not.toBeNull();
+  });
+
+  test("hydrated debug agent.trace paints bind rows the SSE payload omitted", () => {
+    const bare = agent({
+      controlState: "quarantined",
+      target: { resolution: "ambiguous", surfaceId: "SURFACE-82" },
+    });
+    const ui = identityUi({
+      identity: {
+        agentId: "codex:a1",
+        loading: false,
+        error: "",
+        data: { ok: true, agent: { trace: TRACE } },
+      },
+    });
+    const evidence = withDom(() => M.renderEvidence(bare, ui));
+    const text = textOf(evidence);
+    expect(text).toContain("Session ID");
+    expect(text).toContain("ttys082 has open session files for two providers.");
+    expect(text).toContain("Working folder");
+    expect(text).toContain("Two terminals report the same working folder.");
+  });
+
+  test("debug commandHints reach the Route surfaces after load", () => {
+    const locked = agent({
+      identityTrace: TRACE,
+      target: { resolution: "ambiguous", surfaceId: "SURFACE-82" },
+      controlState: "quarantined",
+    });
+    const ui = identityUi({
+      identity: {
+        agentId: "codex:a1",
+        loading: false,
+        error: "",
+        data: {
+          ok: true,
+          agent: { trace: TRACE },
+          relatedSurfaces: [{
+            surfaceId: "SURFACE-82",
+            tty: "ttys082",
+            identityTrace: {
+              commandHints: ["open files: ~/.cmux/sessions/codex-8f3a.jsonl", "hint: lsof -p 41211"],
+            },
+          }],
+        },
+      },
+    });
+    const evidence = withDom(() => M.renderEvidence(locked, ui));
+    expect(textOf(evidence)).toContain("open files: ~/.cmux/sessions/codex-8f3a.jsonl");
+    expect(textOf(evidence)).toContain("hint: lsof -p 41211");
+  });
+
+  test("Exact sessions omit skipped Working folder rows", () => {
+    const exact = agent({
+      target: { resolution: "exact" },
+      identityTrace: {
+        resolution: "exact",
+        matchedTier: "session",
+        steps: [
+          { tier: "session", outcome: "matched", detail: "One cmux pane reports this session on ttys082." },
+          { tier: "cwd", outcome: "skipped", detail: "Working folder skipped because session ID already matched." },
+        ],
+      },
+    });
+    const evidence = withDom(() => M.renderEvidence(exact));
+    const binds = allByClass(evidence, "route-bind");
+    expect(binds.length).toBe(1);
+    expect(textOf(binds[0])).toContain("Session ID");
+    expect(textOf(binds[0])).toContain("ttys082");
+    expect(textOf(evidence)).not.toContain("Working folder skipped");
+    expect(textOf(evidence)).not.toContain("skipped");
+  });
+
+  test("Evidence never paints Verify, header vitals, or a sticky Evidence head", () => {
+    const evidenceFn = extractFn("function renderEvidence(agent, ui = state) {");
+    const drawerFn = extractFn("function renderAgentDrawer(pane, view) {");
+    expect(evidenceFn).toBeTruthy();
+    expect(evidenceFn).not.toContain("agent.tests");
+    expect(evidenceFn).not.toContain('"Verify"');
+    expect(evidenceFn).not.toContain("Tests not reported");
+    expect(drawerFn).not.toContain('class: "drawer-section-head sticky-head drawer-evidence-head"');
+    expect(drawerFn).not.toMatch(/el\("h3", \{ class: "section-title" \}, "Evidence"\)/);
+    const pane = newNode("div");
+    withDom(() => M.renderAgentDrawer(pane, {
+      kind: "agent",
+      agent: agent({ cwd: "/repos/session" }),
+      program: { id: "p", name: "P", agents: [] },
+    }));
+    const desk = byClass(pane, "drawer-desk");
+    expect(byClass(desk, "drawer-evidence-head")).toBeNull();
+    expect(byClass(desk, "chat-msg")).toBeNull();
+    const text = textOf(withDom(() => M.renderEvidence(agent({
+      cwd: "/repos/session",
+      contextPct: 28,
+      tokens: { provenance: "observed", total: 71_000, contextWindow: 258_000, sessionTotal: 2_200_000 },
+      lastAgentMessage: "rebased, 412 tests green",
+    }))));
+    expect(text).not.toContain("Paths & Usage");
+    expect(text).not.toContain("Linked for Focus and Send.");
+    expect(text).not.toContain("Ready · linked");
+    expect(text).not.toContain("rebased, 412 tests green");
+    expect(text).not.toContain("28%");
+    expect(text).not.toContain("2.2M");
+  });
+
+  test("Git dirty uses the official mark plus a pip, never uncommitted prose", () => {
+    const evidence = withDom(() => M.renderEvidence(agent({
+      cwd: "/repos/session",
+      git: { branch: "feat/x", head: "abcdef123456", dirty: true },
+    })));
+    expect(byEvidenceSection(evidence, "git")).not.toBeNull();
+    expect(byClass(evidence, "git-dirty")).not.toBeNull();
+    expect(textOf(evidence)).toContain("feat/x");
+    expect(textOf(evidence)).toContain("@abcdef1");
+    expect(textOf(evidence)).not.toContain("uncommitted");
+    expect(textOf(evidence)).not.toContain("● clean");
+  });
+});
+
 test("CWD-SEM-2 an explicit surface rename still wins when known directories differ", async () => {
   const linked = agent({
     surfaceTitle: "Operator pane name",
@@ -470,6 +674,10 @@ const allByClass = (node: any, token: string) =>
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const byClass = (node: any, token: string) => allByClass(node, token)[0] || null;
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const byEvidenceSection = (node: any, name: string) =>
+  findAll(node, (n) => n.dataset && n.dataset.evidenceSection === name)[0] || null;
 
 /* A stand-in for the module's `state`, for helpers that take it as an argument. */
 function identityUi(overrides: Record<string, unknown> = {}) {
@@ -4137,11 +4345,10 @@ describe("agent drawer — Document · Desk", () => {
       return pane;
     });
     const desk = byClass(drawer, "drawer-desk");
-    expect(textOf(byClass(desk, "drawer-evidence-title"))).toContain("Session inspectorEvidence");
-    expect(byClass(desk, "drawer-evidence-mark")?.children[0]?.tagName).toBe("svg");
-    expect(allByClass(desk, "evidence-section").length).toBeGreaterThanOrEqual(2);
-    expect(byClass(desk, "evidence-section--paths")).not.toBeNull();
-    expect(byClass(desk, "evidence-section--artifacts")).not.toBeNull();
+    expect(byClass(desk, "drawer-evidence-head")).toBeNull();
+    expect(byClass(desk, "drawer-evidence-title")).toBeNull();
+    expect(byEvidenceSection(desk, "workspace")).not.toBeNull();
+    expect(byEvidenceSection(desk, "route")).not.toBeNull();
     expect(styles).toContain("grid-template-columns: minmax(0, 1fr) clamp(280px, 35%, 320px)");
     expect(styles).toContain(".drawer-desk {\n  min-height: 0;\n  overflow-y: auto;");
     expect(styles).toContain(".evidence-section");
@@ -4348,12 +4555,10 @@ describe("RHSP command header consolidation", () => {
     expect(byClass(evidence, "evidence-role")).toBeNull();
     expect(evidenceText).not.toContain("quiet since");
     expect(evidenceText.match(/\/Users\/example/g)).toHaveLength(1);
-    expect(evidenceText).toContain("Workspace and terminal report the same folder");
-    expect(evidenceText).toContain("does not authorize controls");
+    expect(evidenceText).not.toContain("Workspace and terminal report the same folder");
+    expect(evidenceText).not.toContain("does not authorize controls");
     const copy = findAll(evidence, (node: any) => node.attributes?.["aria-label"] === "Copy transcript path")[0];
-    expect(copy).not.toBeNull();
-    expect(copy?.attributes?.["aria-label"]).toBe("Copy transcript path");
-    expect(textOf(copy)).toBe("");
+    expect(copy).toBeUndefined();
     const pathCopies = allByClass(evidence, "evidence-path-copy");
     expect(pathCopies.length).toBeGreaterThan(0);
     expect(pathCopies[0].attributes["aria-label"]).toContain("Copy Workspace path");
@@ -9918,21 +10123,24 @@ describe("FE-B: harness-backed client behavior", () => {
     const evidence = withDom(() => M.renderEvidence(locked));
     const block = byClass(evidence, "identity-block");
     expect(block).not.toBeNull();
-    const text = textOf(block);
-    expect(text).toContain("Not bound");
-    expect(text).toContain("ambiguous");
-    // Every tier the resolver walked, in order, with its own words. THIS is
-    // where the raw identifiers belong.
-    expect(text).toContain("No recorded cmux target IDs on this source.");
-    expect(text).toContain("ttys082 has open session files for two providers.");
-    expect(text).toContain("Two terminals report the same working folder.");
-    expect(allByClass(block, "identity-step").length).toBe(3);
-    // Terminal evidence is opt-in — a button until the operator asks for it.
+    expect(block.dataset.evidenceSection).toBe("route");
+    expect(textOf(byClass(block, "route-chip"))).toBe("Quarantined");
+    expect(byClass(block, "route-chip").className).toContain("route-chip--lock");
+    const binds = allByClass(block, "route-bind");
+    expect(binds.length).toBe(2);
+    expect(textOf(binds[0])).toContain("Session ID");
+    expect(textOf(binds[0])).toContain("ttys082 has open session files for two providers.");
+    expect(textOf(binds[1])).toContain("Working folder");
+    expect(textOf(binds[1])).toContain("Two terminals report the same working folder.");
+    expect(textOf(block)).not.toContain("No recorded cmux target IDs on this source.");
+    expect(textOf(block)).not.toContain("skipped");
+    expect(allByClass(block, "identity-step").length).toBe(0);
     const load = buttonsOf(block).find((b) => String(b.dataset.fkey).startsWith("identity-load:"));
     expect(load).toBeDefined();
-    expect(textOf(load)).toContain("Show which terminals claim this session");
-    // A healthy session with no trace grows no block at all.
-    expect(byClass(withDom(() => M.renderEvidence(agent())), "identity-block")).toBeNull();
+    expect(load.attributes["aria-label"]).toContain("Show which terminals claim this session");
+    const exact = withDom(() => M.renderEvidence(agent()));
+    expect(byEvidenceSection(exact, "route")).not.toBeNull();
+    expect(textOf(byClass(exact, "route-chip"))).toBe("Exact");
   });
 
   test("(1) debug-endpoint evidence becomes 'this tty has both of these sessions open'", () => {
@@ -11368,7 +11576,7 @@ describe("the agent RHSP has one explicit header-content-footer contract", () =>
     expect(chatTab?.attributes["aria-selected"]).toBe("true");
     expect(chatTab?.attributes.tabindex).toBe("0");
     expect(byClass(desk, "drawer-evidence-summary")).toBeNull();
-    expect(byClass(desk, "drawer-evidence-head")).not.toBeNull();
+    expect(byClass(desk, "drawer-evidence-head")).toBeNull();
     await fire(evidenceTab);
     expect(desk?.classList.contains("is-open")).toBe(true);
     expect(grid?.classList.contains("is-evidence")).toBe(true);
