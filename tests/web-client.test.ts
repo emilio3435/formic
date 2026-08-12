@@ -14775,8 +14775,9 @@ describe("header collapse — static masthead and fence contracts", () => {
        masthead and the rail so a frozen feed cannot be hidden by collapsing. */
     expect(html.indexOf('id="feed-alarm"')).toBeGreaterThan(html.indexOf("</header>"));
     expect(html.indexOf('id="feed-alarm"')).toBeLessThan(html.indexOf('id="health-rail"'));
-    /* And the live region stays in static expanded markup, inside the rail. */
-    expect(html.indexOf('id="cleanup-status"')).toBeGreaterThan(html.indexOf('id="health-rail"'));
+    /* The static live region stays outside the collapsible rail so cleanup
+       announcements remain exposed in compact mode. */
+    expect(html.indexOf('id="cleanup-status"')).toBeLessThan(html.indexOf('id="health-rail"'));
   });
 
   test("both faces read from one derivation: the compact paint reuses the model, never a second summaryWidgetData sweep", () => {

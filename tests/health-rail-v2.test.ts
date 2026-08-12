@@ -101,7 +101,7 @@ describe("health rail v2 DOM contract", () => {
     const rail = html.slice(html.indexOf('id="health-rail"'), html.indexOf('id="widget-customizer"'));
     expect(rail.indexOf('class="health-tldr-lane"')).toBeGreaterThan(-1);
     expect(rail.indexOf('class="health-tldr-lane"')).toBeLessThan(rail.indexOf('class="readings-stack"'));
-    expect(rail).toContain('id="cleanup-status"');
+    expect(html.indexOf('id="cleanup-status"')).toBeLessThan(html.indexOf('id="health-rail"'));
     expect(rail).toContain('id="readings-grid"');
   });
 
@@ -397,6 +397,8 @@ describe("header disclosure — collapse/expand state machine", () => {
       M.renderHealthRail();
       const toggle = doc.byId("header-summary-toggle");
       fireClick(toggle);
+      expect(doc.byId("health-rail").hidden).toBe(true);
+      expect(region.hidden).toBe(false);
       fireClick(toggle);
       expect(doc.byId("cleanup-status")).toBe(region);
       expect(region.textContent).toBe("sweep running");

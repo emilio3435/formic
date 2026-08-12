@@ -82,6 +82,12 @@
        summary so a frozen feed cannot be missed by not looking at a badge. -->
   <div id="feed-alarm" class="feed-alarm" role="alert" hidden></div>
 
+  <!-- The Clean up sweep's only non-visual signal. Static and outside the
+       collapsible rail: it must already exist before its text changes, survive
+       every readings paint, and remain in the accessibility tree while the
+       compact header hides #health-rail. -->
+  <span id="cleanup-status" class="visually-hidden" role="status" aria-live="polite"></span>
+
   <!-- One status verdict plus a configurable, scan-ordered summary rail.
        Static two-child ribbon: TL;DR lane (60%) + readings stack (40%). -->
   <section id="health-rail" class="health-rail" aria-label="Fleet health">
@@ -97,16 +103,6 @@
                and mixing a stable board-wide fact into a volatile filter line makes
                the stable fact inherit the volatility. -->
           <span id="scan-window" class="scan-window" hidden></span>
-          <!-- The Clean up sweep's only non-visual signal. It is declared HERE, in
-               static markup, for the same reason #bar-scope-note below is: an
-               aria-live region that is destroyed and recreated announces nothing,
-               and the region has to already be in the tree when its content changes.
-               The button used to carry aria-live itself and was rebuilt by every
-               paint, so the announcement could never fire — a spinner is invisible
-               to a screen reader, which left no signal at all that a sweep had
-               started. renderHealthRail empties only #readings-grid, so this
-               survives the paint that relabels the button. -->
-          <span id="cleanup-status" class="visually-hidden" role="status" aria-live="polite"></span>
           <button type="button" class="rail-action" id="customize-summary" aria-expanded="false" aria-controls="widget-customizer">Customize summary</button>
         </div>
         <div id="readings-grid" class="readings-grid"></div>

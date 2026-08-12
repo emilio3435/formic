@@ -121,12 +121,11 @@ describe("CLEAN-3: the sweep is announced from a region that survives the paint"
     expect(region).toMatch(/visually-hidden/);
   });
 
-  test("it lives where the rail's paint cannot destroy it", () => {
-    /* Health rail v2: renderHealthRail empties only #readings-grid. The live
-       region sits in static stack-head markup inside the ribbon so paints
-       cannot recreate it — same survival invariant, new shell. */
-    const stackHead = html.slice(html.indexOf('class="stack-head"'), html.indexOf('id="readings-grid"'));
-    expect(stackHead).toContain('id="cleanup-status"');
+  test("it lives outside the collapsible rail and every paint target", () => {
+    /* A hidden ancestor removes a live region from the accessibility tree.
+       Keep the static node beside the rail so collapse cannot silence it and
+       renderHealthRail still cannot recreate it. */
+    expect(html.indexOf('id="cleanup-status"')).toBeLessThan(html.indexOf('id="health-rail"'));
     expect(appjs).toContain('grid.textContent = "";');
     expect(appjs).not.toContain('widgets.textContent = "";');
   });

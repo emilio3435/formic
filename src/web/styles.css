@@ -340,6 +340,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
 /* Stale data has to look stale everywhere it is DISPLAYED, not only where it is
    announced — the summary numbers and the roster recede while the alarm holds. */
 body.feed-frozen .rail-inner,
+body.feed-frozen .compact-summary,
 body.feed-frozen .programs { opacity: 0.62; }
 
 /* A frozen clock reads as a held instrument, not as a live one. */
