@@ -114,6 +114,20 @@ describe("Evidence column exhibits", () => {
     expect(text).not.toContain("/repos/session/notes.md");
   });
 
+  test("a lone cwd is the Workspace value, not a second Workspace label", () => {
+    const evidence = withDom(() => M.renderEvidence(agent({ cwd: "/repos/session" })));
+    const workspace = byEvidenceSection(evidence, "workspace");
+    expect(byClass(workspace, "detail-grid")).toBeNull();
+    expect(byClass(workspace, "evidence-value")).not.toBeNull();
+    expect(byClass(workspace, "exhibit-body")).not.toBeNull();
+    expect(byClass(workspace, "exhibit-readout")).not.toBeNull();
+    expect(textOf(workspace)).toContain("/repos/session");
+    expect(findAll(workspace, (node: any) => node.tagName === "dt")).toHaveLength(0);
+    const copy = allByClass(workspace, "artifact-copy")[0];
+    expect(copy.attributes["aria-label"]).toBe("Copy Workspace path");
+    expect(copy.dataset.fullPath).toBe("/repos/session");
+  });
+
   test("in-tree files under cwd render the relative suffix only", () => {
     const evidence = withDom(() => M.renderEvidence(agent({
       cwd: "/repos/session",
@@ -123,6 +137,47 @@ describe("Evidence column exhibits", () => {
     expect(text).toContain("docs/REPORT.md");
     expect(text).not.toContain("/repos/session/docs/REPORT.md");
     expect(byClass(evidence, "artifact-label") && textOf(byClass(evidence, "artifact-label"))).toBe("Report");
+    const copy = allByClass(evidence, "artifact-copy").find((node: any) =>
+      String(node.attributes?.["aria-label"] || "").includes("full path"));
+    expect(copy).toBeTruthy();
+    expect(copy.attributes["aria-label"]).toBe("Copy full path");
+    expect(copy.dataset.fullPath).toBe("/repos/session/docs/REPORT.md");
+    expect(copy.dataset.fkey).toContain("/repos/session/docs/REPORT.md");
+  });
+
+  test("Git paints the short hash as git-rev inside a readout", () => {
+    const evidence = withDom(() => M.renderEvidence(agent({
+      cwd: "/repos/session",
+      git: { branch: "feat/x", head: "abcdef123456", dirty: false },
+    })));
+    const git = byEvidenceSection(evidence, "git");
+    expect(byClass(git, "exhibit-body")).not.toBeNull();
+    expect(byClass(git, "exhibit-readout")).not.toBeNull();
+    const rev = byClass(git, "git-rev");
+    expect(rev).not.toBeNull();
+    expect(textOf(rev)).toBe("@abcdef1");
+  });
+
+  test("desk CSS stays flat and plates lift", () => {
+    const deskBlocks = [...styles.matchAll(/\.drawer-desk\s*\{([^}]*)\}/g)].map((m) => m[1]);
+    expect(deskBlocks.join("\n")).not.toMatch(/linear-gradient/);
+    for (const body of deskBlocks) {
+      const shadows = [...body.matchAll(/box-shadow\s*:\s*([^;]+)/g)].map((m) => m[1].trim());
+      for (const shadow of shadows) {
+        expect(shadow === "none" || shadow.startsWith("none")).toBe(true);
+      }
+    }
+    expect(styles).toMatch(/\.drawer-desk\s+\.exhibit\s*\{[^}]*box-shadow/);
+    expect(styles).toMatch(/\.exhibit-readout\s*\{[^}]*inset/);
+    expect(styles).not.toMatch(/\.artifact-copy\s*\{[^}]*opacity\s*:\s*0/);
+    expect(styles).not.toMatch(/\.artifact-copy\s*\{[^}]*visibility\s*:\s*hidden/);
+  });
+
+  test("exhibit chrome classes are emitted by the client", () => {
+    expect(source).toContain('class: "exhibit-body"');
+    expect(source).toContain("exhibit-readout");
+    expect(source).toContain('class: "git-rev"');
+    expect(source).toContain("is-copied");
   });
 
   test("Pull request is its own omit-empty exhibit", () => {
