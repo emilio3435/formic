@@ -383,8 +383,9 @@ describe("SYNC-NF · Ack", () => {
        be able to read this as "the agent is done" — the agent may still be
        sitting at a prompt. The label states the effect and the non-effect. */
     expect(label).toContain("Acknowledge");
-    expect(label).toContain("removes from alerts");
-    expect(label).toContain("may still be waiting");
+    expect(label).toContain("mutes alert treatment");
+    expect(label).toContain("until a new request");
+    expect(label).toContain("session remains open");
     // Keyboard-reachable by construction: a real button, not a div with a click.
     expect(button.attributes.type).toBe("button");
     // Label in Name, whole-word (see leadsWithVisibleText for why startsWith lies).
@@ -421,6 +422,26 @@ describe("SYNC-NF · Ack", () => {
     expect(plan.map((item: { key: string }) => item.key)).toContain("row:" + waiting.id);
   });
 
+  test("Ack mutes alert treatment and counts while preserving the neutral Waiting state", () => {
+    const waiting = agent();
+    const acked = oneProgram([waiting], { acks: [ack(waiting.id)] });
+    const row = rowFor(waiting, acked);
+
+    expect(textOf(row)).toContain("Waiting");
+    expect(textOf(row)).not.toContain("Alert");
+    expect(row.classList.contains("is-needs-you")).toBe(false);
+    expect(row.classList.contains("is-alerting")).toBe(false);
+
+    const panel = M.notificationPanelModel(acked, [], Date.parse("2026-08-13T04:02:00.000Z"));
+    expect(panel.count).toBe(0);
+    expect(panel.tone).toBe("clear");
+    expect(panel.groups).toEqual([]);
+    expect(M.needsHumanIds(acked)).toEqual([]);
+
+    expect(M.programRollupCells([waiting], null, acked).some((cell: { alert?: boolean }) => cell.alert)).toBe(false);
+    expect(M.summaryWidgetData("momentum", acked).value).toBe("0");
+  });
+
   test("the acked row says the OPERATOR judged it, in muted ink, and offers the undo", () => {
     const waiting = agent();
     const acked = oneProgram([waiting], { acks: [ack(waiting.id)] });
@@ -434,7 +455,8 @@ describe("SYNC-NF · Ack", () => {
        that a person decided not to be interrupted by it. */
     const spoken = (textOf(mark) + " " + (mark.attributes["aria-label"] || "") + " " + (mark.attributes.title || "")).toLowerCase();
     expect(spoken).toContain("you acknowledged");
-    expect(spoken).toContain("still waiting");
+    expect(spoken).toContain("alert treatment is muted");
+    expect(spoken).toContain("session remains open");
     for (const lie of ["finished", "done", "resolved", "completed"]) expect(spoken).not.toContain(lie);
 
     // Muted ink, never a status green — the mark is not a verdict on the agent.
@@ -447,7 +469,7 @@ describe("SYNC-NF · Ack", () => {
     // The undo is on the row, or the mark is a one-way door.
     const undo = buttons(row).find((b) => String(b.dataset.fkey || "").startsWith("sync-ack:"));
     expect(textOf(undo)).toBe("Unack");
-    expect(String(undo.attributes["aria-label"])).toContain("returns");
+    expect(String(undo.attributes["aria-label"])).toContain("restores");
     expect(leadsWithVisibleText(String(undo.attributes["aria-label"]), "Unack")).toBe(true);
   });
 
@@ -586,7 +608,7 @@ describe("SYNC-NF · the notifications dropdown and what it announces", () => {
       const note = doc.getElementById("bar-scope-note");
       const said = textOf(note);
       expect(said).toContain("1 acknowledged");
-      expect(said.toLowerCase()).toContain("still waiting");
+      expect(said.toLowerCase()).toContain("muted until a new request");
       expect(note.hidden).toBe(false);
     });
     // The live region is declared in the markup, not built by the paint.

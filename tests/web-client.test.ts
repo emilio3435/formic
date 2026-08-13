@@ -5489,7 +5489,7 @@ describe("toolbar on the instrument-rail language (A3)", () => {
        perfectly happy working session on it. */
     const fn = source.match(/function renderTabs\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
     expect(fn).toContain('view === "board"');
-    expect(fn).toContain('classList.toggle("is-alerting", agents.some((a) => alerting(a)))');
+    expect(fn).toContain('classList.toggle("is-alerting", agents.some((a) => stripAlerting(a, state.snap)))');
     expect(fn).not.toContain('classList.toggle("is-alerting", count > 0)');
     // CSS gives that class ember ink only — no fill (Rule 1: indicator ink, not flood).
     const rule = styles.match(/\.view-tab \.count\.is-alerting\s*\{[^}]*\}/)?.[0] ?? "";
