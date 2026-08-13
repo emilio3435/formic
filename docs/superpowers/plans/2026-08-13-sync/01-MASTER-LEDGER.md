@@ -27,8 +27,8 @@
 | RF merged | DONE | verify PASS; clean merge af63b14; final floor tsc 0 · 3395/3396 canary-only |
 | Live sync checks | DONE | side port 4799: board rename ok+custom pin; foreign rename wins across 3 cycles, zero re-writes (no loop); last-surface invalid_state + frozen escalation envelope; confirmed workspace close -> row finished in 2.5s no-poll (reason surfaced as process-witness, noted); mark_read is_read=true still-listed; foreign Origin 403. Dismiss deliberately not run on a real notification (same plumbing, test-pinned) |
 | Eyes-on pass | DONE | browse screenshots: 4 badge rows, Ack on alerting rows, drawer close tile + WORKSPACE pencil rename; zero console errors |
-| Push + PR (Emilio's word — NOT standing) | PENDING | — |
-| Sweep under `SYNC · ` + evidence archived | PENDING | — |
+| Push + PR | DONE | authorized by Emilio /goal "get all of this landed" 05:30; pushed; PR #48 open — MERGE remains Emilio's |
+| Sweep under `SYNC · ` + evidence archived | DONE | 13 workspaces closed; 7 lane worktrees removed (reports archived to docs/programs/sync first); lane branches retained until PR #48 lands |
 
 ## Lanes
 
