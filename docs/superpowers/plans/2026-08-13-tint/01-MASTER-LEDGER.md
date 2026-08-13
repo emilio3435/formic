@@ -20,9 +20,9 @@
 | `feat/tint-integration` cut from `main` | DONE | worktree tint-integration @ 625fd6c base |
 | Contract stub committed (first commit) | DONE | 22e75d8 (tsc --noEmit 0); docs 06d385c |
 | Sub-orchs spawned + model/vehicle verified | DONE | pids f=70978 s=71016 g=71062 p=71208, all `--model opus --effort high --permission-mode auto` via ~/.local/bin/claude, cwd = own worktree (ps+lsof 01:0x CDT) |
-| F merged, floor green | PENDING | tsc/test output: — |
-| S merged, floor green | PENDING | — |
-| G merged, floor green | PENDING | — |
+| F merged, floor green | DONE 02:23 | 99ddec3; my floor: tsc 0, 3372/3373, sole red = named canary; delta-verify r2: PASS |
+| S merged, floor green | MERGED 02:25, one red | 1bbc969; S guard test relied on ambient stub-absence, broken by F impls landing — S fixing in-branch, re-merge pending |
+| G merged, floor green | DONE 02:26 | 781d3f7; ARCHITECTURE.md + state.ts auto-merged clean; floor: only canary + S guard red |
 | P landed (skill + dotfiles) | PENDING | — |
 | Deployed: kickstart + `?v=ah-tN` bump | PENDING | new tag: — |
 | Live check: workspace.list ↔ /api/repo-colors agree | PENDING | — |
