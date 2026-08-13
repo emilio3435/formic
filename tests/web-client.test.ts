@@ -2439,6 +2439,19 @@ describe("latest-turn token semantics", () => {
     expect(M.contextDisplayValue({ provenance: "unknown" }, "percent")).toBe("not reported");
   });
 
+  test("the tokens display never invents a count for an occupancy-only row", () => {
+    /* Cursor rows carry a contextWindow (stamped from the model) but no total,
+       so "usage is non-null" stopped implying "a total exists". fmtTok has no
+       guard and ends in String(n), so the tokens view printed the literal
+       "undefined / 500k" — into the ctx cell's aria-label and the row's, where a
+       screen-reader user got it regardless of the visual toggle. The percent is
+       the only reading this row has; both toggle positions show it. */
+    const occupancy = { provenance: "observed", scope: "latest-turn", occupancyPct: 95.47, contextWindow: 500_000 };
+    expect(M.contextDisplayValue(occupancy, "tokens")).toBe("95%");
+    expect(M.contextDisplayValue(occupancy, "tokens")).not.toContain("undefined");
+    expect(M.contextDisplayValue(occupancy, "percent")).toBe("95%");
+  });
+
   test("role aliases resolve to stable visual role categories", () => {
     expect(M.roleView("orchestration")).toEqual({ key: "orchestrator", label: "Orchestrator" });
     expect(M.roleView("designer")).toEqual({ key: "frontend", label: "Frontend / designer" });
