@@ -2881,6 +2881,49 @@ describe("redesigned network contracts (source-level)", () => {
       }));
   });
 
+  /* The row's own pencil renames the DISPLAY name — a board derivation stored
+     as a presentation label. The cmux workspace title is a different field
+     entirely, living on the terminal and written through /api/sync/rename, and
+     until now it was only reachable from the drawer. Two names, two stores, two
+     write paths; the row now shows both and labels which is which.
+
+     The signature assertion at the end is the load-bearing one: the workspace
+     title arrives from cmux on the event stream, so nothing else on the row
+     moves when somebody renames the terminal from the other side. Without the
+     title in agentRowSig the row keeps its cached node and the rename simply
+     never appears. */
+  test("a routed row carries the cmux workspace line, distinct from the display-name rename", () => {
+    const routed = agent({
+      id: "codex:ws1",
+      target: { resolution: "exact", workspaceId: "WORKSPACE-9", workspaceTitle: "CAND · F-measured · opus5h" },
+    });
+    const program = { id: "p1", name: "P", agents: [routed] };
+    const row = withDom(() => M.renderAgentRow(routed, program));
+
+    const line = byClass(row, "row-workspace");
+    expect(line).not.toBeNull();
+    expect(textOf(line)).toContain("CAND · F-measured · opus5h");
+    expect(textOf(line)).toMatch(/workspace/i);
+
+    /* Both pencils present, and distinguishable. Sharing an fkey would make the
+       focus restore in render() pick whichever the walker reached first. */
+    const nameBtn = byClass(row, "agent-rename");
+    const wsBtn = byClass(row, "row-workspace-rename");
+    expect(nameBtn).not.toBeNull();
+    expect(wsBtn).not.toBeNull();
+    expect(wsBtn.dataset.fkey).not.toBe(nameBtn.dataset.fkey);
+    expect(String(wsBtn.attributes["aria-label"])).toMatch(/workspace/i);
+
+    /* No resolved workspace, no line — the board never guesses which terminal a
+       rename would land on. */
+    const unrouted = agent({ id: "codex:none", target: { resolution: "ambiguous" } });
+    expect(byClass(withDom(() => M.renderAgentRow(unrouted, program)), "row-workspace")).toBeNull();
+
+    const base = { depth: 0, childCount: 0, fullById: new Map() };
+    const renamed = { ...routed, target: { ...routed.target, workspaceTitle: "CAND · renamed elsewhere" } };
+    expect(M.agentRowSig(renamed, listUi(), base)).not.toBe(M.agentRowSig(routed, listUi(), base));
+  });
+
 });
 
 describe("calm program and agent list rendering", () => {
