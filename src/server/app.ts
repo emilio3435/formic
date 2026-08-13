@@ -1164,6 +1164,13 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
       }
       return response;
     }
+    /* SYNC routes — docs/superpowers/plans/2026-08-13-sync, shapes frozen in
+       00-MASTER-PLAN.md §Contract. Every route here is same-origin-loopback
+       gated like its siblings above, and every cmux mutation behind them goes
+       through src/server/cmux-actions.ts (the funnel), never a direct shell.
+         SYNC-CB: POST /api/sync/close
+         SYNC-NB: POST /api/sync/notifications · PUT/DELETE /api/sync/ack/:agentId
+         SYNC-RB: POST /api/sync/rename */
     if (url.pathname.startsWith("/api/")) {
       return new Response("Not found", { status: 404, headers: SECURITY_HEADERS });
     }

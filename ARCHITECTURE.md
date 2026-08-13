@@ -69,6 +69,10 @@ Anything else is `ambiguous` (controls disabled, reason shown) or `missing` (vie
 
 `src/server/snapshot-agent.ts` derives per-agent capabilities (`controlsFor`, called from `buildSnapshot`): focus/instruct/interrupt are enabled only for a routed (`exact`/`unique-cwd`), non-archived target; archive is always available once. `src/server/http.ts` guards `POST /api/control` (same-origin loopback Origin, JSON-only, size-capped, structured action set) and `src/server/control.ts` executes via cmux RPC (`surface.focus`, `surface.send_text` + `surface.send_key`, interrupt), propagating real exit codes and stderr. `src/server/broadcast.ts` fans an instruction out to many routed agents, behind the same 30-second snapshot-freshness gate as the single-control route. Archive persists through `src/server/archive.ts` so archived sessions survive the scan window.
 
+## SYNC (contract stubs — program in flight)
+
+`src/server/cmux-sync.ts` is the typed cmux event router: a registration seam (`registerSyncHandler`) that phase lanes hang handlers on, with the subscription/dispatch internals owned by SYNC-E (it coexists with `src/server/cmux-events.ts`, the poll accelerator — separate cursor, separate job). `src/server/cmux-actions.ts` is the one funnel for every board→cmux mutation in the program (close, notification clear, rename): it records issued-action fingerprints so `isOwnEcho` can drop the `*_requested` echoes of our own writes, and it surfaces stderr/non-zero/`invalid_state` as typed failures, never success. Route shapes live under `/api/sync/*` in `src/server/app.ts`, frozen in `docs/superpowers/plans/2026-08-13-sync/00-MASTER-PLAN.md`.
+
 ## What the board decides to say
 
 The pipeline above produces evidence. Turning it into the few things an operator

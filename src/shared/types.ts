@@ -847,3 +847,24 @@ export interface BroadcastResponse {
   failed: number;
   results: BroadcastRecipientResult[];
 }
+
+/* SYNC — frozen contract shapes (docs/superpowers/plans/2026-08-13-sync,
+   00-MASTER-PLAN.md §Contract). Exact keys are load-bearing: SYNC-NB produces
+   them, SYNC-NF renders exactly them. */
+
+export interface AgentAck {
+  agentId: string;
+  ackedAt: string;
+  alertFingerprint: string;
+}
+
+export interface CmuxNotificationSummary {
+  id: string;
+  workspaceId: string;
+  surfaceId: string;
+  title: string;
+  subtitle: string;
+  body: string;
+  isRead: boolean;
+  createdAt: string;
+}
