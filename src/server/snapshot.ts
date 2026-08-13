@@ -1,6 +1,8 @@
 import type {
+  AgentAck,
   AgentIdentity,
   AgentSnapshot,
+  CmuxNotificationSummary,
   CollectionScope,
   HubPulse,
   LifecycleState,
@@ -102,6 +104,8 @@ export interface SnapshotInput {
   sidebarWorkspaces?: readonly CmuxWorkspaceSnapshot[];
   runManifests?: readonly RunManifest[];
   notifications?: readonly CmuxNotification[];
+  cmuxNotifications?: readonly CmuxNotificationSummary[];
+  acks?: readonly AgentAck[];
   programHints?: readonly ProgramHint[];
   sourceErrors?: Partial<Record<Provider, readonly string[]>>;
   /* Providers with nothing installed to read. Absent is not a fault: it is the
@@ -886,6 +890,8 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     },
     issues,
     recentlyResolved,
+    cmuxNotifications: [...(input.cmuxNotifications ?? [])],
+    acks: [...(input.acks ?? [])],
     programs: orderedPrograms,
   };
   return withIssueDecoration(snapshot, input.triageSummaries);
