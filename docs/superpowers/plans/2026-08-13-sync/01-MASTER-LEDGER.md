@@ -15,8 +15,8 @@
 | Gate | State | Evidence |
 |---|---|---|
 | Plan approved by Emilio | DONE | "implement this plan. Act as the orchestrator" — 2026-08-13 03:36 CDT |
-| `feat/sync-integration` cut, stubs committed first | IN PROGRESS | cut from main @ 625fd6c (PR #47 open, so base = plain main); stubs written, floor next |
-| SYNC-E spawned (Sol · codex, ps-verified) | PENDING | — |
+| `feat/sync-integration` cut, stubs committed first | DONE | ca8077d; floor: tsc 0, 3302/3303 (only red = tolerated canary) |
+| SYNC-E spawned (Sol · codex, ps-verified) | DONE | workspace:53, pid 88775: `-m gpt-5.6-sol · model_reasoning_effort=xhigh` via ~/.local/bin/codex; worktree sync-e @ ca8077d |
 | SYNC-E done + Grok verify PASS + master floor | PENDING | — |
 | E merged; six phase lanes spawned (ps-verified per lane) | PENDING | — |
 | CB merged (verify PASS + my floor) | PENDING | — |
