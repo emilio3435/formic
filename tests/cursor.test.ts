@@ -108,8 +108,11 @@ async function setupGuiComposerHome(options: {
   composerData?: { modelName: string; parameters?: { id: string; value: string }[] };
   /** Writes a composerData row whose value is not JSON, to model a damaged store. */
   corruptComposerData?: boolean;
-  /** Writes Cursor's own context meter for GUI_SESSION_ID into composer.composerHeaders. */
+  /** Writes Cursor's own context meter into composer.composerHeaders. */
   contextUsagePercent?: number;
+  /** Which composer the meter belongs to. Defaults to GUI_SESSION_ID; a foreign uuid
+      models a header map that holds no row for the session being collected. */
+  contextUsageComposerId?: string;
   /** Writes a composerHeaders row whose value is not JSON, to model a damaged meter. */
   corruptComposerHeaders?: boolean;
   trackingModel?: string;
@@ -146,7 +149,10 @@ async function setupGuiComposerHome(options: {
       "composer.composerHeaders",
       JSON.stringify({
         allComposers: [
-          { composerId: GUI_SESSION_ID, contextUsagePercent: options.contextUsagePercent },
+          {
+            composerId: options.contextUsageComposerId ?? GUI_SESSION_ID,
+            contextUsagePercent: options.contextUsagePercent,
+          },
         ],
       }),
     ]);
@@ -1261,15 +1267,39 @@ describe("Cursor composer headers occupancy", () => {
   test("a session with no header row stays on the unknown billing path", async () => {
     const home = await setupGuiComposerHome({ trackingModel: "grok-4.5" });
     const result = await collectCursorSessions(home, 1784692000000);
+    expect(result.errors).toEqual([]);
     const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
     expect(agent?.tokens.occupancyPct).toBeUndefined();
     expect(agent?.tokens.provenance).toBe("unknown");
   });
 
+  /* The join is by each agent's OWN session id, and only a NON-EMPTY header map can
+     prove it: the test above short-circuits on the empty-map early return, so an
+     "inherit any percent in the map" bug would sail through it. Here the meter holds
+     a real percent under a foreign composer id, which is the shape a parent's percent
+     leaking onto a child would take. The collected session must stay unknown. */
+  test("a percent belonging to another composer is never inherited", async () => {
+    const home = await setupGuiComposerHome({
+      contextUsagePercent: 88.25,
+      contextUsageComposerId: COMPOSER_ID,
+      trackingModel: "grok-4.5",
+    });
+    const result = await collectCursorSessions(home, 1784692000000);
+    expect(result.errors).toEqual([]);
+    const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
+    expect(agent).toBeDefined();
+    expect(agent?.tokens.occupancyPct).toBeUndefined();
+    expect(agent?.tokens.provenance).toBe("unknown");
+    expect(agent?.tokens.scope).toBe("unknown");
+  });
+
   test("a corrupt composerHeaders record degrades the source without deleting occupancy-less sessions", async () => {
     const home = await setupGuiComposerHome({ corruptComposerHeaders: true, trackingModel: "grok-4.5" });
     const result = await collectCursorSessions(home, 1784692000000);
-    expect(result.errors.join(" ")).toContain("composer headers");
+    // Exactly one fault: the damaged meter is named, and nothing ELSE about the scan
+    // is reported as broken — that is the "degrades without failing the scan" half.
+    expect(result.errors.length).toBe(1);
+    expect(result.errors[0]).toContain("composer headers");
     const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
     expect(agent).toBeDefined();
     expect(agent?.tokens.occupancyPct).toBeUndefined();
