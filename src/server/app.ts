@@ -24,7 +24,26 @@ import { canWriteToTarget } from "./targets";
 import { modelConfigLoadError } from "./model-config";
 import { handleControlRequest } from "./http";
 import { handleProgramAliasRequest, type ProgramAliasStore } from "./program-aliases";
-import { DEFAULT_SCAN_WINDOW_HOURS, handleSettingsRequest, type JsonSettingsStore } from "./settings";
+import {
+  DEFAULT_SCAN_WINDOW_HOURS,
+  handleSettingsRequest,
+  type JsonSettingsStore,
+  /* TINT-F */
+  handleRepoColorsRequest,
+  JsonRepoColorsStore,
+  memorySettingsFiles,
+  repoColorDiscovery,
+  type RepoColorDiscovery,
+} from "./settings";
+/* TINT-F */
+import { setWorkspaceColor, setGroupColor, lastWrittenHex } from "./cmux-color";
+/* TINT integration wiring (master) */
+import {
+  registerRepoGroupInputs,
+  JsonRepoGroupProvenanceStore,
+  MemoryRepoGroupProvenanceStore,
+} from "./cmux-groups";
+import { repoKeyForCwd, sameHex } from "../shared/repo-color";
 import { snapshotFingerprint } from "./snapshot";
 import { handleTriageRequest, MemoryTriageQueueStore, type TriageInvestigationRunner, type TriageQueueStore } from "./triage";
 import type { ArchiveStore, CmuxSurface, CommandRunner } from "./types";
@@ -334,6 +353,11 @@ export interface MountainAppDependencies {
   triageRunner?: TriageInvestigationRunner;
   programAliasStore?: ProgramAliasStore;
   settingsStore?: JsonSettingsStore;
+  /* TINT-F — repo colour assignments. Defaults to the shipped JSON file when
+     the web root is the shipped one, and to memory everywhere else. */
+  repoColorsStore?: JsonRepoColorsStore;
+  /** TINT-F test seam: skip the cmux fan-out so route tests write nothing. */
+  repoColorFanOut?: (writes: readonly { workspaceId: string; hex: string }[]) => void | Promise<void>;
   cleanupProposer?: CleanupProposer;
   cleanupLauncher?: CleanupLauncher;
   /** Delay between Cleaner publication checks; zero keeps route tests deterministic. */
@@ -377,6 +401,67 @@ function limitFrom(url: URL, fallback: number, maximum: number): number | Respon
     return responseError(400, "INVALID_LIMIT", `limit must be an integer between 1 and ${maximum}.`);
   }
   return Number(raw);
+}
+
+/* TINT-F — repo colours: discovery, the default store, and the fan-out.
+
+   Kept beside the route it serves for the same reason defaultActionLogStore is:
+   a store that only makes sense for one endpoint. The git call behind
+   repoKeyForCwd is memoized by worktree path — the endpoint runs on every board
+   poll and the fleet routinely carries forty agents across a dozen checkouts,
+   which would be forty `git rev-parse` spawns a poll. A worktree's repository
+   does not change under it; a restart re-reads them all. */
+const repoKeyByWorktree = new Map<string, string | null>();
+
+function cachedRepoKey(worktreePath: string): string | null {
+  let key = repoKeyByWorktree.get(worktreePath);
+  if (key === undefined) {
+    key = repoKeyForCwd(worktreePath);
+    repoKeyByWorktree.set(worktreePath, key);
+  }
+  return key;
+}
+
+export function resetRepoKeyCache(): void {
+  repoKeyByWorktree.clear();
+}
+
+/* Workspaces come from the collector's own resolved bindings — an agent's
+   `target.workspaceId` — and from nowhere else. That is what keeps GROUP ANCHOR
+   workspaces out of the fan-out once mirrorGroups is on: `workspace.group.create`
+   also mints an anchor row carrying the group's cwd, which looks repo-mapped
+   from `workspace.list` but holds no session, so no agent ever points at it and
+   it never reaches this walk. TINT-S filters anchors at the collector; anything
+   here that started enumerating workspaces directly would have to filter them
+   again, and writing a colour to an anchor is a defect the sync then fights. */
+function discoverRepoColors(snapshot: HubSnapshot): RepoColorDiscovery {
+  return repoColorDiscovery(snapshot.programs.flatMap((program) =>
+    program.agents.flatMap((agent) => {
+      const worktreePath = agent.repo?.worktreePath;
+      if (!worktreePath) return [];
+      return [{
+        repoKey: cachedRepoKey(worktreePath),
+        repoName: agent.repo?.repoName,
+        workspaceId: agent.target?.workspaceId,
+      }];
+    })));
+}
+
+function defaultRepoColorsStore(webRoot: string): Promise<JsonRepoColorsStore> {
+  const productionWebRoot = resolve(import.meta.dir, "../web");
+  return resolve(webRoot) === productionWebRoot
+    ? JsonRepoColorsStore.open(resolve(productionWebRoot, "../../data/repo-colors.json"))
+    : JsonRepoColorsStore.open("repo-colors.json", memorySettingsFiles());
+}
+
+async function fanOutRepoColors(writes: readonly { workspaceId: string; hex: string }[]): Promise<void> {
+  /* Only what has changed since this process last wrote it. Re-asserting an
+     already-correct colour on every poll would be dozens of cmux round trips a
+     minute, and every one of them a chance for TINT-S to read an echo. */
+  for (const { workspaceId, hex } of writes) {
+    if (sameHex(lastWrittenHex(workspaceId), hex)) continue;
+    await setWorkspaceColor(workspaceId, hex, "board assignment");
+  }
 }
 
 function defaultActionLogStore(webRoot: string): Promise<ActionLogStore> {
@@ -493,6 +578,36 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
     : resolve(dependencies.webRoot) === resolve(import.meta.dir, "../web")
       ? defaultAttentionStore()
       : Promise.resolve(new MemoryAttentionStore());
+  /* TINT-F */
+  const repoColorsStore = dependencies.repoColorsStore
+    ? Promise.resolve(dependencies.repoColorsStore)
+    : defaultRepoColorsStore(dependencies.webRoot);
+  /* TINT integration wiring (master): the one call TINT-G left to the
+     integrator. The provider feeds the sidebar mirror from the same discovery
+     walk and store the /api/repo-colors endpoint uses, so the mirror and the
+     endpoint can never disagree about a repository's colour. Sync by contract:
+     store.get() is the cached settings and discovery reads the last snapshot —
+     the tick rides the collector poll, so both are at most one poll old. The
+     provider returns null until the store resolves; the tick treats null as
+     "not wired yet" and stays inert, so startup order cannot race. */
+  let repoColorsForGroups: JsonRepoColorsStore | undefined;
+  void repoColorsStore.then((store) => { repoColorsForGroups = store; });
+  const groupProvenance = resolve(dependencies.webRoot) === resolve(import.meta.dir, "../web")
+    ? JsonRepoGroupProvenanceStore.open(resolve(import.meta.dir, "../../data/repo-group-provenance.json"))
+    : Promise.resolve(new MemoryRepoGroupProvenanceStore());
+  void groupProvenance.then((provenance) => {
+    registerRepoGroupInputs(() => {
+      const store = repoColorsForGroups;
+      if (!store) return null;
+      const settings = store.get();
+      const discovery = discoverRepoColors(dependencies.state.get());
+      const targets = Object.entries(discovery.workspaces).flatMap(([workspaceId, repoKey]) => {
+        const assignment = settings.assignments[repoKey];
+        return assignment ? [{ workspaceId, repoKey, hex: assignment.hex }] : [];
+      });
+      return { mirrorGroups: settings.mirrorGroups, targets, setGroupColor };
+    }, provenance);
+  });
   const ackStore = dependencies.ackStore ?? new MemoryAckStore(dependencies.now);
   const cleanupObserveIntervalMs = dependencies.cleanupObserveIntervalMs ?? CLEANER_OBSERVE_INTERVAL_MS;
   let recollectInFlight: Promise<HubSnapshot> | undefined;
@@ -1146,6 +1261,18 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
         },
       });
     }
+    /* TINT-F routes — repo-identity colour. GET is the board's read (and the
+       pass that assigns a colour to any repository it has not seen yet); PUT
+       and DELETE are the operator's own colour for one repository. Both
+       mutating verbs are same-origin loopback, like every other mutating route
+       here, and the handler enforces it a second time. */
+    if (url.pathname === "/api/repo-colors" || url.pathname.startsWith("/api/repo-colors/")) {
+      return handleRepoColorsRequest(request, await repoColorsStore, {
+        discover: () => discoverRepoColors(dependencies.state.get()),
+        fanOut: dependencies.repoColorFanOut ?? fanOutRepoColors,
+      });
+    }
+    /* end TINT-F routes */
     if (url.pathname.startsWith("/api/usage/")) {
       return handleUsageRequest(request);
     }
@@ -1525,6 +1652,9 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
   fetch.dispose = (): void => {
     if (disposed) return;
     disposed = true;
+    /* TINT integration wiring: drop the group-mirror provider with the app, so
+       a disposed test server cannot keep feeding the module-level tick. */
+    registerRepoGroupInputs(undefined);
     unsubscribe();
     unsubscribeTriage?.();
     for (const client of [...clients]) {

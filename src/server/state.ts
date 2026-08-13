@@ -11,12 +11,14 @@ import {
   collectCmuxWorkspaceEnvs,
   DEFAULT_CMUX_EXECUTABLE,
 } from "./cmux";
+/* TINT-S */ import { syncCmuxColors } from "./cmux-color-sync";
 import {
   CmuxEventsSupervisor,
   cmuxEventsCommand,
   type CmuxEventFrame,
   type CmuxEventsRuntime,
 } from "./cmux-events";
+/* TINT-G */ import { repoGroupReconcileTick } from "./cmux-groups";
 import {
   CmuxSyncSupervisor,
   registerSyncHandler,
@@ -971,6 +973,12 @@ export class HubState {
               )]
             : []),
         ]);
+        /* TINT-G: mirror the board's repo grouping into the cmux sidebar. Rides
+           this poll rather than a timer of its own (locked decision 3), and is
+           fire-and-forget like the naming pass — a sidebar is an improvement on
+           a board that already works, so it must never delay or fail a refresh.
+           A no-op until TINT-F registers the repo assignments. */
+        void repoGroupReconcileTick(this.runner, this.cmuxExecutable);
       }
       aggregateSettled = true;
     });
@@ -1132,6 +1140,7 @@ export class HubState {
       if (runManifestsResult) {
         this.#runManifests = runManifestsResult;
       }
+      /* TINT-S */ if (this.#cmuxReachable) void syncCmuxColors({ runner: this.runner, executable: this.cmuxExecutable, surfaces: this.#surfaces, settings });
       this.#cmuxErrors = [...new Set([
         ...cmux.errors,
         ...(sidebar?.errors ?? []),

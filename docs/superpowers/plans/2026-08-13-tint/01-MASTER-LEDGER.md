@@ -1,0 +1,75 @@
+# TINT · Master Ledger
+
+> Owner: master orchestrator (Fable 5, `FORMIC · orch`). This is the only global view.
+> Update on every state change; a stale ledger is a lie on the operator's board.
+
+## My /goal (master)
+
+**Goal:** Take TINT from approved plan to a floor-green, locally deployed, visually verified integration branch tonight, by orchestrating four sub-orchestrators — writing none of their code myself.
+
+**Success means:** contract stub committed first; four sub-orchs spawned per plan §4 with correct model+vehicle verified on the live process; every merge floor-run by me; authority rules enforced in review; deploy + eyes-on check done; ledger current; debris swept under `TINT · `.
+
+**Stop when:** plan §Stop is met, or an open decision blocks on Emilio.
+
+## Program state
+
+| Gate | State | Evidence |
+|---|---|---|
+| Plan approved by Emilio | DONE | "GO!" 2026-08-13 00:57 CDT |
+| Open decisions 1–4 answered | DONE | groups ON at merge · all repo-mapped · piggyback collector · push+PR when green (standing) |
+| `feat/tint-integration` cut from `main` | DONE | worktree tint-integration @ 625fd6c base |
+| Contract stub committed (first commit) | DONE | 22e75d8 (tsc --noEmit 0); docs 06d385c |
+| Sub-orchs spawned + model/vehicle verified | DONE | pids f=70978 s=71016 g=71062 p=71208, all `--model opus --effort high --permission-mode auto` via ~/.local/bin/claude, cwd = own worktree (ps+lsof 01:0x CDT) |
+| F merged, floor green | DONE 02:23 | 99ddec3; my floor: tsc 0, 3372/3373, sole red = named canary; delta-verify r2: PASS |
+| S merged, floor green | MERGED 02:25, one red | 1bbc969; S guard test relied on ambient stub-absence, broken by F impls landing — S fixing in-branch, re-merge pending |
+| G merged, floor green | DONE 02:26 | 781d3f7; ARCHITECTURE.md + state.ts auto-merged clean; floor: only canary + S guard red |
+| P landed (skill + dotfiles) | PENDING | — |
+| Deployed | ADAPTED 02:40 | serving checkout (the-mountain-main) is on chore/docker-local-ci with dirty in-flight work — NOT touched; integration build served from tint-integration worktree on :4702 (manual bun, logged PID in scratchpad); ah-t31→ah-t32 bumped; 4701 cutover rides the PR merge |
+| Live check: workspace.list ↔ /api/repo-colors agree | DONE 02:45 | groups: the-mountain #5f7f2a (11 members, window:1), cooper-scheduler #2e66a8 (9, window:2) — exact board hexes; anchors present and unfiled |
+| Deploy check: grep deploy log "NOT CONFIRMED" | DONE | 0 hits + groups actually colored = success echoes the hex; F strict read-back correct on the success path |
+| Deploy check: `repo-color the-mountain` vs board | PARTIAL | numerically proven equal (fallback slot 0 #5F7F2A == board #5f7f2a); full round-trip deferred to 4701 cutover |
+| Visual check with eyes | DONE 02:50 | 2x element shots read: repo dot + 2px 45% spine + 4% wash live on both sections, correct hues; strip rows tint-free per ruling; status colors untouched |
+| Sweep: `TINT · ` workspaces, worktrees, branches | PENDING | — |
+| Push/PR (Emilio's word only) | PENDING | — |
+
+## Lanes
+
+| Lane | Goal doc | Branch / worktree | Workspace | Model · vehicle | Status | Report seen | Floor (my run) |
+|---|---|---|---|---|---|---|---|
+| TINT-F | GOAL-F-foundation.md | `feat/tint-f` · `../the-mountain.worktrees/tint-f` | workspace:26 `TINT · f-orch · opus · 08-13` | Opus 5 high · claude (pid 70978, verified) | REOPENED 01:52 — verifier VERDICT: BLOCK (5 findings, fix order sent) | yes | verify: BLOCK @ 01:49 |
+| TINT-S | GOAL-S-sync.md | `feat/tint-s` · `../the-mountain.worktrees/tint-s` | workspace:27 `TINT · s-orch · opus · 08-13` | Opus 5 high · claude (pid 71016, verified) | DONE — 2f22c83 | yes | verify: PASS · MASTER FLOOR 02:07: tsc 0, 3343/3344, sole red = ledgered cross-source canary (named) |
+| TINT-G | GOAL-G-groups.md | `feat/tint-g` · `../the-mountain.worktrees/tint-g` | workspace:28 `TINT · g-orch · opus · 08-13` | Opus 5 high · claude (pid 71062, verified) | DONE — d414cfe | yes — findings relayed | verify: PASS · MASTER FLOOR 02:09: tsc 0, 3318/3319, sole red = ledgered cross-source canary (named) |
+| TINT-P | GOAL-P-prompt.md | `feat/tint-p` · `../the-mountain.worktrees/tint-p` | workspace:29 `TINT · p-orch · opus · 08-13` | Opus 5 high · claude (pid 71208, verified) | CLOSED 01:56 — final: dotfiles feat/tint-repo-chip @ 265df88 (3 commits, unpushed, no remote), repo worktree untouched, rulings recorded in report | yes | verify: PASS, hole closed |
+
+Sub-orch worker lanes appear in each sub-orch's own ledger section of its `LANE-REPORT`; master tracks sub-orchs only, but sweeps everything under the `TINT · ` prefix.
+
+## Contract changes (none expected; log any)
+
+| When | What changed | Why | Lanes notified |
+|---|---|---|---|
+| 01:3x | Behavioral addendum, no shape change: group ANCHOR workspaces (workspace.group.list anchor_workspace_id) are excluded from collection, repo-mapping, sync, and color fan-out; never written to, never rendered | G verified live: group.create spawns an anchor that reads as a repo-mapped workspace; group.remove on the anchor destroys the group; group.delete closes members | F, S, G |
+| 01:55 | Hash pinned in §1: FNV-1a 32-bit over charCodeAt units, mod 6, wrap-scan — F's shipped semantics are canonical; P's UTF-8-byte helper is ASCII-equivalent (all real repoKeys) | P found the contract named no hash; divergent fallback hues were possible | F, P |
+| 01:35 | Additive envelope key: GET /api/repo-colors response gains repoNames (lowercased board repo name → canonical repoKey); additive-only, no TS shape change; only consumer is app.js | Browser cannot run git rev-parse to derive common-dir keys; board joins on the name it prints | F (author), P (endpoint consumer) |
+
+## Incidents / rescues
+
+| When | Lane | What | Resolution |
+|---|---|---|---|
+| 01:24 | master | Sentinel done-detection bug (grep -c double-echo; P repo-commit test unsatisfiable) | killed, patched, relaunched |
+| 01:28 | G→F | workspace.group.set_color silently no-ops on {color}/{custom_color} param names; only {group_id, hex} works | relayed to F with order to test exact param names |
+| 01:28 | G | Open question (orphan anchor rows after ungroup) | master locked: leave for operator; no auto-close |
+| 01:3x | S | Reopened for anchor-filter addendum before merge (mirrorGroups ships ON) | landed 2f22c83; filter placed in cmux-color-sync.ts (better fence fit, accepted); skip-whole-window on group.list failure LOCKED |
+| 01:37 | master | Grok verifier spawns broke: kickoff-length inline prompts truncated mid-string, zsh stuck at dquote> — Emilio caught it | 4 stuck workspaces closed; briefs rewritten as .lane-evidence/VERIFY-BRIEF-*.md files; respawned ws:41–44 with one-line commands; confirmed running (Grok 4.6 High autorun) |
+| 01:49 | verify-f | VERDICT: BLOCK — (1) client feeds repoNames (name→repoKey) into setRepoColors (expects name→hex): board never tints, 64 tests green because none drive the wire join; (2) shared printed basename last-writer-wins (order-dependent wrong color); (3) Signal ticks only set on strip rows whose attention classes the CSS excludes — never paint; hook-needsInput row gets identity wash (rule-5 violation); (4) fakeGit tests hollow vs --git-common-dir; (5) DELETE doesn't fan out restored hex | master confirmed defect 1 by eye; F reopened with fix order; ruling LOCKED: ambiguous printed names drop out of the join (no tint beats wrong tint) |
+| 01:49 | verify-s/g/p | VERDICTS: PASS ×3 (G incl. two mutation spot-checks landing red as claimed; P absent-vars proven live) | P gets one touch-up: TERM=dumb must beat inherited COLORTERM |
+| 01:41 | master | Tolerated-red correction (S+F both proved): tonight's expected red is cross-source-token-agreement (fleet-dependent, >20 join floor); a11y-geometry-gate PASSES on this machine tonight | floor runs use corrected list |
+
+## Parked (carried from plan §8, grown tonight)
+
+- Idea 1: repo sigils (shape coding).
+- Idea 5: worktree shade steps.
+- Group icons: probed by G — vocabulary is Apple SF Symbols ({group_id, symbol}); bogus names null out SILENTLY. Usable, unshipped.
+- PRE-EXISTING BUG (S measured): collectCmuxSidebar is single-window blind — 10 of 15 workspaces collected; project root/branch/dirty/PR links missing a whole window for every consumer. Follow-up lane candidate.
+- Funnel hole (S flagged, F's file): lastWrittenHex records the written hex, not cmux's echo; closed in practice today, breaks if cmux ever quantizes stored colors. Deploy check: grep deploy log for "NOT CONFIRMED" — correct-hex echo means F's strict value-check is wrong; null echo means the check earned its keep (F's own guidance).
+- Sync cost: +1 RPC per window per cmux tick (group.list pairing).
+- UNVERSIONED SKILL EDIT (P carry-forward): ~/.claude is not a git repo, so the orchestrate SKILL.md spawn-env change exists only as a live file — it will not survive a machine rebuild the way the dotfiles half will. Candidate fix: symlink ~/.claude/skills into ~/dotfiles like agent-rules already is. Emilio's call.

@@ -1577,6 +1577,11 @@ globalThis.TheAntHill = {
   // (RUN_GROUP_PREFIX stays out — it is a `const` declared below this block,
   // the TDZ hazard the note above is about.)
   repoGroups, worktreeLabel,
+  /* TINT-F. The colour join, the two paints, and the three surfaces that wear
+     them — exported so the treatments are assertable as functions rather than
+     as substrings of this file. */
+  setRepoColors, repoTintFor, repoTintOfProgram, normalizeRepoHex, fetchRepoColors,
+  renderRepoSection, repoShellSig, stripRowOpts, renderStripGroupHead,
   // The shelf's governor. Exported because the lookback clause inside it is the
   // only thing standing between a 24-row shelf and a 446-row one, and a
   // property that load-bearing has to be assertable directly.
@@ -3804,6 +3809,9 @@ function renderSettingsPanel() {
     /* The local display pref rebuilds the panel too, or the radio the operator
        just clicked would keep the stale checkmark until a server value moved. */
     state.needsYouDisplay || "",
+    // Same argument for the repo-colour region: its data arrives on its own
+    // clock and moves nothing else in here.
+    String(repoColorsVersion),
   ].join("\u001f");
   if (paintUnchanged("settings", sig)) {
     /* The two things that must follow the board without disturbing the form:
@@ -3885,6 +3893,15 @@ function renderSettingsPanel() {
         }),
         el("span", { text: label }),
         el("span", { class: "settings-help", text: help })))),
+    /* TINT-F. Fleet-shared like the fields above, but written per repository
+       through its own endpoint the moment a swatch changes — so it sits outside
+       the Save flow, the way the display preference above does, and for the
+       same reason: Save posts a fixed set of scalars and would have nothing to
+       say about a colour. */
+    el("fieldset", { class: "settings-local" },
+      el("legend", { text: "Repository colours" }),
+      el("p", { class: "settings-help", text: "Six fixed hues, then neutral clay. A colour you pick here also travels to that repository's cmux workspaces." }),
+      renderRepoColorSettings()),
     /* The two answers a save can give, said where the save happened. A stable
        node rather than a conditional child, so it can appear, change and expire
        without rebuilding the form around it. */
@@ -3919,6 +3936,90 @@ function renderSettingsPanel() {
       }, "Done"))));
   renderSettingsPreview();
   renderSettingsVerdict();
+}
+
+/* TINT-F. Which repository wears which colour, and the override.
+
+   A repository the operator picks a colour for stops being "auto" and frees its
+   palette slot server-side, so the next repository to appear takes a real hue
+   instead of overflow clay — which is why Reset is offered beside the swatch
+   rather than only as a global wipe.
+
+   It reads `state.repoColorSettings.assignments`, keyed by the canonical repo
+   key (the git common dir's basename), which is also the word an operator
+   recognises — `the-mountain`, `cooper-scheduler`. No live board data is needed
+   here at all: an assignment outlives the session that caused it. */
+function renderRepoColorSettings(settings = state.repoColorSettings) {
+  const assignments = (settings && settings.assignments) || {};
+  const keys = Object.keys(assignments).sort();
+  if (!keys.length) {
+    return el("div", { class: "repo-colors" },
+      el("p", {
+        class: "repo-colors-empty",
+        text: "No repository has been given a colour yet — one is assigned the first time the board sees a session in it.",
+      }));
+  }
+  return el("div", { class: "repo-colors" }, ...keys.map((key) => {
+    const assignment = assignments[key] || {};
+    const hex = normalizeRepoHex(assignment.hex) || "";
+    const row = el("div", { class: "repo-colors-row" },
+      el("span", { class: "repo-colors-name", text: key }),
+      el("span", {
+        class: "repo-colors-source",
+        text: assignment.source === "user" ? "your colour" : "auto",
+      }),
+      /* A native colour input, so the picker is the operating system's and this
+         board ships no swatch grid of its own. Its own value is the current
+         hex, which is also what the swatch shows through --repo-tint. */
+      el("input", {
+        type: "color",
+        class: "repo-colors-swatch",
+        value: hex,
+        "aria-label": "Colour for " + key,
+        dataset: { fkey: "repo-color:" + key },
+        onchange: (event) => { void putRepoColor(key, event.currentTarget.value); },
+      }),
+      assignment.source === "user"
+        ? el("button", {
+          type: "button",
+          class: "repo-colors-reset",
+          "aria-label": "Reset " + key + " to its assigned colour",
+          dataset: { fkey: "repo-color-reset:" + key },
+          onclick: () => { void putRepoColor(key, null); },
+        }, "Reset")
+        : null);
+    return paintRepoTint(row, hex, "has-repo-tint");
+  }));
+}
+
+/* One write, both verbs: a hex sets an override, null clears it. Re-fetches
+   rather than patching local state, because the server's answer also carries
+   whatever the clear re-assigned the repository to. */
+async function putRepoColor(repoKey, hex) {
+  const normalized = hex === null ? null : normalizeRepoHex(hex);
+  if (hex !== null && !normalized) {
+    toast("That is not a colour this board can store", "warn");
+    return;
+  }
+  try {
+    const res = await apiFetch("/api/repo-colors/" + encodeURIComponent(repoKey), normalized
+      ? {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ hex: normalized }),
+      }
+      : { method: "DELETE" }, API_WRITE_TIMEOUT_MS);
+    const body = await res.json().catch(() => null);
+    if (!res.ok || !body || body.ok !== true) {
+      throw new Error(body && body.error && body.error.message ? body.error.message : "Save failed (HTTP " + res.status + ")");
+    }
+    setRepoColors(body.repoNames, body.settings);
+    state.repoColorSettings = body.settings;
+    render();
+    renderSettingsPanel();
+  } catch (err) {
+    toast(err && err.message ? err.message : "Colour save failed", "warn");
+  }
 }
 
 function renderWidgetCustomizer() {
@@ -7036,6 +7137,103 @@ function repoOf(program) {
   return carrier ? carrier.repo : null;
 }
 
+/* ---------- TINT-F: repo-identity colour ----------
+
+   One hex per repository, six fixed hues and clay for the seventh, assigned and
+   persisted by the server (`/api/repo-colors`) so the board, the cmux
+   workspaces and the sidebar groups can never disagree about what colour
+   `cooper-scheduler` is.
+
+   The client joins on the repository NAME it already prints, lowercased,
+   because the canonical key is the basename of the git common dir and a browser
+   cannot run `git rev-parse` to derive it. `repoNames` in the endpoint's
+   response is that join table, built server-side from the same walk that made
+   the assignments.
+
+   Two treatments, from the approved design (artifact a902d450):
+
+     Whisper — the grouped repo bands. A 2px spine at 45% down the card, a dot
+       beside the name, a 4% wash on the rows inside it and 7% on hover.
+     Signal — the flat Needs-you strip, where rows from every repository are
+       interleaved. A 3px tick at 55% down each row, the same 4% wash, and a
+       quiet repo pill on the group heading, which is the surface's stand-in for
+       the band name it does not have.
+
+   Status outranks identity in every pixel (authority rule 5): a row wearing any
+   attention treatment drops the repo wash and the repo tick entirely rather
+   than blending with them, and the stylesheet says so with :not() rather than
+   by relying on rule order. Text never wears repo colour (rule 6) — the marks
+   are the spine, the dot, the tick and the pill border, and nothing else.
+
+   Carried into the DOM with `style.setProperty`, not a `style` attribute: the
+   board ships a strict CSP with no 'unsafe-inline', which kills `style="…"`
+   silently, while CSSOM property writes are untouched by it (the inspector's
+   --inspector-visible-top already rides this path). */
+const repoColors = new Map();   // lowercased repo name -> "#rrggbb"
+let repoColorsVersion = 0;      // bumped on every load; paint signatures read it
+
+/* The join is TWO hops, and collapsing it to one is how this shipped broken
+   once: `repoNames` maps a printed name to a canonical repoKey, and
+   `assignments` maps that key to a hex. They are different tables and the
+   middle value is not a colour — feeding `repoNames` straight in left every
+   entry failing normalizeRepoHex, so the map stayed empty and the board never
+   tinted while every test stayed green.
+
+   The two names genuinely differ on this very checkout: the repository's origin
+   is `…/the-ant-hill.git`, so RepoIdentity.repoName — what the band prints — is
+   `the-ant-hill`, while repoKeyForCwd reads the git common dir and answers
+   `the-mountain`. The table exists precisely for that split, which is why
+   `name === key` is never a safe shortcut. */
+function setRepoColors(repoNames, settings) {
+  repoColors.clear();
+  const assignments = (settings && settings.assignments) || {};
+  for (const [name, repoKey] of Object.entries(repoNames || {})) {
+    const assignment = assignments[repoKey];
+    const hex = normalizeRepoHex(assignment && assignment.hex);
+    if (hex) repoColors.set(String(name).toLowerCase(), hex);
+  }
+  repoColorsVersion += 1;
+}
+
+/* Same normalization the server applies, for the same reason: `#2E66A8` and
+   `#2e66a8` are one colour, and two spellings of it in two places is how a
+   comparison starts reporting drift that is only spelling. */
+function normalizeRepoHex(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  const short = /^#([0-9a-fA-F]{3})$/.exec(trimmed);
+  if (short) {
+    const [r, g, b] = short[1];
+    return ("#" + r + r + g + g + b + b).toLowerCase();
+  }
+  return /^#[0-9a-fA-F]{6}$/.test(trimmed) ? trimmed.toLowerCase() : null;
+}
+
+/** The hex a repository wears, or "" when the server has not assigned it one.
+ *  Empty rather than a fallback colour: a repository with no assignment is a
+ *  repository the endpoint has not seen, and painting it a default hue would
+ *  claim an identity the fan-out to cmux is not backing up. */
+function repoTintFor(repoName) {
+  const key = String(repoName || "").trim().toLowerCase();
+  return (key && repoColors.get(key)) || "";
+}
+
+/** Put a tint on a node, CSP-safely, and mark it so the stylesheet can find it. */
+function paintRepoTint(node, hex, className) {
+  if (!node || !hex) return node;
+  node.classList.add(className);
+  node.style?.setProperty?.("--repo-tint", hex);
+  return node;
+}
+
+/* The repo colour a PROGRAM's rows should wear. Reads the same RepoIdentity the
+   band head prints, so the strip row and the band it was pinned out of can
+   never show two different colours for one repository. */
+function repoTintOfProgram(program) {
+  const repo = repoOf(program);
+  return repoTintFor(repo && repo.repoName);
+}
+
 function baseName(path) {
   const trimmed = String(path || "").replace(/\/+$/, "");
   return trimmed ? trimmed.slice(trimmed.lastIndexOf("/") + 1) : "";
@@ -7258,6 +7456,11 @@ function repoShellSig(group, ui) {
     // programShellSig): a view switch must rebuild the shell.
     ui.view,
     group.name,
+    /* The band's repo colour. It arrives on its own clock — one fetch after
+       boot, and again whenever an operator picks a colour — with nothing else
+       in this signature moving, so without it the first paint's untinted card
+       is the card forever. */
+    repoTintFor(group.name),
     repoOpen(group, ui) ? "open" : "shut",
     String(group.worktrees.length),
     group.pullRequestUrls.join(","),
@@ -7281,6 +7484,7 @@ function renderRepoSection(group, ui = state) {
   const open = repoOpen(group, ui);
   const bodyId = "repo-body-" + group.key;
   const count = group.worktrees.length;
+  const tint = repoTintFor(group.name);
   /* The band is the program tier, so it carries the program-tier facts: the
      fold, the name, the PRs, and the rollup over its WHOLE population —
      before this the unit the operator buckets attention by was the only unit
@@ -7297,6 +7501,12 @@ function renderRepoSection(group, ui = state) {
       dataset: { fkey: "repo:" + group.key },
       onclick: () => toggleRepo(group),
     }, icon("caret")),
+    /* Whisper's mark on the head. A dot, not tinted text: the repository's name
+       is the loudest word in this tier and colouring it would spend identity on
+       the one thing that already carries it (rule 6). Decorative — the name is
+       right beside it, so there is nothing here for a screen reader to say and
+       nothing lost to a reader who cannot separate the hues. */
+    tint ? el("span", { class: "repo-dot", "aria-hidden": "true" }) : null,
     el("span", { class: "repo-name", text: group.name }),
     el("span", {
       class: "repo-worktree-count",
@@ -7311,12 +7521,12 @@ function renderRepoSection(group, ui = state) {
     })),
     programHeadRollup(bandAgents(group), null, { view: ui.view }));
 
-  const section = el("section", {
+  const section = paintRepoTint(el("section", {
     class: "repo-section" + (open ? " open" : ""),
     "aria-label": group.name,
   },
     el("h2", { class: "visually-hidden", text: group.name }),
-    head);
+    head), tint, "has-repo-tint");
   /* One column header for the whole band, not one per worktree: five labels
      that never change were painted once per checkout — ten copies over
      fifteen rows on the measured board, the strongest repeating rhythm on the
@@ -7701,6 +7911,9 @@ function agentRowSig(agent, ui, opts = {}) {
     // this signature moving, so it has to be in here or the row keeps its
     // cached, unmarked node.
     opts.alerting ? "alert-mark" : "",
+    /* Signal's tick. It arrives on the colour endpoint's clock rather than the
+       snapshot's, so nothing else in this signature moves when it lands. */
+    opts.repoTint || "",
     /* SYNC-NF. Both of this lane's row facts live on the SNAPSHOT rather than
        on the agent record, so agentRecordSig carries neither: a notification
        arriving, or an ack landing, moves nothing else in this string and the
@@ -7750,6 +7963,11 @@ function programsPaintSig(visible, ui) {
     LENS_AXES.map((axis) => axis.key + "=" + [...(ui[axis.stateKey] || [])].sort().join("+")).join(";"),
     ui.lookbackHours,
     ui.showReviewWorkers ? "1" : "0",
+    /* Sixth instance of the mutates-only-itself failure class the note above
+       names: the repo-colour fetch writes `repoColors` and nothing else, so
+       without this the board would stay untinted until an unrelated repaint —
+       and on a quiet fleet that is never. */
+    String(repoColorsVersion),
     /* Fifth instance of the mutates-only-itself failure class: the settings
        radio writes needsYouDisplay and nothing else, so without this the strip
        would neither leave nor return until something unrelated repainted. */
@@ -7931,7 +8149,9 @@ function syncProgramList(root, visible, ui = state) {
         const label = stripChipLabel(program);
         plan.push({
           key: STRIP_ID + "\u001fhead:" + program.id,
-          sig: "head\u001f" + label,
+          // The pill's hex too, or the heading keeps its cached, pill-less
+          // node when the colour endpoint answers.
+          sig: "head\u001f" + label + "\u001f" + repoTintOfProgram(program),
           build: () => renderStripGroupHead(program, label),
         });
       }
@@ -7978,6 +8198,21 @@ function syncProgramList(root, visible, ui = state) {
    than a per-row chip, because the chip stole the title's width on every line
    and repeated one fact per row that a run of rows shares. */
 function renderStripGroupHead(program, label) {
+  const repo = repoOf(program);
+  const repoName = (repo && repo.repoName) || "";
+  const tint = repoTintFor(repoName);
+  /* Signal's quiet repo pill. The strip is the board's one surface with no band
+     name above it, so this is where the repository is said — a bordered pill,
+     never tinted text (rule 6). The word inside it is already the first half of
+     `label`, so the pill is decoration over a fact the heading states in full;
+     the button's aria-label carries the whole thing either way. */
+  const pill = tint
+    ? paintRepoTint(
+      el("span", { class: "strip-repo-pill", "aria-hidden": "true", text: repoName }),
+      tint,
+      "has-repo-tint",
+    )
+    : null;
   return el("button", {
     class: "strip-group-head",
     title: "Jump to " + label,
@@ -7985,6 +8220,7 @@ function renderStripGroupHead(program, label) {
     dataset: { fkey: "strip-head:" + program.id },
     onclick: () => jumpToProgramGroup(program),
   },
+    pill,
     el("span", { class: "strip-group-name", text: label }),
     el("span", { class: "strip-group-go", "aria-hidden": "true", text: "↗" }));
 }
@@ -8006,6 +8242,27 @@ function stripRowOpts(program, board) {
     fullById: board.byId,
     ambiguousNames: board.ambiguous,
     sharedNames: board.sharedNames,
+    /* NO repo tint here, deliberately, and that omission is the whole fix for
+       authority rule 5 on this surface.
+
+       `needsYouStrip` admits only alerting agents, so every row in this strip
+       is an attention row. Rule 5 gives an attention row to status outright, so
+       identity is carried by the heading pill above the run rather than by
+       anything on the row itself.
+
+       Offering a tick here and relying on the stylesheet to drop it does NOT
+       work, and that is the trap: most strip rows get an ember class from their
+       OUTCOME (needs-you / blocked / failed), but a hook-needsInput agent is
+       alerting with a HEALTHY outcome and so carries none of them. It would
+       match every `:not(.is-…)` identity selector and wear a repo wash on an
+       attention row — precisely inverted.
+
+       The tempting second fix — set `alerting: true` so the row takes the ember
+       class — is wrong here for a reason outside this lane: pane mode
+       deliberately does not double-mark, because the strip IS the signal
+       ("inline mode marks every row the strip would have taken", in
+       tests/web-client.test.ts). Not offering identity in the first place
+       closes the hole without overruling that. */
   };
 }
 
@@ -8453,6 +8710,19 @@ const SECTION_HEADS = {
    `board` is the once-per-paint fleet index; it is optional so the plan can be
    driven directly in a test with nothing but a program and a ui. */
 function agentRowPlan(program, agents, ui = state, board = boardIndex(ui), opts = {}) {
+  /* Signal, on the INTERLEAVED surface: a flat program section is not grouped
+     by repository, so nothing above these rows says which one they belong to
+     and each carries its own 3px tick. A banded row sits inside a tinted card
+     that washes it by descent — a tick there would say the same thing twice on
+     every line, which is the difference between Whisper and Signal.
+
+     Read once here rather than per row: it is constant for the program, and
+     inside the walk below `opts` is shadowed by each row's own options object,
+     so reaching for the parameter there is a temporal-dead-zone error rather
+     than the value it looks like. The stylesheet drops the tick again on any
+     row wearing an attention class, so this is identity offered and status
+     taking precedence, never the two mixed. */
+  const rowRepoTint = opts.banded ? "" : repoTintOfProgram(program);
   const visibleIds = new Set(agents.map((agent) => agent.id));
   const programById = new Map(program.agents.map((agent) => [agent.id, agent]));
   const relevantIds = new Set(visibleIds);
@@ -8560,6 +8830,7 @@ function agentRowPlan(program, agents, ui = state, board = boardIndex(ui), opts 
            "open me and see" must only fire when opening shows it. */
         swarmAlerting: !open && hasDrawnAlertingDescendant(agent.id),
         alerting: markAlerting && alerting(agent),
+        repoTint: rowRepoTint,
       };
       plan.push({
         key: "row:" + agent.id,
@@ -9429,6 +9700,14 @@ function renderAgentRow(agent, program, opts = {}) {
       activate();
     },
   }, line1);
+
+  /* Signal's 3px tick, on the flat surfaces that pass one. The stylesheet
+     decides whether it is actually drawn: a row already wearing an attention
+     treatment keeps the ember rail and the repo tick is evicted, never blended
+     (authority rule 5). Painted here rather than folded into rowClass because
+     the hex is a value, and a value on a CSP-strict page travels as a custom
+     property, not as a class. */
+  paintRepoTint(row, opts.repoTint, "has-repo-tick");
 
   if (!editing) return row;
 
@@ -12898,6 +13177,26 @@ async function fetchLabels() {
   }
 }
 
+/* TINT-F. One fetch at boot, and one after every colour an operator picks.
+   There is deliberately no poll: an assignment only changes when a repository
+   the board has never seen appears — which is a fresh GET's own doing, since
+   this endpoint is what assigns it — or when somebody presses a swatch. A
+   failure here costs the tint and nothing else, so it warns and leaves the
+   board uncoloured rather than reaching for a fallback palette the cmux
+   workspaces would not be wearing. */
+async function fetchRepoColors() {
+  try {
+    const res = await apiFetch("/api/repo-colors", { headers: { accept: "application/json" } }, API_READ_TIMEOUT_MS);
+    const body = await res.json();
+    if (!res.ok || !body || body.ok !== true || !body.settings) throw new Error("bad repo-colour response");
+    setRepoColors(body.repoNames, body.settings);
+    state.repoColorSettings = body.settings;
+    render();
+  } catch (err) {
+    console.warn("repo colour fetch failed:", err);
+  }
+}
+
 function startRename(target, opts = {}) {
   const key = presentationLabelKey(target);
   state.renaming = key;
@@ -13788,6 +14087,7 @@ function boot() {
 
   fetchSnapshot();
   fetchLabels();
+  void fetchRepoColors();
   fetchTriageQueue();
   // One attempt at boot. It populates the drawer's "last action" fact, and on a
   // build without the route it latches available=false so nothing retries it.
@@ -13820,6 +14120,8 @@ Object.assign(globalThis.TheAntHill, {
   // Declared below the first export block, so they would be a TDZ error there —
   // same reason CONN_LABELS and the transcript limits live down here.
   settingsPreview, settingsPreviewText, SETTINGS_PRESETS, renderSettingsPanel,
+  // TINT-F: the repo-colour region and its one write.
+  renderRepoColorSettings, putRepoColor,
   passesLookback, isUnverified,
   // `const`s, so they would be a TDZ error in the hoisted block above.
   STRIP_ID, SECTION_HEADS,
