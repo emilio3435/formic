@@ -39,7 +39,7 @@
 | TINT-F | GOAL-F-foundation.md | `feat/tint-f` · `../the-mountain.worktrees/tint-f` | workspace:26 `TINT · f-orch · opus · 08-13` | Opus 5 high · claude (pid 70978, verified) | REOPENED 01:52 — verifier VERDICT: BLOCK (5 findings, fix order sent) | yes | verify: BLOCK @ 01:49 |
 | TINT-S | GOAL-S-sync.md | `feat/tint-s` · `../the-mountain.worktrees/tint-s` | workspace:27 `TINT · s-orch · opus · 08-13` | Opus 5 high · claude (pid 71016, verified) | DONE 01:41 — addendum 2f22c83 (anchor filter, live-probed), green | yes | verify: PASS |
 | TINT-G | GOAL-G-groups.md | `feat/tint-g` · `../the-mountain.worktrees/tint-g` | workspace:28 `TINT · g-orch · opus · 08-13` | Opus 5 high · claude (pid 71062, verified) | REPORTED DONE 01:28 (2 commits) | yes — findings relayed | verify: PASS (incl. 2 mutation spot-checks) |
-| TINT-P | GOAL-P-prompt.md | `feat/tint-p` · `../the-mountain.worktrees/tint-p` | workspace:29 `TINT · p-orch · opus · 08-13` | Opus 5 high · claude (pid 71208, verified) | DONE 01:53 — guard fixed (dotfiles 0a6d0d1), 6-case evidence matrix, cmux TERM probed live | yes | verify: PASS, hole closed |
+| TINT-P | GOAL-P-prompt.md | `feat/tint-p` · `../the-mountain.worktrees/tint-p` | workspace:29 `TINT · p-orch · opus · 08-13` | Opus 5 high · claude (pid 71208, verified) | CLOSED 01:56 — final: dotfiles feat/tint-repo-chip @ 265df88 (3 commits, unpushed, no remote), repo worktree untouched, rulings recorded in report | yes | verify: PASS, hole closed |
 
 Sub-orch worker lanes appear in each sub-orch's own ledger section of its `LANE-REPORT`; master tracks sub-orchs only, but sweeps everything under the `TINT · ` prefix.
 
@@ -72,3 +72,4 @@ Sub-orch worker lanes appear in each sub-orch's own ledger section of its `LANE-
 - PRE-EXISTING BUG (S measured): collectCmuxSidebar is single-window blind — 10 of 15 workspaces collected; project root/branch/dirty/PR links missing a whole window for every consumer. Follow-up lane candidate.
 - Funnel hole (S flagged, F's file): lastWrittenHex records the written hex, not cmux's echo; closed in practice today, breaks if cmux ever quantizes stored colors. Deploy check: grep deploy log for "NOT CONFIRMED" — correct-hex echo means F's strict value-check is wrong; null echo means the check earned its keep (F's own guidance).
 - Sync cost: +1 RPC per window per cmux tick (group.list pairing).
+- UNVERSIONED SKILL EDIT (P carry-forward): ~/.claude is not a git repo, so the orchestrate SKILL.md spawn-env change exists only as a live file — it will not survive a machine rebuild the way the dotfiles half will. Candidate fix: symlink ~/.claude/skills into ~/dotfiles like agent-rules already is. Emilio's call.
