@@ -21,12 +21,12 @@
 | E merged; six phase lanes spawned (ps-verified per lane) | DONE | merge 656f2a9, integration floor green; ws:55-60; codex pids 4629/4630/4661 = gpt-5.6-sol xhigh; claude pids 7122/7144/7414 = --model opus --effort high --permission-mode auto |
 | CB merged (verify PASS + my floor) | DONE | verify-cb PASS; master-committed 9f4dc5f; merged; floor tsc 0 · 3322/3323 canary-only |
 | CF merged | DONE | verify-cf PASS; merged; floor tsc 0 · 3346/3347 canary-only |
-| NB merged | PENDING | — |
-| NF merged | PENDING | — |
-| RB merged | PENDING | — |
-| RF merged | PENDING | — |
-| Live sync checks (close/notify/rename round-trips, loop-free) | PENDING | — |
-| Eyes-on pass | PENDING | — |
+| NB merged | DONE | verify BLOCK->fix->PASS x2; union-resolved with CB in lane branch (one config substrate); merged 80bf060; floor canary-only |
+| NF merged | DONE | verify PASS; clean merge e314b9e; floor canary-only |
+| RB merged | DONE | verify PASS; union-resolved (3-family funnel, NB tests adapted to one-substrate); merged 36b95b9; floor canary-only |
+| RF merged | DONE | verify PASS; clean merge af63b14; final floor tsc 0 · 3395/3396 canary-only |
+| Live sync checks | DONE | side port 4799: board rename ok+custom pin; foreign rename wins across 3 cycles, zero re-writes (no loop); last-surface invalid_state + frozen escalation envelope; confirmed workspace close -> row finished in 2.5s no-poll (reason surfaced as process-witness, noted); mark_read is_read=true still-listed; foreign Origin 403. Dismiss deliberately not run on a real notification (same plumbing, test-pinned) |
+| Eyes-on pass | DONE | browse screenshots: 4 badge rows, Ack on alerting rows, drawer close tile + WORKSPACE pencil rename; zero console errors |
 | Push + PR (Emilio's word — NOT standing) | PENDING | — |
 | Sweep under `SYNC · ` + evidence archived | PENDING | — |
 
