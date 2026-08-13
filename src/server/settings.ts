@@ -1,6 +1,14 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { ArchiveLimits } from "./archive";
+import {
+  defaultRepoColorsSettings,
+  hexForSlot,
+  normalizeHex,
+  withAssignments,
+  type RepoColorAssignment,
+  type RepoColorsSettings,
+} from "../shared/repo-color";
 
 export const DEFAULT_SCAN_WINDOW_HOURS = 36;
 export const MIN_SCAN_WINDOW_HOURS = 1;
@@ -387,4 +395,332 @@ export async function handleSettingsRequest(
   } catch (error) {
     return requestError(500, "SETTINGS_WRITE_FAILED", error instanceof Error ? error.message : String(error));
   }
+}
+
+/* ---------------------------------------------------------------------------
+   TINT-F — repo colour persistence.
+
+   A store of its own rather than three more keys on HubSettings. `/api/settings`
+   validates against a flat whitelist of scalars (SETTING_KEYS), and
+   `assignments` is a nested record an operator never types: folding it in would
+   either widen that whitelist to accept arbitrary objects or leave a settings
+   key the settings endpoint silently refuses. It keeps this file's patterns —
+   normalize-never-throw on read, reject-never-clamp on write, atomic
+   temp-then-rename — because those are what the settings layer here IS.
+   ------------------------------------------------------------------------ */
+
+export function normalizeRepoColorAssignment(value: unknown, key: string): RepoColorAssignment | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const hex = normalizeHex(record.hex);
+  if (!hex) return null;
+  const slot = typeof record.slot === "number" && Number.isInteger(record.slot) && record.slot >= 0
+    ? record.slot
+    : null;
+  return {
+    repoKey: typeof record.repoKey === "string" && record.repoKey ? record.repoKey : key,
+    hex,
+    slot,
+    source: record.source === "user" ? "user" : "auto",
+  };
+}
+
+export function normalizeRepoColors(value: unknown): RepoColorsSettings {
+  const defaults = defaultRepoColorsSettings();
+  const record = value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+  const rawAssignments = record.assignments && typeof record.assignments === "object" && !Array.isArray(record.assignments)
+    ? (record.assignments as Record<string, unknown>)
+    : {};
+  const assignments: Record<string, RepoColorAssignment> = {};
+  for (const [key, entry] of Object.entries(rawAssignments)) {
+    /* A single unreadable assignment is dropped, not the file. The repository
+       it named simply gets re-assigned on the next discovery pass, which is a
+       colour change; losing every OTHER repository's colour to keep it company
+       would be a whole board repaint over one bad row. */
+    const normalized = normalizeRepoColorAssignment(entry, key);
+    if (normalized) assignments[key] = normalized;
+  }
+  return {
+    assignments,
+    mirrorGroups: typeof record.mirrorGroups === "boolean" ? record.mirrorGroups : defaults.mirrorGroups,
+    syncFromCmux: typeof record.syncFromCmux === "boolean" ? record.syncFromCmux : defaults.syncFromCmux,
+  };
+}
+
+export class JsonRepoColorsStore {
+  #settings: RepoColorsSettings;
+  #writeQueue: Promise<void> = Promise.resolve();
+  readonly #loadError?: string;
+
+  private constructor(
+    private readonly path: string,
+    private readonly files: SettingsFileOperations,
+    settings: RepoColorsSettings,
+    loadError?: string,
+  ) {
+    this.#settings = settings;
+    this.#loadError = loadError;
+  }
+
+  static async open(path: string, files: SettingsFileOperations = nodeFiles): Promise<JsonRepoColorsStore> {
+    let settings = normalizeRepoColors(undefined);
+    let loadError: string | undefined;
+    try {
+      settings = normalizeRepoColors(JSON.parse(await files.readText(path)));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        loadError = `repo colours at ${path} could not be read, so every repository will be re-assigned: `
+          + (error instanceof Error ? error.message : String(error));
+        console.error(`[repo-colors] ${loadError}`);
+        settings = normalizeRepoColors(undefined);
+      }
+    }
+    return new JsonRepoColorsStore(path, files, settings, loadError);
+  }
+
+  get loadError(): string | undefined {
+    return this.#loadError;
+  }
+
+  get(): RepoColorsSettings {
+    return { ...this.#settings, assignments: { ...this.#settings.assignments } };
+  }
+
+  async #write(next: RepoColorsSettings): Promise<RepoColorsSettings> {
+    const write = this.#writeQueue.then(async () => {
+      await this.files.makeDirectory(dirname(this.path));
+      const temp = `${this.path}.${process.pid}.${Date.now()}.tmp`;
+      await this.files.writeText(temp, `${JSON.stringify(next, null, 2)}\n`);
+      await this.files.rename(temp, this.path);
+      this.#settings = next;
+    });
+    this.#writeQueue = write.catch(() => {});
+    await write;
+    return this.get();
+  }
+
+  /** Give every discovered repository a colour, keeping the ones already made.
+   *  Returns the settings in force; writes only when something was added, so a
+   *  poll over an unchanged fleet does no disk I/O. */
+  async ensure(repoKeys: readonly string[]): Promise<RepoColorsSettings> {
+    const next = withAssignments(this.#settings, repoKeys);
+    if (Object.keys(next.assignments).length === Object.keys(this.#settings.assignments).length) {
+      return this.get();
+    }
+    return this.#write(next);
+  }
+
+  /** An operator's own colour for one repository. Throws on a hex this program
+     would not be able to compare later — reject, never coerce. */
+  async setUserColor(repoKey: string, hex: string): Promise<RepoColorsSettings> {
+    const normalized = normalizeHex(hex);
+    if (!repoKey) throw new Error("repoKey is required");
+    if (!normalized) throw new Error("hex must be #RGB or #RRGGBB");
+    const assignments = { ...this.#settings.assignments };
+    /* slot goes null: the repository is no longer wearing a palette slot, and
+       leaving the old number behind would keep that slot marked taken forever,
+       pushing the next repository into overflow clay while a hue sat unused. */
+    assignments[repoKey] = { repoKey, hex: normalized, slot: null, source: "user" };
+    return this.#write({ ...this.#settings, assignments });
+  }
+
+  /** Drop an operator override so the repository returns to its palette slot. */
+  async clearUserColor(repoKey: string): Promise<RepoColorsSettings> {
+    const current = this.#settings.assignments[repoKey];
+    if (!current || current.source !== "user") return this.get();
+    const assignments = { ...this.#settings.assignments };
+    delete assignments[repoKey];
+    return this.#write(withAssignments({ ...this.#settings, assignments }, [repoKey]));
+  }
+
+  async setFlags(patch: { mirrorGroups?: boolean; syncFromCmux?: boolean }): Promise<RepoColorsSettings> {
+    return this.#write({
+      ...this.#settings,
+      ...(patch.mirrorGroups === undefined ? {} : { mirrorGroups: patch.mirrorGroups }),
+      ...(patch.syncFromCmux === undefined ? {} : { syncFromCmux: patch.syncFromCmux }),
+    });
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Discovery: what the board is currently looking at, in repo-colour terms.
+   ------------------------------------------------------------------------ */
+
+export interface RepoColorSubject {
+  /** Canonical repo key, from repoKeyForCwd; null when the agent is not in a repo. */
+  repoKey: string | null;
+  /** The name the BOARD prints for this repository, if any. */
+  repoName?: string;
+  /** cmux workspace this agent's surface lives in, if resolved. */
+  workspaceId?: string;
+}
+
+export interface RepoColorDiscovery {
+  repoKeys: string[];
+  /** Lowercased board repo name → canonical repo key. The client joins on this. */
+  names: Record<string, string>;
+  /** cmux workspace id → canonical repo key. */
+  workspaces: Record<string, string>;
+}
+
+/** Fold the live fleet into the three maps the colour endpoint answers with.
+ *
+ *  Authority rule 4 lives here: a workspace holding agents from more than one
+ *  repository belongs to whichever repository has the most agents in it, ties
+ *  broken by the lexicographically first key. Deterministic on purpose — a
+ *  shared workspace that changed colour every poll because two repos traded the
+ *  lead would be a strobe, and "whichever we saw last" is not an answer anyone
+ *  can predict or debug. */
+export function repoColorDiscovery(subjects: readonly RepoColorSubject[]): RepoColorDiscovery {
+  const repoKeys = new Set<string>();
+  const names: Record<string, string> = {};
+  const counts = new Map<string, Map<string, number>>();
+  for (const subject of subjects) {
+    const key = subject.repoKey;
+    if (!key) continue;
+    repoKeys.add(key);
+    const name = subject.repoName?.trim().toLowerCase();
+    if (name) names[name] = key;
+    if (!subject.workspaceId) continue;
+    let tally = counts.get(subject.workspaceId);
+    if (!tally) {
+      tally = new Map();
+      counts.set(subject.workspaceId, tally);
+    }
+    tally.set(key, (tally.get(key) ?? 0) + 1);
+  }
+  const workspaces: Record<string, string> = {};
+  for (const [workspaceId, tally] of counts) {
+    const winner = [...tally.entries()].sort((left, right) =>
+      right[1] - left[1] || left[0].localeCompare(right[0]))[0];
+    if (winner) workspaces[workspaceId] = winner[0];
+  }
+  return { repoKeys: [...repoKeys].sort(), names, workspaces };
+}
+
+export interface RepoColorsRequestOptions {
+  discover?: () => RepoColorDiscovery | Promise<RepoColorDiscovery>;
+  /** Fan out the assignments to cmux. Repo-MAPPED workspaces only — writing to
+   *  an unmapped workspace is cmux's own colour being overwritten (rule 2). */
+  fanOut?: (writes: readonly { workspaceId: string; hex: string }[]) => void | Promise<void>;
+}
+
+function repoColorsPayload(
+  settings: RepoColorsSettings,
+  discovery: RepoColorDiscovery,
+): Record<string, unknown> {
+  const workspaces: Record<string, { hex: string; repoKey: string | null }> = {};
+  for (const [workspaceId, repoKey] of Object.entries(discovery.workspaces)) {
+    const assignment = settings.assignments[repoKey];
+    if (!assignment) continue;
+    workspaces[workspaceId] = { hex: assignment.hex, repoKey };
+  }
+  return {
+    ok: true,
+    settings,
+    workspaces,
+    /* Additive to the contract's `{ settings, workspaces }`: the BOARD joins on
+       the repository name it already prints, because a browser cannot run
+       `git rev-parse` to derive the canonical key for itself. Flagged to the
+       master in LANE-REPORT-tint-f §5. */
+    repoNames: discovery.names,
+  };
+}
+
+const REPO_KEY_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/;
+
+export async function handleRepoColorsRequest(
+  request: Request,
+  store: JsonRepoColorsStore,
+  options: RepoColorsRequestOptions = {},
+): Promise<Response> {
+  const url = new URL(request.url);
+  if (!isLoopback(url.hostname)) {
+    return requestError(403, "ORIGIN_REJECTED", "Repo colours are only available on loopback.");
+  }
+  const tail = url.pathname.slice("/api/repo-colors".length).replace(/^\//, "");
+  if (request.method === "GET") {
+    if (tail) return requestError(404, "NOT_FOUND", "Read every repository's colour from /api/repo-colors.");
+    const discovery = await (options.discover?.() ?? { repoKeys: [], names: {}, workspaces: {} });
+    const settings = await store.ensure(discovery.repoKeys);
+    const writes = Object.entries(discovery.workspaces).flatMap(([workspaceId, repoKey]) => {
+      const assignment = settings.assignments[repoKey];
+      return assignment ? [{ workspaceId, hex: assignment.hex }] : [];
+    });
+    if (writes.length) await options.fanOut?.(writes);
+    return json(repoColorsPayload(settings, discovery));
+  }
+  if (request.method !== "PUT" && request.method !== "DELETE") {
+    return requestError(405, "METHOD_NOT_ALLOWED", "Use GET, PUT or DELETE for repo colours.");
+  }
+  const origin = request.headers.get("origin");
+  if (!origin || origin !== url.origin) {
+    return requestError(403, "ORIGIN_REJECTED", "Repo colour changes require an exact same-origin loopback Origin header.");
+  }
+  const repoKey = decodeURIComponent(tail);
+  if (!REPO_KEY_PATTERN.test(repoKey)) {
+    return requestError(400, "INVALID_REPO_KEY", "Address one repository as /api/repo-colors/<repoKey>.");
+  }
+  try {
+    if (request.method === "DELETE") {
+      const settings = await store.clearUserColor(repoKey);
+      const discovery = await (options.discover?.() ?? { repoKeys: [], names: {}, workspaces: {} });
+      return json(repoColorsPayload(settings, discovery));
+    }
+    if (request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+      return requestError(415, "CONTENT_TYPE_REJECTED", "Repo colour changes require application/json.");
+    }
+    let raw: unknown;
+    try {
+      raw = await request.json();
+    } catch {
+      return requestError(400, "INVALID_JSON", "Repo colour body is not valid JSON.");
+    }
+    const record = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
+    if (!normalizeHex(record.hex)) {
+      return requestError(400, "INVALID_HEX", "hex must be #RGB or #RRGGBB.");
+    }
+    const settings = await store.setUserColor(repoKey, record.hex as string);
+    const discovery = await (options.discover?.() ?? { repoKeys: [], names: {}, workspaces: {} });
+    const writes = Object.entries(discovery.workspaces).flatMap(([workspaceId, key]) =>
+      key === repoKey && settings.assignments[key]
+        ? [{ workspaceId, hex: settings.assignments[key]!.hex }]
+        : []);
+    if (writes.length) await options.fanOut?.(writes);
+    return json(repoColorsPayload(settings, discovery));
+  } catch (error) {
+    return requestError(500, "REPO_COLORS_WRITE_FAILED", error instanceof Error ? error.message : String(error));
+  }
+}
+
+/* Re-exported so consumers reach one module for the whole repo-colour surface
+   rather than importing the palette from shared and the store from here. */
+export { hexForSlot };
+export type { RepoColorAssignment, RepoColorsSettings };
+
+/** In-memory file operations, for a store that must exist without a disk to
+ *  write to (tests, and any web root that is not the shipped one). */
+export function memorySettingsFiles(): SettingsFileOperations {
+  const files = new Map<string, string>();
+  return {
+    readText: async (path) => {
+      const value = files.get(path);
+      if (value === undefined) {
+        const error = new Error(`no such file: ${path}`) as NodeJS.ErrnoException;
+        error.code = "ENOENT";
+        throw error;
+      }
+      return value;
+    },
+    makeDirectory: async () => {},
+    writeText: async (path, contents) => { files.set(path, contents); },
+    rename: async (from, to) => {
+      const value = files.get(from);
+      if (value === undefined) throw new Error(`no such file: ${from}`);
+      files.set(to, value);
+      files.delete(from);
+    },
+  };
 }
