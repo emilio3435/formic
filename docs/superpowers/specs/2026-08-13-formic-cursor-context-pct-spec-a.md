@@ -124,3 +124,23 @@ Do not weaken tests/usage-cost-honesty.test.ts.
 ## Out of spec (do not sneak in)
 
 Spec B: Cloud Agents GET /v1/agents/{id}/usage. preCompact hook writer (nice fallback if headers rename again; not this PR). Renaming composerHeaders defensive crawlers.
+
+---
+
+## Amendment — 2026-08-13, after implementation: the named source was already frozen
+
+Everything above is left exactly as written. It is the record of what was known on the morning of 2026-08-13, and the correction below only makes sense read against it.
+
+**The ItemTable key this spec names as THE source stopped being written on 2026-07-05.** Cursor migrated composer headers out of the JSON blob into a dedicated `composerHeaders` TABLE in the same `state.vscdb`. Verified read-only against Emilio's machine during Task 6's live smoke:
+
+- Gate key `composer.composerHeaders.tableGateEnabled` = `true`; `composer.composerHeaders.version` = `1786633950707-1`.
+- Table `composerHeaders`, 928 rows, columns `composerId, workspaceId, createdAt, lastUpdatedAt, isArchived, isSubagent, recency, checkpointAt, value`. The `value` column is JSON carrying `contextUsagePercent` at the top level, the same shape the blob's array elements had.
+- The blob still exists and still parses. It holds 353 composers, 240 metered, newest `lastUpdatedAt` **2026-07-05T05:48:40Z**. The `95.47466666666666` reading quoted in §Goal is a July-5 record, not a live one.
+
+**Consequences for this spec:**
+
+1. §Data's source line and its instruction "Do not search the whole DB for lookalike fields" would, followed literally, point the feature at a permanently frozen key. As shipped (Task 7), the `composerHeaders` TABLE is the source and the ItemTable blob is a FALLBACK — used only on installs whose gate has not flipped. On a gated install the blob may fill ids the table has no row for, but it may never stand in for the table: a table that is present and unreadable is reported as a collection error, and a table that is present and empty is a complete answer.
+2. §Data's "the key has already moved once (composerData → composerHeaders)" is now "twice": composerData → the ItemTable blob → the `composerHeaders` table.
+3. **§Done when's first bullet was met only via the table, and only against a rewound clock.** With the scan clock at today's time, zero rows light: the table's newest row on this machine is 2026-08-09, outside Formic's 36h window. Rewound to `nowMs=1786312466209`, one real session lit (`1b71b589-8339-4a13-8fcb-f44885b7f070`, 85.837109375, `total` undefined, `cost` null); widened to 30 days, 360 real sessions carried a percent with no token count anywhere. Recent local Cursor activity is `bc-` cloud composers, which write no local meter at all — Spec B territory.
+
+Nothing else in the spec changed: the join key, the [0, 100.5] ingest range, the non-goals, and every honesty constraint hold for both sources, because both produce the same `Map<string, number>`.
