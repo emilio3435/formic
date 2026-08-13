@@ -38,6 +38,19 @@ export interface RepoGroupInputs {
   /** RepoColorsSettings.mirrorGroups. False means "undo what we created". */
   mirrorGroups: boolean;
   targets: readonly RepoGroupTarget[];
+  /* Whether `targets` is the whole truth this pass. An empty list means two
+     different things — "this repo really has no workspaces left" and "the
+     collector could not tell us" — and only the caller can distinguish them.
+     The board withdraws every agent's terminal target whenever a pass misses
+     its deadline or routing evidence is quarantined, which empties `targets`
+     without a single workspace having moved. Reading that as intent dissolved
+     every repo group and rebuilt it seconds later, and each rebuild mints an
+     anchor row cmux auto-names "Group N" that never goes away.
+
+     Required, not optional-defaulting-to-true: a caller that has not thought
+     about completeness must be made to, because the wrong default is the one
+     that silently destroys the operator's sidebar. */
+  targetsComplete: boolean;
   setGroupColor: SetGroupColor;
 }
 
@@ -259,6 +272,14 @@ async function rpc(
   return { ok: true, stdout: result.stdout };
 }
 
+/* How many consecutive passes a repo must be missing from a COMPLETE target set
+   before its group is dissolved. One is enough to be correct and not enough to
+   be safe: the completeness flag is a claim by the caller, and this is what
+   holds when that claim is wrong. Passes ride the collector poll, so the cost
+   of confirming is one poll of staleness on a genuine teardown. */
+const DISSOLVE_AFTER_ABSENT_PASSES = 2;
+const absentPasses = new Map<string, number>();
+
 export interface ReconcileOptions {
   runner: CommandRunner;
   provenance: RepoGroupProvenanceStore;
@@ -461,6 +482,10 @@ export async function reconcileRepoGroups(
          it: a create/destroy loop that never settles. */
       for (const workspaceId of live.memberWorkspaceIds) {
         if (workspaceId === live.anchorWorkspaceId) continue;
+        /* A workspace missing from an incomplete target set has not left the
+           repo; the board simply could not vouch for it this pass. Evicting it
+           on that evidence is how a group loses its last real member. */
+        if (!inputs.targetsComplete) continue;
         if (currentMembers.has(workspaceId) && desired.workspaceIds.includes(workspaceId)) continue;
         const outcome = await rpc(runner, executable, "workspace.group.remove", { workspace_id: workspaceId });
         if (!outcome.ok) {
@@ -508,9 +533,29 @@ export async function reconcileRepoGroups(
     }
 
     /* A repo with nothing left in this window loses its group — dissolved, not
-       deleted, so the workspaces survive. */
+       deleted, so the workspaces survive.
+
+       Two independent things must hold before a group is torn down, because a
+       teardown is unrecoverable: cmux mints a new anchor row on the rebuild and
+       the old one never goes away. First, the caller must vouch that `targets`
+       was complete — an empty list from a degraded pass says nothing about
+       where workspaces live. Second, the absence must survive a second pass, so
+       that a caller which wrongly claims completeness still cannot dissolve the
+       sidebar on one bad sample. A repo that has genuinely gone stays gone, so
+       it clears both. */
     for (const record of ourGroups) {
-      if (byRepo.has(record.repoKey)) continue;
+      const tally = `${record.windowId}:${record.repoKey}`;
+      if (byRepo.has(record.repoKey)) {
+        absentPasses.delete(tally);
+        continue;
+      }
+      if (!inputs.targetsComplete) continue;
+      const absent = (absentPasses.get(tally) ?? 0) + 1;
+      if (absent < DISSOLVE_AFTER_ABSENT_PASSES) {
+        absentPasses.set(tally, absent);
+        continue;
+      }
+      absentPasses.delete(tally);
       await ungroup(record);
     }
   }
@@ -544,6 +589,7 @@ export function resetRepoGroupRegistrationForTests(): void {
   inputProvider = undefined;
   provenanceStore = undefined;
   reconciling = false;
+  absentPasses.clear();
 }
 
 /* Called from the collector cycle. Returns null when nothing is wired yet, and

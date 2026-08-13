@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import {
   MemoryRepoGroupProvenanceStore,
   normalizeHex,
@@ -214,6 +214,133 @@ describe("normalizeHex", () => {
 });
 
 describe("reconcileRepoGroups", () => {
+  /* The teardown confirmation counter lives at module scope, so two tests using
+     the same window and repo names would otherwise inherit each other's tally. */
+  beforeEach(resetRepoGroupRegistrationForTests);
+
+  /** Anchor rows cmux minted — the residue an operator sees as "Group N". */
+  function anchorRows(cmux: FakeCmux, windowId: string): string[] {
+    return (cmux.windows.get(windowId) ?? []).filter((id) => id.startsWith("anchor-"));
+  }
+
+  test("a degraded pass dissolves nothing, however empty its targets", async () => {
+    const cmux = new FakeCmux({ "window-1": ["ws-a"] });
+    const provenance = new MemoryRepoGroupProvenanceStore();
+    const colors = funnel(cmux);
+    const healthy = {
+      mirrorGroups: true,
+      targetsComplete: true,
+      setGroupColor: colors.setGroupColor,
+      targets: [target("ws-a", "the-mountain", "#5F7F2A")],
+    };
+    await reconcileRepoGroups({ runner: cmux, provenance, inputs: healthy });
+    const created = provenance.list()[0]!.groupId;
+
+    /* What the board publishes when a pass misses its deadline: every agent's
+       terminal target withdrawn, so the repo walk yields nothing. No workspace
+       moved; the collector simply could not say where they are.
+
+       Run it TWICE, past the confirmation counter's threshold, so this test
+       fails if the completeness guard is removed. One degraded pass would be
+       held back by the counter alone and would prove nothing about this rule. */
+    await reconcileRepoGroups({
+      runner: cmux,
+      provenance,
+      inputs: { ...healthy, targetsComplete: false, targets: [] },
+    });
+    const result = await reconcileRepoGroups({
+      runner: cmux,
+      provenance,
+      inputs: { ...healthy, targetsComplete: false, targets: [] },
+    });
+
+    expect(cmux.methodCalls("workspace.group.ungroup")).toEqual([]);
+    expect(provenance.list().map((record) => record.groupId)).toEqual([created]);
+    expect(cmux.groups.has(created)).toBe(true);
+    expect(result.errors).toEqual([]);
+  });
+
+  test("a degraded pass never evicts a member it cannot vouch for", async () => {
+    const cmux = new FakeCmux({ "window-1": ["ws-a", "ws-b"] });
+    const provenance = new MemoryRepoGroupProvenanceStore();
+    const colors = funnel(cmux);
+    const both = [
+      target("ws-a", "the-mountain", "#5F7F2A"),
+      target("ws-b", "the-mountain", "#5F7F2A"),
+    ];
+    await reconcileRepoGroups({
+      runner: cmux,
+      provenance,
+      inputs: { mirrorGroups: true, targetsComplete: true, setGroupColor: colors.setGroupColor, targets: both },
+    });
+
+    /* ws-b's target went missing on a degraded pass. It has not left the repo,
+       and evicting it is how a group loses its last real member. */
+    await reconcileRepoGroups({
+      runner: cmux,
+      provenance,
+      inputs: { mirrorGroups: true, targetsComplete: false, setGroupColor: colors.setGroupColor, targets: [both[0]!] },
+    });
+
+    expect(cmux.methodCalls("workspace.group.remove")).toEqual([]);
+    expect(membersOf(cmux, provenance.list()[0]!.groupId)).toEqual(["ws-a", "ws-b"]);
+  });
+
+  test("a degraded pass between two healthy ones mints no second anchor row", async () => {
+    const cmux = new FakeCmux({ "window-1": ["ws-a"] });
+    const provenance = new MemoryRepoGroupProvenanceStore();
+    const colors = funnel(cmux);
+    const healthy = {
+      mirrorGroups: true,
+      targetsComplete: true,
+      setGroupColor: colors.setGroupColor,
+      targets: [target("ws-a", "the-mountain", "#5F7F2A")],
+    };
+
+    await reconcileRepoGroups({ runner: cmux, provenance, inputs: healthy });
+    const first = provenance.list()[0]!.groupId;
+    /* Two degraded passes, so the confirmation counter alone cannot be what
+       saves the group here — this test answers for the completeness guard. */
+    for (let pass = 0; pass < 2; pass += 1) {
+      await reconcileRepoGroups({
+        runner: cmux,
+        provenance,
+        inputs: { ...healthy, targetsComplete: false, targets: [] },
+      });
+    }
+    await reconcileRepoGroups({ runner: cmux, provenance, inputs: healthy });
+
+    /* The whole defect in one assertion. Every rebuild makes cmux mint a fresh
+       anchor workspace it auto-titles "Group N", and that row outlives the
+       group forever — nine of them accumulated on 2026-08-13 alone. */
+    expect(anchorRows(cmux, "window-1")).toHaveLength(1);
+    expect(cmux.methodCalls("workspace.group.create")).toHaveLength(1);
+    expect(provenance.list().map((record) => record.groupId)).toEqual([first]);
+  });
+
+  test("a repo that comes back between absences keeps its group", async () => {
+    const cmux = new FakeCmux({ "window-1": ["ws-a"] });
+    const provenance = new MemoryRepoGroupProvenanceStore();
+    const colors = funnel(cmux);
+    const healthy = {
+      mirrorGroups: true,
+      targetsComplete: true,
+      setGroupColor: colors.setGroupColor,
+      targets: [target("ws-a", "the-mountain", "#5F7F2A")],
+    };
+    await reconcileRepoGroups({ runner: cmux, provenance, inputs: healthy });
+    const created = provenance.list()[0]!.groupId;
+
+    /* Absent, back, absent. The confirmation must count CONSECUTIVE absences;
+       a tally that only ever increments would dissolve on the second blip. */
+    await reconcileRepoGroups({ runner: cmux, provenance, inputs: { ...healthy, targets: [] } });
+    await reconcileRepoGroups({ runner: cmux, provenance, inputs: healthy });
+    await reconcileRepoGroups({ runner: cmux, provenance, inputs: { ...healthy, targets: [] } });
+
+    expect(cmux.methodCalls("workspace.group.ungroup")).toEqual([]);
+    expect(cmux.groups.has(created)).toBe(true);
+  });
+
   test("mirrors one group per repo, in the window the workspaces live in", async () => {
     const cmux = new FakeCmux({
       "window-1": ["ws-a", "ws-b", "ws-c"],
@@ -225,6 +352,7 @@ describe("reconcileRepoGroups", () => {
       provenance: new MemoryRepoGroupProvenanceStore(),
       inputs: {
         mirrorGroups: true,
+        targetsComplete: true,
         setGroupColor: colors.setGroupColor,
         targets: [
           target("ws-a", "the-mountain", "#5F7F2A"),
@@ -261,6 +389,7 @@ describe("reconcileRepoGroups", () => {
     const colors = funnel(cmux);
     const inputs: RepoGroupInputs = {
       mirrorGroups: true,
+      targetsComplete: true,
       setGroupColor: colors.setGroupColor,
       targets: [target("ws-a", "the-mountain", "#5F7F2A"), target("ws-b", "the-mountain", "#5F7F2A")],
     };
@@ -283,6 +412,7 @@ describe("reconcileRepoGroups", () => {
     const colors = funnel(cmux);
     const inputs: RepoGroupInputs = {
       mirrorGroups: true,
+      targetsComplete: true,
       setGroupColor: colors.setGroupColor,
       targets: [target("ws-a", "the-mountain", "#5f7f2a")],
     };
@@ -305,6 +435,7 @@ describe("reconcileRepoGroups", () => {
       provenance: new MemoryRepoGroupProvenanceStore(),
       inputs: {
         mirrorGroups: true,
+        targetsComplete: true,
         setGroupColor: colors.setGroupColor,
         targets: [target("ws-a", "the-mountain", "#5F7F2A")],
       },
@@ -322,6 +453,7 @@ describe("reconcileRepoGroups", () => {
       provenance: new MemoryRepoGroupProvenanceStore(),
       inputs: {
         mirrorGroups: true,
+        targetsComplete: true,
         setGroupColor: colors.setGroupColor,
         targets: [target("ws-a", "the-mountain", "#5F7F2A")],
       },
@@ -338,6 +470,7 @@ describe("reconcileRepoGroups", () => {
       provenance,
       inputs: {
         mirrorGroups: true,
+        targetsComplete: true,
         setGroupColor: colors.setGroupColor,
         targets: [target("ws-a", "the-mountain", "#5F7F2A")],
       },
@@ -349,6 +482,7 @@ describe("reconcileRepoGroups", () => {
       provenance,
       inputs: {
         mirrorGroups: true,
+        targetsComplete: true,
         setGroupColor: colors.setGroupColor,
         targets: [
           target("ws-a", "the-mountain", "#5F7F2A"),
@@ -369,16 +503,28 @@ describe("reconcileRepoGroups", () => {
       provenance,
       inputs: {
         mirrorGroups: true,
+        targetsComplete: true,
         setGroupColor: colors.setGroupColor,
         targets: [target("ws-a", "the-mountain", "#5F7F2A")],
       },
     });
     expect(cmux.groups.size).toBe(1);
 
+    /* One absent pass is not enough. A single sample is exactly what a degraded
+       collector produces, and acting on it is what filled the sidebar with
+       "Group N" rows, so the first absence only arms the teardown. */
+    const armed = await reconcileRepoGroups({
+      runner: cmux,
+      provenance,
+      inputs: { mirrorGroups: true, targetsComplete: true, setGroupColor: colors.setGroupColor, targets: [] },
+    });
+    expect(cmux.groups.size).toBe(1);
+    expect(armed.errors).toEqual([]);
+
     const result = await reconcileRepoGroups({
       runner: cmux,
       provenance,
-      inputs: { mirrorGroups: true, setGroupColor: colors.setGroupColor, targets: [] },
+      inputs: { mirrorGroups: true, targetsComplete: true, setGroupColor: colors.setGroupColor, targets: [] },
     });
     expect(cmux.groups.size).toBe(0);
     expect(provenance.list()).toEqual([]);
@@ -409,6 +555,7 @@ describe("reconcileRepoGroups", () => {
       provenance,
       inputs: {
         mirrorGroups: true,
+        targetsComplete: true,
         setGroupColor: colors.setGroupColor,
         targets: [target("ws-a", "the-mountain", "#5F7F2A")],
       },
@@ -420,6 +567,7 @@ describe("reconcileRepoGroups", () => {
       provenance,
       inputs: {
         mirrorGroups: false,
+        targetsComplete: true,
         setGroupColor: colors.setGroupColor,
         targets: [target("ws-a", "the-mountain", "#5F7F2A")],
       },
@@ -445,6 +593,7 @@ describe("reconcileRepoGroups", () => {
       provenance: new MemoryRepoGroupProvenanceStore(),
       inputs: {
         mirrorGroups: true,
+        targetsComplete: true,
         setGroupColor: colors.setGroupColor,
         targets: [target("ws-a", "the-mountain", "#5F7F2A")],
       },
@@ -470,13 +619,13 @@ describe("reconcileRepoGroups", () => {
     await reconcileRepoGroups({
       runner: cmux,
       provenance,
-      inputs: { mirrorGroups: true, setGroupColor: colors.setGroupColor, targets: both },
+      inputs: { mirrorGroups: true, targetsComplete: true, setGroupColor: colors.setGroupColor, targets: both },
     });
 
     await reconcileRepoGroups({
       runner: cmux,
       provenance,
-      inputs: { mirrorGroups: true, setGroupColor: colors.setGroupColor, targets: [both[0]!] },
+      inputs: { mirrorGroups: true, targetsComplete: true, setGroupColor: colors.setGroupColor, targets: [both[0]!] },
     });
     expect(membersOf(cmux, provenance.list()[0]!.groupId)).toEqual(["ws-a"]);
     expect(cmux.methodCalls("workspace.group.remove")).toEqual([{ workspace_id: "ws-b" }]);
@@ -488,6 +637,7 @@ describe("reconcileRepoGroups", () => {
     const colors = funnel(cmux);
     const inputs: RepoGroupInputs = {
       mirrorGroups: true,
+      targetsComplete: true,
       setGroupColor: colors.setGroupColor,
       targets: [target("ws-a", "the-mountain", "#5F7F2A")],
     };
@@ -515,7 +665,7 @@ describe("reconcileRepoGroups", () => {
     const result = await reconcileRepoGroups({
       runner,
       provenance: new MemoryRepoGroupProvenanceStore(),
-      inputs: { mirrorGroups: true, setGroupColor: async () => true, targets: [] },
+      inputs: { mirrorGroups: true, targetsComplete: true, setGroupColor: async () => true, targets: [] },
     });
     expect(result.absent).toBe(true);
     expect(result.errors).toEqual([]);
@@ -527,6 +677,7 @@ describe("reconcileRepoGroups", () => {
     const colors = funnel(cmux);
     const inputs: RepoGroupInputs = {
       mirrorGroups: true,
+      targetsComplete: true,
       setGroupColor: colors.setGroupColor,
       targets: [target("ws-a", "the-mountain", "#5F7F2A")],
     };
@@ -555,6 +706,7 @@ describe("reconcileRepoGroups", () => {
       provenance,
       inputs: {
         mirrorGroups: true,
+        targetsComplete: true,
         setGroupColor: colors.setGroupColor,
         targets: [target("ws-a", "the-mountain", "#5F7F2A")],
       },
@@ -570,6 +722,7 @@ describe("reconcileRepoGroups", () => {
       provenance,
       inputs: {
         mirrorGroups: true,
+        targetsComplete: true,
         setGroupColor: colors.setGroupColor,
         targets: [
           target("ws-a", "the-mountain", "#5F7F2A"),
@@ -599,6 +752,7 @@ describe("repoGroupReconcileTick", () => {
     const colors = funnel(cmux);
     registerRepoGroupInputs(() => ({
       mirrorGroups: true,
+      targetsComplete: true,
       setGroupColor: colors.setGroupColor,
       targets: [target("ws-a", "the-mountain", "#5F7F2A")],
     }), new MemoryRepoGroupProvenanceStore());
@@ -614,11 +768,13 @@ describe("repoGroupReconcileTick", () => {
     const colors = funnel(cmux);
     const disposeOlder = registerRepoGroupInputs(() => ({
       mirrorGroups: true,
+      targetsComplete: true,
       setGroupColor: colors.setGroupColor,
       targets: [],
     }), new MemoryRepoGroupProvenanceStore());
     registerRepoGroupInputs(() => ({
       mirrorGroups: false,
+      targetsComplete: true,
       setGroupColor: colors.setGroupColor,
       targets: [],
     }), new MemoryRepoGroupProvenanceStore());

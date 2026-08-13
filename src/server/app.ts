@@ -610,12 +610,24 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
         const store = repoColorsForGroups;
         if (!store) return null;
         const settings = store.get();
-        const discovery = discoverRepoColors(dependencies.state.get());
+        const snapshot = dependencies.state.get();
+        const discovery = discoverRepoColors(snapshot);
         const targets = Object.entries(discovery.workspaces).flatMap(([workspaceId, repoKey]) => {
           const assignment = settings.assignments[repoKey];
           return assignment ? [{ workspaceId, repoKey, hex: assignment.hex }] : [];
         });
-        return { mirrorGroups: settings.mirrorGroups, targets, setGroupColor };
+        /* A pass that missed its deadline, or whose routing evidence was
+           withdrawn, publishes agents with no terminal target at all — the walk
+           above then yields nothing, and an empty `targets` is indistinguishable
+           from "every repo emptied at once". Both of those land in
+           controlHealth.errors (state.ts pushes the deadline into
+           collectionErrors, which becomes #cmuxErrors, which becomes this), so
+           the same snapshot that hides the targets also says it cannot vouch for
+           them. The mirror may keep building on a degraded pass; it may not tear
+           anything down. */
+        const controlHealth = snapshot.controlHealth;
+        const targetsComplete = controlHealth.cmuxReachable && controlHealth.errors.length === 0;
+        return { mirrorGroups: settings.mirrorGroups, targets, targetsComplete, setGroupColor };
       }, provenance);
     });
   }
