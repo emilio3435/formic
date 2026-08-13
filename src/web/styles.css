@@ -269,7 +269,7 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
   place-items: center;
   border-radius: 999px;
   font-variant-numeric: tabular-nums;
-  font-weight: 700;
+  font-weight: 600;
   font-size: 9px;
   line-height: 1;
   border: 1px solid transparent;
