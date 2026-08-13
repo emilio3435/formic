@@ -4,6 +4,7 @@ import {
   latestWorkspaceColors,
   loadColorRuntime,
   normalizeHex,
+  parseCmuxGroupAnchorIds,
   parseCmuxWindowIds,
   parseCmuxWorkspaceColors,
   reconcileWorkspaceColors,
@@ -146,6 +147,32 @@ describe("parsing cmux window and workspace responses", () => {
   });
 });
 
+describe("parseCmuxGroupAnchorIds — the only way to know a header from a workspace", () => {
+  test("names each group's anchor and deduplicates", () => {
+    // Verified live 2026-08-13: workspace.group.create makes an anchor
+    // workspace that appears in workspace.list with the group's cwd and NO
+    // field of its own to mark it. group.list is the only witness.
+    const output = JSON.stringify({
+      groups: [
+        {
+          id: "GROUP-1",
+          name: "the-mountain",
+          anchor_workspace_id: "WS-ANCHOR",
+          member_workspace_ids: ["WS-ANCHOR", "WS-REAL"],
+        },
+        { id: "GROUP-2", anchor_workspace_id: "WS-ANCHOR" },
+        { id: "GROUP-3" },
+      ],
+    });
+    expect(parseCmuxGroupAnchorIds(output)).toEqual(["WS-ANCHOR"]);
+  });
+
+  test("a window with no groups has no anchors, and a malformed answer is a failure", () => {
+    expect(parseCmuxGroupAnchorIds(JSON.stringify({ groups: [] }))).toEqual([]);
+    expect(() => parseCmuxGroupAnchorIds(JSON.stringify({ window_id: "W" }))).toThrow(/groups array/);
+  });
+});
+
 describe("collectCmuxWorkspaceColors — coverage is every window, not the key one", () => {
   function runnerFor(responses: Record<string, { stdout?: string; exitCode?: number; stderr?: string }>): {
     runner: CommandRunner;
@@ -172,6 +199,7 @@ describe("collectCmuxWorkspaceColors — coverage is every window, not the key o
   }
 
   const windowList = JSON.stringify({ windows: [{ id: "WINDOW-1" }, { id: "WINDOW-2" }] });
+  const noGroups = JSON.stringify({ groups: [] });
 
   test("reads every window, so a second window's colors cannot go unseen", async () => {
     // The defect this guards: `extension.sidebar.snapshot {"all_windows":true}`
@@ -185,19 +213,87 @@ describe("collectCmuxWorkspaceColors — coverage is every window, not the key o
           workspaces: [{ id: "WS-A", custom_color: "#1A5276" }],
         }),
       },
+      [`rpc workspace.group.list {"window_id":"WINDOW-1"}`]: { stdout: noGroups },
       [`rpc workspace.list {"window_id":"WINDOW-2"}`]: {
         stdout: JSON.stringify({
           window_id: "WINDOW-2",
           workspaces: [{ id: "WS-B", custom_color: null }],
         }),
       },
+      [`rpc workspace.group.list {"window_id":"WINDOW-2"}`]: { stdout: noGroups },
     });
 
     const result = await collectCmuxWorkspaceColors(runner, "cmux");
 
     expect(result.errors).toEqual([]);
     expect(result.value.map((entry) => entry.workspaceId).sort()).toEqual(["WS-A", "WS-B"]);
-    expect(commands).toHaveLength(3);
+    expect(result.anchorWorkspaceIds).toEqual([]);
+    expect(commands).toHaveLength(5);
+  });
+
+  test("a group anchor never reaches the board, even wearing a repo cwd", async () => {
+    /* With mirrorGroups on, every repo group contributes one anchor workspace
+       that carries the group's cwd and is otherwise indistinguishable from real
+       work. Collected, it becomes a phantom repo-mapped row — the exact defect
+       class this board has been burned by before. */
+    const { runner } = runnerFor({
+      "rpc window.list {}": { stdout: JSON.stringify({ windows: [{ id: "WINDOW-1" }] }) },
+      [`rpc workspace.list {"window_id":"WINDOW-1"}`]: {
+        stdout: JSON.stringify({
+          window_id: "WINDOW-1",
+          workspaces: [
+            {
+              id: "WS-ANCHOR",
+              custom_color: null,
+              current_directory: "/Users/e/Developer/the-mountain",
+            },
+            {
+              id: "WS-REAL",
+              custom_color: "#5F7F2A",
+              current_directory: "/Users/e/Developer/the-mountain",
+            },
+          ],
+        }),
+      },
+      [`rpc workspace.group.list {"window_id":"WINDOW-1"}`]: {
+        stdout: JSON.stringify({
+          groups: [{
+            id: "GROUP-1",
+            anchor_workspace_id: "WS-ANCHOR",
+            member_workspace_ids: ["WS-ANCHOR", "WS-REAL"],
+          }],
+        }),
+      },
+    });
+
+    const result = await collectCmuxWorkspaceColors(runner, "cmux");
+
+    expect(result.value.map((entry) => entry.workspaceId)).toEqual(["WS-REAL"]);
+    expect(result.anchorWorkspaceIds).toEqual(["WS-ANCHOR"]);
+    expect(result.errors).toEqual([]);
+  });
+
+  test("a window whose groups cannot be read is skipped whole rather than guessed at", async () => {
+    /* Without the group list there is no way to tell an anchor from a
+       workspace, and the failure mode of guessing is painting a phantom. */
+    const { runner } = runnerFor({
+      "rpc window.list {}": { stdout: windowList },
+      [`rpc workspace.list {"window_id":"WINDOW-1"}`]: {
+        stdout: JSON.stringify({ window_id: "WINDOW-1", workspaces: [{ id: "WS-A", custom_color: "#1A5276" }] }),
+      },
+      [`rpc workspace.group.list {"window_id":"WINDOW-1"}`]: { exitCode: 4, stderr: "group service down" },
+      [`rpc workspace.list {"window_id":"WINDOW-2"}`]: {
+        stdout: JSON.stringify({ window_id: "WINDOW-2", workspaces: [{ id: "WS-B", custom_color: "#0E9494" }] }),
+      },
+      [`rpc workspace.group.list {"window_id":"WINDOW-2"}`]: { stdout: noGroups },
+    });
+
+    const result = await collectCmuxWorkspaceColors(runner, "cmux");
+
+    expect(result.value.map((entry) => entry.workspaceId)).toEqual(["WS-B"]);
+    expect(result.errors).toEqual([
+      "cmux group discovery for window WINDOW-1 exited 4: group service down; its workspaces were skipped",
+    ]);
   });
 
   test("a missing cmux binary is absent, not a fault", async () => {
@@ -212,6 +308,7 @@ describe("collectCmuxWorkspaceColors — coverage is every window, not the key o
     await expect(collectCmuxWorkspaceColors(runner, "cmux")).resolves.toEqual({
       value: [],
       errors: [],
+      anchorWorkspaceIds: [],
       absent: true,
     });
   });
@@ -222,7 +319,9 @@ describe("collectCmuxWorkspaceColors — coverage is every window, not the key o
       [`rpc workspace.list {"window_id":"WINDOW-1"}`]: {
         stdout: JSON.stringify({ window_id: "WINDOW-1", workspaces: [{ id: "WS-A", custom_color: "#1A5276" }] }),
       },
+      [`rpc workspace.group.list {"window_id":"WINDOW-1"}`]: { stdout: noGroups },
       [`rpc workspace.list {"window_id":"WINDOW-2"}`]: { exitCode: 3, stderr: "window vanished" },
+      [`rpc workspace.group.list {"window_id":"WINDOW-2"}`]: { stdout: noGroups },
     });
 
     const result = await collectCmuxWorkspaceColors(runner, "cmux");
@@ -238,6 +337,68 @@ describe("collectCmuxWorkspaceColors — coverage is every window, not the key o
     const result = await collectCmuxWorkspaceColors(runner, "cmux");
     expect(result.value).toEqual([]);
     expect(result.errors).toEqual(["cmux window discovery exited 2: socket closed"]);
+  });
+});
+
+describe("reconcile — a group anchor is untouchable", () => {
+  test("an anchor whose color drifts still produces zero actions", async () => {
+    const spy = funnelSpy();
+    const result = await reconcileWorkspaceColors({
+      observations: [
+        observation("WS-ANCHOR", "#B05F3A", { currentDirectory: "/Users/e/Developer/the-mountain" }),
+        observation("WS-REAL", "#B05F3A", { currentDirectory: "/Users/e/Developer/the-mountain" }),
+      ],
+      surfaces: [],
+      anchorWorkspaceIds: new Set(["WS-ANCHOR"]),
+      settings: settings({ "the-mountain": assignment("the-mountain", "#5F7F2A") }),
+      runtime: runtimeWith(spy.funnel),
+    });
+
+    // The real workspace is re-asserted; the anchor beside it is not written to,
+    // not repo-mapped, and not published.
+    expect(spy.writes).toEqual([{ workspaceId: "WS-REAL", hex: "#5F7F2A", reason: "sync-reassert" }]);
+    expect(result.workspaces).toEqual({ "WS-REAL": { hex: "#5f7f2a", repoKey: "the-mountain" } });
+    const anchorDecision = result.decisions.find((decision) => decision.workspaceId === "WS-ANCHOR");
+    expect(anchorDecision).toMatchObject({ outcome: "ignore", repoKey: null });
+    expect(anchorDecision?.reason).toContain("group anchor");
+  });
+
+  test("an anchor with a hand-set color is not ingested either", async () => {
+    const spy = funnelSpy();
+    const result = await reconcileWorkspaceColors({
+      observations: [observation("WS-ANCHOR", "#1A5276", { currentDirectory: "/Users/e/Downloads" })],
+      surfaces: [],
+      anchorWorkspaceIds: new Set(["WS-ANCHOR"]),
+      settings: settings({}),
+      runtime: runtimeWith(spy.funnel),
+    });
+
+    expect(result.workspaces).toEqual({});
+    expect(spy.writes).toEqual([]);
+  });
+
+  test("an anchor cannot vote on which repo owns a workspace", async () => {
+    // Rule 4 counts agents per repo. An anchor's surfaces would otherwise be a
+    // ballot cast by a sidebar header.
+    const spy = funnelSpy();
+    const result = await reconcileWorkspaceColors({
+      observations: [
+        observation("WS-ANCHOR", null, { currentDirectory: "/Users/e/Developer/cooper-scheduler" }),
+        observation("WS-REAL", "#1A5276", { currentDirectory: "/Users/e/Developer/elio" }),
+      ],
+      surfaces: [],
+      anchorWorkspaceIds: new Set(["WS-ANCHOR"]),
+      settings: settings({}),
+      runtime: runtimeWith(spy.funnel),
+    });
+
+    expect(result.decisions.filter((decision) => decision.outcome === "ingest")).toEqual([{
+      workspaceId: "WS-REAL",
+      outcome: "ingest",
+      repoKey: "elio",
+      hex: "#1a5276",
+      reason: "unmapped workspace; cmux color ingested",
+    }]);
   });
 });
 
@@ -511,7 +672,10 @@ describe("workspaceRepoKeys — authority rule 4", () => {
 });
 
 describe("syncCmuxColors — the pass the collector poll calls", () => {
-  function twoWindowRunner(colors: Record<string, string | null>): CommandRunner {
+  function twoWindowRunner(
+    colors: Record<string, string | null>,
+    anchorId?: string,
+  ): CommandRunner {
     return {
       run: async (command) => {
         const key = command.slice(1).join(" ");
@@ -519,6 +683,19 @@ describe("syncCmuxColors — the pass the collector poll calls", () => {
           return {
             exitCode: 0,
             stdout: JSON.stringify({ windows: [{ id: "WINDOW-1" }, { id: "WINDOW-2" }] }),
+            stderr: "",
+            timedOut: false,
+          };
+        }
+        if (key.startsWith("rpc workspace.group.list")) {
+          const inWindowOne = key.includes("WINDOW-1");
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({
+              groups: anchorId && inWindowOne === anchorId.endsWith("-1")
+                ? [{ id: "GROUP-1", anchor_workspace_id: anchorId }]
+                : [],
+            }),
             stderr: "",
             timedOut: false,
           };
@@ -562,6 +739,24 @@ describe("syncCmuxColors — the pass the collector poll calls", () => {
       "MOUNTAIN-1": { hex: "#5f7f2a", repoKey: "the-mountain" },
       "OTHER-2": { hex: "#1a5276", repoKey: null },
     });
+  });
+
+  test("with mirrorGroups on, the group's anchor is neither published nor painted", async () => {
+    resetColorSyncState();
+    const spy = funnelSpy();
+    const result = await syncCmuxColors({
+      runner: twoWindowRunner({ "MOUNTAIN-1": "#B05F3A", "MOUNTAINANCHOR-1": null }, "MOUNTAINANCHOR-1"),
+      executable: "cmux",
+      surfaces: [],
+      settings: {
+        repoColors: { assignments: { "the-mountain": assignment("the-mountain", "#5F7F2A") }, mirrorGroups: true, syncFromCmux: true },
+      },
+      runtime: runtimeWith(spy.funnel),
+    });
+
+    expect(spy.writes).toEqual([{ workspaceId: "MOUNTAIN-1", hex: "#5F7F2A", reason: "sync-reassert" }]);
+    expect(Object.keys(latestWorkspaceColors())).toEqual(["MOUNTAIN-1"]);
+    expect(result.decisions.some((decision) => decision.workspaceId === "MOUNTAINANCHOR-1")).toBe(false);
   });
 
   test("a collection failure is reported and never publishes as a clean pass", async () => {

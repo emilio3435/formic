@@ -126,6 +126,24 @@ export function parseCmuxWindowIds(output: string): string[] {
   }))];
 }
 
+/** The anchor workspace of every group in one window.
+ *
+ *  Verified live 2026-08-13: `workspace.group.create` also creates an ANCHOR
+ *  workspace which heads the group, carries the group's cwd, and appears in
+ *  `workspace.list` looking exactly like any other workspace — there is no flag
+ *  on the workspace itself to tell them apart. With `mirrorGroups` on, every
+ *  repo group would therefore contribute one repo-mapped-looking phantom that
+ *  this pass would ingest or paint. `workspace.group.list` is the only source
+ *  that can name them. */
+export function parseCmuxGroupAnchorIds(output: string): string[] {
+  const root = resultRoot(output);
+  if (!Array.isArray(root.groups)) throw new Error("cmux response did not contain a groups array");
+  return [...new Set(records(root.groups).flatMap((group) => {
+    const anchorId = stringValue(group.anchor_workspace_id, group.anchorWorkspaceId);
+    return anchorId ? [anchorId] : [];
+  }))];
+}
+
 export function parseCmuxWorkspaceColors(output: string): WorkspaceColorObservation[] {
   const root = resultRoot(output);
   if (!Array.isArray(root.workspaces)) throw new Error("cmux response did not contain a workspaces array");
@@ -150,23 +168,38 @@ export function parseCmuxWorkspaceColors(output: string): WorkspaceColorObservat
   });
 }
 
-/** Every workspace in every window, with the color cmux currently holds.
+export interface WorkspaceColorCollection extends CollectionResult<WorkspaceColorObservation[]> {
+  /** Group anchors seen while collecting. Already removed from `value`; carried
+   *  so a caller can prove an anchor never reached reconciliation. */
+  anchorWorkspaceIds: string[];
+}
+
+/** Every workspace in every window, with the color cmux currently holds, minus
+ *  the group anchors.
  *
  *  Partial coverage is reported, never hidden: a window whose workspace list
  *  fails contributes an error and no observations, and the workspaces that WERE
  *  read still reconcile — a write aimed at a workspace we actually saw is valid
- *  regardless of what we could not see. */
+ *  regardless of what we could not see.
+ *
+ *  A window whose GROUP list fails is different, and is dropped whole: without
+ *  it there is no way to tell an anchor from a workspace, and the failure mode
+ *  of guessing is painting a phantom. One skipped window for one poll is the
+ *  cheaper error. */
 export async function collectCmuxWorkspaceColors(
   runner: CommandRunner,
   executable = DEFAULT_CMUX_EXECUTABLE,
-): Promise<CollectionResult<WorkspaceColorObservation[]>> {
+): Promise<WorkspaceColorCollection> {
   const windows = await runner.run(cmuxCommand(executable, ["rpc", "window.list", "{}"]), 10_000);
-  if (executableMissing(windows)) return { value: [], errors: [], absent: true };
-  if (windows.timedOut) return { value: [], errors: ["cmux window discovery timed out"] };
+  if (executableMissing(windows)) return { value: [], errors: [], anchorWorkspaceIds: [], absent: true };
+  if (windows.timedOut) {
+    return { value: [], errors: ["cmux window discovery timed out"], anchorWorkspaceIds: [] };
+  }
   if (windows.exitCode !== 0) {
     return {
       value: [],
       errors: [`cmux window discovery exited ${windows.exitCode}: ${windows.stderr.trim() || "no stderr"}`],
+      anchorWorkspaceIds: [],
     };
   }
   let windowIds: string[];
@@ -176,28 +209,61 @@ export async function collectCmuxWorkspaceColors(
     return {
       value: [],
       errors: [`cmux window discovery returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`],
+      anchorWorkspaceIds: [],
     };
   }
 
   const errors: string[] = [];
-  const observations = await Promise.all(windowIds.map(async (windowId) => {
-    const result = await runner.run(cmuxCommand(executable, [
-      "rpc",
-      "workspace.list",
-      JSON.stringify({ window_id: windowId }),
-    ]), 10_000);
-    if (result.timedOut) {
-      errors.push(`cmux workspace color discovery for window ${windowId} timed out`);
+  const anchorWorkspaceIds = new Set<string>();
+  const perWindow = await Promise.all(windowIds.map(async (windowId) => {
+    const [workspaces, groups] = await Promise.all([
+      runner.run(cmuxCommand(executable, [
+        "rpc",
+        "workspace.list",
+        JSON.stringify({ window_id: windowId }),
+      ]), 10_000),
+      runner.run(cmuxCommand(executable, [
+        "rpc",
+        "workspace.group.list",
+        JSON.stringify({ window_id: windowId }),
+      ]), 10_000),
+    ]);
+
+    /* Anchors first: an unknown anchor set makes every workspace in this window
+       unsafe to touch, so the window is skipped rather than guessed at. */
+    let anchors: string[];
+    if (groups.timedOut) {
+      errors.push(`cmux group discovery for window ${windowId} timed out; its workspaces were skipped`);
       return [];
     }
-    if (result.exitCode !== 0) {
+    if (groups.exitCode !== 0) {
       errors.push(
-        `cmux workspace color discovery for window ${windowId} exited ${result.exitCode}: ${result.stderr.trim() || "no stderr"}`,
+        `cmux group discovery for window ${windowId} exited ${groups.exitCode}: ${groups.stderr.trim() || "no stderr"}; its workspaces were skipped`,
       );
       return [];
     }
     try {
-      return parseCmuxWorkspaceColors(result.stdout);
+      anchors = parseCmuxGroupAnchorIds(groups.stdout);
+    } catch (error) {
+      errors.push(
+        `cmux group discovery for window ${windowId} returned invalid JSON: ${error instanceof Error ? error.message : String(error)}; its workspaces were skipped`,
+      );
+      return [];
+    }
+    for (const anchor of anchors) anchorWorkspaceIds.add(anchor);
+
+    if (workspaces.timedOut) {
+      errors.push(`cmux workspace color discovery for window ${windowId} timed out`);
+      return [];
+    }
+    if (workspaces.exitCode !== 0) {
+      errors.push(
+        `cmux workspace color discovery for window ${windowId} exited ${workspaces.exitCode}: ${workspaces.stderr.trim() || "no stderr"}`,
+      );
+      return [];
+    }
+    try {
+      return parseCmuxWorkspaceColors(workspaces.stdout);
     } catch (error) {
       errors.push(
         `cmux workspace color discovery for window ${windowId} returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
@@ -209,10 +275,13 @@ export async function collectCmuxWorkspaceColors(
   /* One workspace belongs to one window, but a workspace moved mid-poll could
      be read twice; the first reading wins so the map stays deterministic. */
   const byWorkspace = new Map<string, WorkspaceColorObservation>();
-  for (const observation of observations.flat()) {
+  for (const observation of perWindow.flat()) {
+    /* An anchor found in ANY window is dropped from every window: it is a
+       group's sidebar header, not a workspace anything may be painted on. */
+    if (anchorWorkspaceIds.has(observation.workspaceId)) continue;
     if (!byWorkspace.has(observation.workspaceId)) byWorkspace.set(observation.workspaceId, observation);
   }
-  return { value: [...byWorkspace.values()], errors };
+  return { value: [...byWorkspace.values()], errors, anchorWorkspaceIds: [...anchorWorkspaceIds] };
 }
 
 /* ── repo mapping ─────────────────────────────────────────────────────── */
@@ -258,26 +327,52 @@ export interface ReconcileInput {
   surfaces: readonly CmuxSurface[];
   settings: RepoColorsSettings;
   runtime: ColorRuntime;
+  /** Group anchors. Collection already drops them; this is the second lock, so
+   *  an anchor reaching this function by any other route is still inert. */
+  anchorWorkspaceIds?: ReadonlySet<string>;
 }
 
 export async function reconcileWorkspaceColors(input: ReconcileInput): Promise<ReconcileResult> {
-  const { observations, surfaces, settings, runtime } = input;
+  const { surfaces, settings, runtime } = input;
+  const anchors = input.anchorWorkspaceIds ?? new Set<string>();
   const decisions: ReconcileDecision[] = [];
   const workspaces: ReconcileResult["workspaces"] = {};
   const errors: string[] = [];
+
+  /* A group anchor wears the group's cwd and so reads as fully repo-mapped, but
+     it is the group's sidebar header rather than a place work happens. It is
+     removed here BEFORE repo mapping, so it can neither be painted nor vote on
+     which repo owns a workspace, and it never enters the published map — a
+     phantom row is exactly the defect class this board has been burned by. */
+  const observations = input.observations.filter(
+    (observation) => !anchors.has(observation.workspaceId),
+  );
+  for (const observation of input.observations) {
+    if (!anchors.has(observation.workspaceId)) continue;
+    decisions.push({
+      workspaceId: observation.workspaceId,
+      outcome: "ignore",
+      repoKey: null,
+      hex: normalizeHex(observation.customColor),
+      reason: "group anchor: invisible to the board and never written to",
+    });
+  }
 
   if (!settings.syncFromCmux) {
     /* The flag turns the whole pass off — including the read. Reporting an
        explicit ignore per workspace keeps the shape uniform for callers rather
        than making "off" look like "nothing was there". */
     return {
-      decisions: observations.map((observation) => ({
-        workspaceId: observation.workspaceId,
-        outcome: "ignore" as const,
-        repoKey: null,
-        hex: normalizeHex(observation.customColor),
-        reason: "syncFromCmux is off",
-      })),
+      decisions: [
+        ...decisions,
+        ...observations.map((observation) => ({
+          workspaceId: observation.workspaceId,
+          outcome: "ignore" as const,
+          repoKey: null,
+          hex: normalizeHex(observation.customColor),
+          reason: "syncFromCmux is off",
+        })),
+      ],
       workspaces,
       errors,
     };
@@ -466,6 +561,7 @@ export async function syncCmuxColors(input: SyncCmuxColorsInput): Promise<Reconc
         const idle = await reconcileWorkspaceColors({
           observations: collected.value,
           surfaces: input.surfaces,
+          anchorWorkspaceIds: new Set(collected.anchorWorkspaceIds),
           settings: { ...settings, assignments: {} },
           runtime: {
             repoKeyForCwd: () => null,
@@ -483,6 +579,7 @@ export async function syncCmuxColors(input: SyncCmuxColorsInput): Promise<Reconc
       const reconciled = await reconcileWorkspaceColors({
         observations: collected.value,
         surfaces: input.surfaces,
+        anchorWorkspaceIds: new Set(collected.anchorWorkspaceIds),
         settings,
         runtime,
       });
