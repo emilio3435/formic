@@ -24,11 +24,11 @@
 | S merged, floor green | MERGED 02:25, one red | 1bbc969; S guard test relied on ambient stub-absence, broken by F impls landing — S fixing in-branch, re-merge pending |
 | G merged, floor green | DONE 02:26 | 781d3f7; ARCHITECTURE.md + state.ts auto-merged clean; floor: only canary + S guard red |
 | P landed (skill + dotfiles) | PENDING | — |
-| Deployed: kickstart + `?v=ah-tN` bump | PENDING | new tag: — |
-| Live check: workspace.list ↔ /api/repo-colors agree | PENDING | — |
-| Deploy check: grep deploy log "NOT CONFIRMED" (F group write read-back) | PENDING | null echo = strict check earned its keep; correct-hex echo = value-check wrong (F guidance) |
-| Deploy check: `repo-color the-mountain` returns board hex, not fallback (P item — endpoint was 404 all night pre-merge) | PENDING | — |
-| Visual check with eyes (screenshot read) | PENDING | — |
+| Deployed | ADAPTED 02:40 | serving checkout (the-mountain-main) is on chore/docker-local-ci with dirty in-flight work — NOT touched; integration build served from tint-integration worktree on :4702 (manual bun, logged PID in scratchpad); ah-t31→ah-t32 bumped; 4701 cutover rides the PR merge |
+| Live check: workspace.list ↔ /api/repo-colors agree | DONE 02:45 | groups: the-mountain #5f7f2a (11 members, window:1), cooper-scheduler #2e66a8 (9, window:2) — exact board hexes; anchors present and unfiled |
+| Deploy check: grep deploy log "NOT CONFIRMED" | DONE | 0 hits + groups actually colored = success echoes the hex; F strict read-back correct on the success path |
+| Deploy check: `repo-color the-mountain` vs board | PARTIAL | numerically proven equal (fallback slot 0 #5F7F2A == board #5f7f2a); full round-trip deferred to 4701 cutover |
+| Visual check with eyes | DONE 02:50 | 2x element shots read: repo dot + 2px 45% spine + 4% wash live on both sections, correct hues; strip rows tint-free per ruling; status colors untouched |
 | Sweep: `TINT · ` workspaces, worktrees, branches | PENDING | — |
 | Push/PR (Emilio's word only) | PENDING | — |
 
