@@ -68,8 +68,12 @@ export interface RepoColorsSettings {
 /** Derive the repo key for an agent; null when cwd is not in a git repo. */
 export declare function repoKeyForCwd(cwd: string): string | null;
 
-/** Deterministic slot assignment: stable string-hash of repoKey mod 6, then
- *  first free slot scanning upward; null when all six taken (overflow). */
+/** Deterministic slot assignment — hash PINNED (master ruling 01:55, closing P's
+ *  ambiguity finding): FNV-1a 32-bit (offset 2166136261, prime 16777619) over the
+ *  repoKey's charCodeAt code units (ASCII-equivalent to UTF-8; repoKeys are
+ *  lowercased git basenames), mod 6, then first-free scan upward WITH WRAP;
+ *  null when all six taken (overflow). Offline mirrors (TINT-P helper) must
+ *  produce identical slots for ASCII keys. */
 export declare function assignSlot(repoKey: string, taken: ReadonlySet<number>): number | null;
 ```
 

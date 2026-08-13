@@ -26,6 +26,8 @@
 | P landed (skill + dotfiles) | PENDING | — |
 | Deployed: kickstart + `?v=ah-tN` bump | PENDING | new tag: — |
 | Live check: workspace.list ↔ /api/repo-colors agree | PENDING | — |
+| Deploy check: grep deploy log "NOT CONFIRMED" (F group write read-back) | PENDING | null echo = strict check earned its keep; correct-hex echo = value-check wrong (F guidance) |
+| Deploy check: `repo-color the-mountain` returns board hex, not fallback (P item — endpoint was 404 all night pre-merge) | PENDING | — |
 | Visual check with eyes (screenshot read) | PENDING | — |
 | Sweep: `TINT · ` workspaces, worktrees, branches | PENDING | — |
 | Push/PR (Emilio's word only) | PENDING | — |
@@ -37,7 +39,7 @@
 | TINT-F | GOAL-F-foundation.md | `feat/tint-f` · `../the-mountain.worktrees/tint-f` | workspace:26 `TINT · f-orch · opus · 08-13` | Opus 5 high · claude (pid 70978, verified) | REOPENED 01:52 — verifier VERDICT: BLOCK (5 findings, fix order sent) | yes | verify: BLOCK @ 01:49 |
 | TINT-S | GOAL-S-sync.md | `feat/tint-s` · `../the-mountain.worktrees/tint-s` | workspace:27 `TINT · s-orch · opus · 08-13` | Opus 5 high · claude (pid 71016, verified) | DONE 01:41 — addendum 2f22c83 (anchor filter, live-probed), green | yes | verify: PASS |
 | TINT-G | GOAL-G-groups.md | `feat/tint-g` · `../the-mountain.worktrees/tint-g` | workspace:28 `TINT · g-orch · opus · 08-13` | Opus 5 high · claude (pid 71062, verified) | REPORTED DONE 01:28 (2 commits) | yes — findings relayed | verify: PASS (incl. 2 mutation spot-checks) |
-| TINT-P | GOAL-P-prompt.md | `feat/tint-p` · `../the-mountain.worktrees/tint-p` | workspace:29 `TINT · p-orch · opus · 08-13` | Opus 5 high · claude (pid 71208, verified) | TOUCH-UP 01:52 — TERM=dumb guard ordering (verifier hole) | yes | verify: PASS w/ 1 hole |
+| TINT-P | GOAL-P-prompt.md | `feat/tint-p` · `../the-mountain.worktrees/tint-p` | workspace:29 `TINT · p-orch · opus · 08-13` | Opus 5 high · claude (pid 71208, verified) | DONE 01:53 — guard fixed (dotfiles 0a6d0d1), 6-case evidence matrix, cmux TERM probed live | yes | verify: PASS, hole closed |
 
 Sub-orch worker lanes appear in each sub-orch's own ledger section of its `LANE-REPORT`; master tracks sub-orchs only, but sweeps everything under the `TINT · ` prefix.
 
@@ -46,6 +48,7 @@ Sub-orch worker lanes appear in each sub-orch's own ledger section of its `LANE-
 | When | What changed | Why | Lanes notified |
 |---|---|---|---|
 | 01:3x | Behavioral addendum, no shape change: group ANCHOR workspaces (workspace.group.list anchor_workspace_id) are excluded from collection, repo-mapping, sync, and color fan-out; never written to, never rendered | G verified live: group.create spawns an anchor that reads as a repo-mapped workspace; group.remove on the anchor destroys the group; group.delete closes members | F, S, G |
+| 01:55 | Hash pinned in §1: FNV-1a 32-bit over charCodeAt units, mod 6, wrap-scan — F's shipped semantics are canonical; P's UTF-8-byte helper is ASCII-equivalent (all real repoKeys) | P found the contract named no hash; divergent fallback hues were possible | F, P |
 | 01:35 | Additive envelope key: GET /api/repo-colors response gains repoNames (lowercased board repo name → canonical repoKey); additive-only, no TS shape change; only consumer is app.js | Browser cannot run git rev-parse to derive common-dir keys; board joins on the name it prints | F (author), P (endpoint consumer) |
 
 ## Incidents / rescues
