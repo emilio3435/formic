@@ -25,6 +25,7 @@ import type { ArchiveStore, CmuxSurface, CollectedAgent, CommandResult, CommandR
 const SESSION_ID = "286ab053-e84f-4538-9292-4aa3fae6fe9b";
 const GUI_SESSION_ID = "a5336a9a-f434-4e7b-b8f0-a3c8509502cb";
 const CHILD_SESSION_ID = "6514e366-df29-434b-979d-52a26168e188";
+const CLI_OCCUPANCY_SESSION_ID = "0d9f6afe-2e34-4bd0-9d10-53146a02a111";
 const fixture = (name: string): Promise<string> =>
   readFile(join(import.meta.dir, "fixtures", name), "utf8");
 const temporaryDirectories: string[] = [];
@@ -220,6 +221,74 @@ async function setupGuiComposerHome(options: {
     );
     tracking.close();
   }
+  return home;
+}
+
+// Builds a CLI-side Cursor home (~/.cursor/chats/<workspace>/<uuid>/) alongside the
+// GUI globalStorage that holds the meter. The GUI collector and the CLI collector are
+// separate entry paths into `collectCursorSessions`; this fixture exercises the CLI one
+// while still giving `state.vscdb` a composer.composerHeaders row to join from.
+async function setupCliOccupancyHome(
+  contextUsagePercent?: number,
+  storeUsage?: { totalTokens: number },
+): Promise<string> {
+  const home = await mkdtemp(join(tmpdir(), "mountain-cursor-cli-occupancy-"));
+  temporaryDirectories.push(home);
+  const sessionDir = join(home, ".cursor", "chats", "workspace-hash", CLI_OCCUPANCY_SESSION_ID);
+  await mkdir(sessionDir, { recursive: true });
+  await writeFile(join(sessionDir, "meta.json"), JSON.stringify({
+    createdAtMs: 1784691200000,
+    updatedAtMs: 1784691238958,
+    cwd: "/Users/me/project",
+    hasConversation: true,
+  }));
+  // Real CLI sessions always carry a store.db; an absent one is reported as a fault,
+  // which would drown the occupancy assertions in an unrelated error. The blobs table
+  // mirrors the store fixture used by the newest-assistant-blob model test.
+  const store = new Database(join(sessionDir, "store.db"));
+  store.run("create table meta (key text primary key, value text)");
+  store.run("create table blobs (id text primary key, data blob)");
+  store.run("insert into meta(key, value) values ('0', ?)", [
+    Buffer.from(JSON.stringify({
+      agentId: CLI_OCCUPANCY_SESSION_ID,
+      name: "New Agent",
+      mode: "default",
+      lastUsedModel: "grok-4.5",
+    })).toString("hex"),
+  ]);
+  if (storeUsage) {
+    // The blob walk in cursorTokensFromDatabase takes the newest assistant record
+    // carrying usage; `usage.totalTokens` is the alias `pickUsage` reads for `total`.
+    store.run("insert into blobs(id, data) values ('assistant-usage', ?)", [
+      Buffer.from(JSON.stringify({
+        role: "assistant",
+        id: "blob-usage",
+        content: [{ type: "text", text: "ok" }],
+        usage: { inputTokens: 90000, outputTokens: 1200, totalTokens: storeUsage.totalTokens },
+      })),
+    ]);
+  }
+  store.close();
+  const globalStorage = join(home, "Library", "Application Support", "Cursor", "User", "globalStorage");
+  await mkdir(globalStorage, { recursive: true });
+  const state = new Database(join(globalStorage, "state.vscdb"));
+  state.run("create table ItemTable (key text primary key, value blob)");
+  if (contextUsagePercent !== undefined) {
+    state.run("insert into ItemTable(key, value) values (?, ?)", [
+      "composer.composerHeaders",
+      JSON.stringify({ allComposers: [{ composerId: CLI_OCCUPANCY_SESSION_ID, contextUsagePercent }] }),
+    ]);
+  }
+  state.close();
+  // Empty conversations table so the GUI pass enumerates zero rows instead of
+  // reporting a missing store as a fault of this CLI-only fixture.
+  const conversations = new Database(join(globalStorage, "conversation-search.db"));
+  conversations.run(`create table conversations (
+    fts_rowid integer primary key, source text not null, scope text not null,
+    id text not null, title text not null, updated_at integer not null,
+    is_archived integer not null, root_fingerprint text, cache_fingerprint text
+  )`);
+  conversations.close();
   return home;
 }
 
@@ -1302,6 +1371,119 @@ describe("Cursor composer headers occupancy", () => {
     expect(result.errors[0]).toContain("composer headers");
     const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
     expect(agent).toBeDefined();
+    expect(agent?.tokens.occupancyPct).toBeUndefined();
+  });
+
+  /* The GUI tests above all enter through collectCursorGuiSessions. CLI chat sessions
+     are a different entry path — built before the state read, from ~/.cursor/chats —
+     so the join has to happen in the shared post-pass rather than inside the GUI
+     builder. This pins that the CLI path is covered by the same map. */
+  test("CLI chats session joins the same occupancy map as GUI sessions", async () => {
+    const home = await setupCliOccupancyHome(41.2);
+    const result = await collectCursorSessions(home, 1784691250000);
+    expect(result.errors).toEqual([]);
+    const agent = result.value.find(({ id }) => id === `cursor:${CLI_OCCUPANCY_SESSION_ID}`);
+    expect(agent?.tokens).toMatchObject({ scope: "latest-turn", provenance: "observed", occupancyPct: 41.2 });
+    expect(agent?.tokens.total).toBeUndefined();
+    expect(agent?.cost).toBeNull();
+  });
+
+  test("a CLI session absent from allComposers stays unknown", async () => {
+    const home = await setupCliOccupancyHome();
+    const result = await collectCursorSessions(home, 1784691250000);
+    expect(result.errors).toEqual([]);
+    const agent = result.value.find(({ id }) => id === `cursor:${CLI_OCCUPANCY_SESSION_ID}`);
+    expect(agent).toBeDefined();
+    expect(agent?.tokens.occupancyPct).toBeUndefined();
+    expect(agent?.tokens.provenance).toBe("unknown");
+  });
+
+  /* Cursor's meter is per-composer, and a subagent is not its parent's composer. The
+     parent here carries a real percent while the child carries none, so any lookup
+     that walks up the lineage — or takes "the" percent from a one-entry map — would
+     paint the child with a number Cursor never measured for it. */
+  test("a Cursor subagent never inherits its parent's context percent", async () => {
+    const home = await mkdtemp(join(tmpdir(), "mountain-cursor-child-occupancy-"));
+    temporaryDirectories.push(home);
+    const globalStorage = join(home, "Library", "Application Support", "Cursor", "User", "globalStorage");
+    const projectCwd = "/Users/me/elio-intelligence-suite";
+    const projectId = "378abb0f-fefb-4ae9-bdf3-754920b7b4fe";
+    const projectDirectory = join(home, ".cursor", "projects", "Users-me-elio-intelligence-suite");
+    const transcriptDirectory = join(projectDirectory, "agent-transcripts", GUI_SESSION_ID);
+    await mkdir(join(transcriptDirectory, "subagents"), { recursive: true });
+    await mkdir(globalStorage, { recursive: true });
+    const nowMs = 1784692000000;
+    await writeFile(join(transcriptDirectory, `${GUI_SESSION_ID}.jsonl`), [
+      JSON.stringify({ role: "user", message: { content: [{ type: "text", text: "Coordinate the swarm." }] } }),
+      JSON.stringify({ type: "turn_ended", status: "success" }),
+    ].join("\n"));
+    await utimes(join(transcriptDirectory, `${GUI_SESSION_ID}.jsonl`), new Date(1784691238958), new Date(1784691238958));
+    const childPath = join(transcriptDirectory, "subagents", `${CHILD_SESSION_ID}.jsonl`);
+    await writeFile(childPath, [
+      JSON.stringify({ role: "user", message: { content: "Goal: Verify the build." } }),
+      JSON.stringify({ role: "assistant", message: { content: [{ type: "text", text: "Build verified." }] } }),
+      JSON.stringify({ type: "turn_ended", status: "success" }),
+    ].join("\n"));
+    await utimes(childPath, new Date(nowMs - 60_000), new Date(nowMs - 60_000));
+
+    const state = new Database(join(globalStorage, "state.vscdb"));
+    state.run("create table ItemTable (key text primary key, value blob)");
+    state.run("insert into ItemTable(key, value) values (?, ?)", [
+      "glass.localAgentProjectMembership.v1",
+      JSON.stringify({ [GUI_SESSION_ID]: projectId, [CHILD_SESSION_ID]: projectId }),
+    ]);
+    state.run("insert into ItemTable(key, value) values (?, ?)", [
+      "glass.localAgentProjects.v1",
+      JSON.stringify([{ id: projectId, workspace: { id: "workspace-hash", uri: { fsPath: projectCwd } } }]),
+    ]);
+    // Only the PARENT composer has a meter row; the child deliberately has none.
+    state.run("insert into ItemTable(key, value) values (?, ?)", [
+      "composer.composerHeaders",
+      JSON.stringify({ allComposers: [{ composerId: GUI_SESSION_ID, contextUsagePercent: 88 }] }),
+    ]);
+    state.close();
+
+    const conversations = new Database(join(globalStorage, "conversation-search.db"));
+    conversations.run(`create table conversations (
+      fts_rowid integer primary key,
+      source text not null,
+      scope text not null,
+      id text not null,
+      title text not null,
+      updated_at integer not null,
+      is_archived integer not null,
+      root_fingerprint text,
+      cache_fingerprint text
+    )`);
+    conversations.run(
+      "insert into conversations(source, scope, id, title, updated_at, is_archived, root_fingerprint) values ('local', '', ?, ?, ?, 0, 'fingerprint')",
+      [GUI_SESSION_ID, "Swarm parent", 1784691238958],
+    );
+    conversations.close();
+
+    const result = await collectCursorSessions(home, nowMs);
+
+    expect(result.errors).toEqual([]);
+    const child = result.value.find(({ id }) => id === `cursor:${CHILD_SESSION_ID}`);
+    expect(child?.parentSourceSessionId).toBe(GUI_SESSION_ID);
+    expect(child?.tokens.occupancyPct).toBeUndefined();
+    expect(child?.tokens.provenance).toBe("unknown");
+    const parent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
+    expect(parent?.tokens.occupancyPct).toBe(88);
+  });
+
+  /* A percent is a ratio with no numerator: it can say how full the window is but
+     never how many tokens are in it. Where store.db still reports a real observed
+     total, that measurement outranks the meter, and the percent must not overwrite
+     it — nor sit beside it, where the ring would be drawn from the ratio while the
+     numbers came from the store. */
+  test("an observed store.db total outranks the composer meter", async () => {
+    const home = await setupCliOccupancyHome(95, { totalTokens: 120000 });
+    const result = await collectCursorSessions(home, 1784691250000);
+    expect(result.errors).toEqual([]);
+    const agent = result.value.find(({ id }) => id === `cursor:${CLI_OCCUPANCY_SESSION_ID}`);
+    expect(agent?.tokens.total).toBe(120000);
+    expect(agent?.tokens.provenance).toBe("observed");
     expect(agent?.tokens.occupancyPct).toBeUndefined();
   });
 });
