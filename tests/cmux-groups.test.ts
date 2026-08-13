@@ -607,4 +607,24 @@ describe("repoGroupReconcileTick", () => {
     expect([...cmux.groups.values()][0]?.name).toBe("the-mountain");
     resetRepoGroupRegistrationForTests();
   });
+
+  test("disposing an older registration cannot unregister a newer writer", async () => {
+    resetRepoGroupRegistrationForTests();
+    const cmux = new FakeCmux({ "window-1": [] });
+    const colors = funnel(cmux);
+    const disposeOlder = registerRepoGroupInputs(() => ({
+      mirrorGroups: true,
+      setGroupColor: colors.setGroupColor,
+      targets: [],
+    }), new MemoryRepoGroupProvenanceStore());
+    registerRepoGroupInputs(() => ({
+      mirrorGroups: false,
+      setGroupColor: colors.setGroupColor,
+      targets: [],
+    }), new MemoryRepoGroupProvenanceStore());
+
+    disposeOlder();
+    expect((await repoGroupReconcileTick(cmux))?.disabled).toBe(true);
+    resetRepoGroupRegistrationForTests();
+  });
 });

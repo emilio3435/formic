@@ -26,6 +26,7 @@ import {
   repoColorDiscovery,
 } from "../src/server/settings";
 import { createMountainFetch, emptySnapshot } from "../src/server/app";
+import { repoGroupReconcileTick, resetRepoGroupRegistrationForTests } from "../src/server/cmux-groups";
 import { statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import type { CommandResult, CommandRunner } from "../src/server/types";
@@ -650,6 +651,55 @@ describe("createMountainFetch wiring", () => {
      unit under test (the ROUTE) being checked against a unit already proven. */
   const here = import.meta.dir;
   const liveKey = repoKeyForCwd(here)!;
+
+  test("a non-authoritative app never registers the process-wide cmux group mutator", async () => {
+    resetRepoGroupRegistrationForTests();
+    const snapshot = emptySnapshot();
+    const calls: string[][] = [];
+    const runner: CommandRunner = {
+      run: async (command) => {
+        calls.push([...command]);
+        return clean;
+      },
+    };
+    const fetch = createMountainFetch({
+      state: { get: () => snapshot, subscribe: () => () => {}, refresh: async () => snapshot },
+      runner,
+      archiveStore: { has: () => false, archive: async () => {} },
+      webRoot: import.meta.dir,
+    });
+
+    await Bun.sleep(0);
+    expect(await repoGroupReconcileTick(runner)).toBeNull();
+    expect(calls).toEqual([]);
+    fetch.dispose();
+  });
+
+  test("the authoritative app owns the cmux group mutator only for its lifetime", async () => {
+    resetRepoGroupRegistrationForTests();
+    const snapshot = emptySnapshot();
+    const calls: string[][] = [];
+    const runner: CommandRunner = {
+      run: async (command) => {
+        calls.push([...command]);
+        return { ...clean, stdout: JSON.stringify({ result: { windows: [] } }) };
+      },
+    };
+    const fetch = createMountainFetch({
+      state: { get: () => snapshot, subscribe: () => () => {}, refresh: async () => snapshot },
+      runner,
+      archiveStore: { has: () => false, archive: async () => {} },
+      repoGroupMirrorWriter: true,
+      webRoot: import.meta.dir,
+    });
+
+    await Bun.sleep(0);
+    expect((await repoGroupReconcileTick(runner))?.errors).toEqual([]);
+    expect(calls).toHaveLength(1);
+    fetch.dispose();
+    expect(await repoGroupReconcileTick(runner)).toBeNull();
+    expect(calls).toHaveLength(1);
+  });
 
   test("GET /api/repo-colors reaches the handler and colours the live fleet", async () => {
     /* The declared repoName is deliberately NOT the key: on this machine the

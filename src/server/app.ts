@@ -358,6 +358,12 @@ export interface MountainAppDependencies {
   repoColorsStore?: JsonRepoColorsStore;
   /** TINT-F test seam: skip the cmux fan-out so route tests write nothing. */
   repoColorFanOut?: (writes: readonly { workspaceId: string; hex: string }[]) => void | Promise<void>;
+  /**
+   * Grants this server process permission to mutate cmux workspace groups.
+   * False by default: index.ts grants it only to the OS-exclusive production
+   * port, so previews can inspect the same fleet without becoming writers.
+   */
+  repoGroupMirrorWriter?: boolean;
   cleanupProposer?: CleanupProposer;
   cleanupLauncher?: CleanupLauncher;
   /** Delay between Cleaner publication checks; zero keeps route tests deterministic. */
@@ -565,6 +571,7 @@ async function recordBroadcastAction(
 }
 
 export function createMountainFetch(dependencies: MountainAppDependencies): MountainFetch {
+  let disposed = false;
   configureCmuxActions({
     runner: dependencies.runner,
     ...(dependencies.cmuxExecutable ? { executable: dependencies.cmuxExecutable } : {}),
@@ -592,22 +599,26 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
      "not wired yet" and stays inert, so startup order cannot race. */
   let repoColorsForGroups: JsonRepoColorsStore | undefined;
   void repoColorsStore.then((store) => { repoColorsForGroups = store; });
-  const groupProvenance = resolve(dependencies.webRoot) === resolve(import.meta.dir, "../web")
-    ? JsonRepoGroupProvenanceStore.open(resolve(import.meta.dir, "../../data/repo-group-provenance.json"))
-    : Promise.resolve(new MemoryRepoGroupProvenanceStore());
-  void groupProvenance.then((provenance) => {
-    registerRepoGroupInputs(() => {
-      const store = repoColorsForGroups;
-      if (!store) return null;
-      const settings = store.get();
-      const discovery = discoverRepoColors(dependencies.state.get());
-      const targets = Object.entries(discovery.workspaces).flatMap(([workspaceId, repoKey]) => {
-        const assignment = settings.assignments[repoKey];
-        return assignment ? [{ workspaceId, repoKey, hex: assignment.hex }] : [];
-      });
-      return { mirrorGroups: settings.mirrorGroups, targets, setGroupColor };
-    }, provenance);
-  });
+  let disposeRepoGroupRegistration: (() => void) | undefined;
+  if (dependencies.repoGroupMirrorWriter === true) {
+    const groupProvenance = resolve(dependencies.webRoot) === resolve(import.meta.dir, "../web")
+      ? JsonRepoGroupProvenanceStore.open(resolve(import.meta.dir, "../../data/repo-group-provenance.json"))
+      : Promise.resolve(new MemoryRepoGroupProvenanceStore());
+    void groupProvenance.then((provenance) => {
+      if (disposed) return;
+      disposeRepoGroupRegistration = registerRepoGroupInputs(() => {
+        const store = repoColorsForGroups;
+        if (!store) return null;
+        const settings = store.get();
+        const discovery = discoverRepoColors(dependencies.state.get());
+        const targets = Object.entries(discovery.workspaces).flatMap(([workspaceId, repoKey]) => {
+          const assignment = settings.assignments[repoKey];
+          return assignment ? [{ workspaceId, repoKey, hex: assignment.hex }] : [];
+        });
+        return { mirrorGroups: settings.mirrorGroups, targets, setGroupColor };
+      }, provenance);
+    });
+  }
   const ackStore = dependencies.ackStore ?? new MemoryAckStore(dependencies.now);
   const cleanupObserveIntervalMs = dependencies.cleanupObserveIntervalMs ?? CLEANER_OBSERVE_INTERVAL_MS;
   let recollectInFlight: Promise<HubSnapshot> | undefined;
@@ -783,7 +794,6 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
   let currentSnapshot = initialSnapshot;
   let snapshotSequence = 0;
   let currentSnapshotEvent = snapshotEvent(initialSnapshot, snapshotSequence);
-  let disposed = false;
   const unsubscribe = dependencies.state.subscribe((snapshot) => {
     const nextFingerprint = compactSnapshotFingerprint(snapshot);
     /* The fingerprint deliberately ignores generatedAt, controlHealth
@@ -1652,9 +1662,9 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
   fetch.dispose = (): void => {
     if (disposed) return;
     disposed = true;
-    /* TINT integration wiring: drop the group-mirror provider with the app, so
-       a disposed test server cannot keep feeding the module-level tick. */
-    registerRepoGroupInputs(undefined);
+    /* Drop only this app's registration. A read-only preview owns none, and a
+       stale app cannot clear a newer writer's provider. */
+    disposeRepoGroupRegistration?.();
     unsubscribe();
     unsubscribeTriage?.();
     for (const client of [...clients]) {

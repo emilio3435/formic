@@ -30,4 +30,10 @@ describe("server runtime configuration", () => {
     expect(idleTimeout, "idleTimeout is no longer declared where this test looks for it").toBeDefined();
     expect(numericLiteral(idleTimeout!) * 1_000).toBeGreaterThan(SSE_HEARTBEAT_MS);
   });
+
+  test("only the production port is allowed to mutate cmux repo groups", () => {
+    const indexSource = readFileSync(join(import.meta.dir, "../src/server/index.ts"), "utf8");
+    expect(indexSource).toContain("const PRODUCTION_PORT = 4_701");
+    expect(indexSource).toContain("repoGroupMirrorWriter: configuredPort === PRODUCTION_PORT");
+  });
 });

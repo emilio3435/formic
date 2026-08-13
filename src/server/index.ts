@@ -19,7 +19,8 @@ import { JsonTriageQueueStore, NativeLunaInvestigationRunner } from "./triage";
 const PROJECT_ROOT = join(import.meta.dir, "../..");
 loadCmuxSocketEnv(PROJECT_ROOT);
 const HOSTNAME = "127.0.0.1";
-const configuredPort = Number(process.env.MOUNTAIN_PORT ?? 4_701);
+const PRODUCTION_PORT = 4_701;
+const configuredPort = Number(process.env.MOUNTAIN_PORT ?? PRODUCTION_PORT);
 if (!Number.isInteger(configuredPort) || configuredPort < 1 || configuredPort > 65_535) {
   throw new Error("MOUNTAIN_PORT must be an integer between 1 and 65535");
 }
@@ -84,6 +85,10 @@ const mountainFetch = createMountainFetch({
     }),
   }),
   cmuxExecutable,
+  /* The production port is the single-writer role. Previews on 4710-4719 stay
+     read-only cmux observers even though their copied settings default the
+     mirror feature on. The OS also refuses a second sustained 4701 server. */
+  repoGroupMirrorWriter: configuredPort === PRODUCTION_PORT,
   webRoot: join(PROJECT_ROOT, "src/web"),
 });
 const fetchWithAgentLinks = createAgentLinkFetch(mountainFetch, {

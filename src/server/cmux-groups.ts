@@ -526,9 +526,17 @@ let reconciling = false;
 export function registerRepoGroupInputs(
   provider: RepoGroupInputProvider | undefined,
   provenance?: RepoGroupProvenanceStore,
-): void {
+): () => void {
   inputProvider = provider;
   provenanceStore = provenance ?? provenanceStore;
+  return () => {
+    /* A newer app may have registered after this one. Its provider is now the
+       authority, so disposing the older app must not pull the newer one's
+       registration out from under the collector. */
+    if (inputProvider !== provider) return;
+    inputProvider = undefined;
+    provenanceStore = undefined;
+  };
 }
 
 /** Test seam — drop the registration between cases. */
@@ -539,10 +547,13 @@ export function resetRepoGroupRegistrationForTests(): void {
 }
 
 /* Called from the collector cycle. Returns null when nothing is wired yet, and
-   never runs two passes at once: cmux mutations from two overlapping passes
-   would race each other into duplicate groups. Like the naming pass, this is
-   fire-and-forget by design — the sidebar is an improvement on a board that
-   already works, so it must never delay or fail a refresh. */
+   never runs two passes at once inside the registered writer: cmux mutations
+   from two overlapping passes would race each other into duplicate groups.
+   createMountainFetch separately admits only the production server role as a
+   writer, so preview processes never reach this process-local guard. Like the
+   naming pass, this is fire-and-forget by design — the sidebar is an
+   improvement on a board that already works, so it must never delay or fail a
+   refresh. */
 export async function repoGroupReconcileTick(
   runner: CommandRunner,
   executable: string = DEFAULT_CMUX_EXECUTABLE,
