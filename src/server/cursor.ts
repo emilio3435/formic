@@ -45,6 +45,7 @@ let cursorStateCache: {
   sessionCwds: Map<string, string>;
   hasComposerData: boolean;
   composerData: Map<string, string | Uint8Array>;
+  occupancyPct: Map<string, number>;
   composers: Map<string, CursorStoreEvidence>;
 } | undefined;
 
@@ -698,16 +699,31 @@ async function cursorStateEvidence(
           );
         }
       }
+      const headerRow = database
+        .query("select value from ItemTable where key = 'composer.composerHeaders'")
+        .get() as { value?: string | Uint8Array | null } | null;
       return {
         sessionCwds: guiSessionCwds(database),
         hasComposerData,
         composerData,
+        composerHeadersRaw: headerRow?.value ?? undefined,
       };
     });
+    /* Parsed OUTSIDE the sqlite callback so a damaged meter record degrades only
+       the occupancy join: inside, a throw would be reported as an unreadable
+       state.vscdb and delete every GUI session from this scan. */
+    const { composerHeadersRaw, ...rest } = evidence;
+    let occupancyPct = new Map<string, number>();
+    try {
+      occupancyPct = parseComposerHeaders(composerHeadersRaw);
+    } catch (error) {
+      errors.push(`cursor composer headers: ${error instanceof Error ? error.message : String(error)}; context occupancy will be missing for this scan`);
+    }
     cursorStateCache = {
       path,
       fingerprint: fingerprint ?? "",
-      ...evidence,
+      ...rest,
+      occupancyPct,
       composers: new Map(),
     };
     return cursorStateCache;
@@ -1057,6 +1073,28 @@ async function fillMissingCursorModels(
   }
 }
 
+// Cursor's own context meter, joined strictly by each agent's OWN session id —
+// children without a header row of their own stay unknown by construction.
+// store.db stays authoritative: an observed total (if Cursor ever writes usage
+// again) outranks the meter and keeps the total/contextWindow derivation.
+function fillCursorOccupancy(
+  state: NonNullable<typeof cursorStateCache> | undefined,
+  agents: CollectedAgent[],
+): void {
+  if (!state || state.occupancyPct.size === 0) return;
+  for (const agent of agents) {
+    const pct = state.occupancyPct.get(agent.sourceSessionId);
+    if (pct === undefined) continue;
+    if (agent.tokens.provenance === "observed" && agent.tokens.total !== undefined) continue;
+    agent.tokens = {
+      ...agent.tokens,
+      scope: "latest-turn",
+      provenance: "observed",
+      occupancyPct: pct,
+    };
+  }
+}
+
 export async function collectCursorSessions(
   home = homedir(),
   nowMs = Date.now(),
@@ -1170,6 +1208,7 @@ export async function collectCursorSessions(
     if (!knownIds.has(agent.id)) agents.push(agent);
   }
   await fillMissingCursorModels(state, agents, errors);
+  fillCursorOccupancy(state, agents);
   return { value: agents, errors, ...(cursorAbsent ? { absent: true } : {}) };
 }
 

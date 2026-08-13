@@ -108,6 +108,10 @@ async function setupGuiComposerHome(options: {
   composerData?: { modelName: string; parameters?: { id: string; value: string }[] };
   /** Writes a composerData row whose value is not JSON, to model a damaged store. */
   corruptComposerData?: boolean;
+  /** Writes Cursor's own context meter for GUI_SESSION_ID into composer.composerHeaders. */
+  contextUsagePercent?: number;
+  /** Writes a composerHeaders row whose value is not JSON, to model a damaged meter. */
+  corruptComposerHeaders?: boolean;
   trackingModel?: string;
 }): Promise<string> {
   const home = await mkdtemp(join(tmpdir(), "mountain-cursor-composer-"));
@@ -137,6 +141,22 @@ async function setupGuiComposerHome(options: {
     "glass.localAgentProjects.v1",
     JSON.stringify([{ id: projectId, workspace: { id: "workspace-hash", uri: { fsPath: projectCwd } } }]),
   ]);
+  if (options.contextUsagePercent !== undefined) {
+    state.run("insert into ItemTable(key, value) values (?, ?)", [
+      "composer.composerHeaders",
+      JSON.stringify({
+        allComposers: [
+          { composerId: GUI_SESSION_ID, contextUsagePercent: options.contextUsagePercent },
+        ],
+      }),
+    ]);
+  }
+  if (options.corruptComposerHeaders) {
+    state.run("insert into ItemTable(key, value) values (?, ?)", [
+      "composer.composerHeaders",
+      "{ this is not json",
+    ]);
+  }
   if (options.composerData) {
     state.run("create table cursorDiskKV (key text primary key, value blob)");
     state.run("insert into cursorDiskKV(key, value) values (?, ?)", [
@@ -1221,5 +1241,37 @@ describe("Cursor composer headers occupancy", () => {
 
   test("invalid JSON throws so the caller can record a named error", () => {
     expect(() => parseComposerHeaders("{ this is not json")).toThrow();
+  });
+
+  test("GUI session with a composer header reports occupancy but never tokens or cost", async () => {
+    const home = await setupGuiComposerHome({ contextUsagePercent: 95.47, trackingModel: "grok-4.5" });
+    const result = await collectCursorSessions(home, 1784692000000);
+    expect(result.errors).toEqual([]);
+    const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
+    expect(agent?.tokens).toMatchObject({
+      scope: "latest-turn",
+      provenance: "observed",
+      occupancyPct: 95.47,
+    });
+    expect(agent?.tokens.total).toBeUndefined();
+    expect(agent?.tokens.sessionTotal).toBeUndefined();
+    expect(agent?.cost).toBeNull();
+  });
+
+  test("a session with no header row stays on the unknown billing path", async () => {
+    const home = await setupGuiComposerHome({ trackingModel: "grok-4.5" });
+    const result = await collectCursorSessions(home, 1784692000000);
+    const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
+    expect(agent?.tokens.occupancyPct).toBeUndefined();
+    expect(agent?.tokens.provenance).toBe("unknown");
+  });
+
+  test("a corrupt composerHeaders record degrades the source without deleting occupancy-less sessions", async () => {
+    const home = await setupGuiComposerHome({ corruptComposerHeaders: true, trackingModel: "grok-4.5" });
+    const result = await collectCursorSessions(home, 1784692000000);
+    expect(result.errors.join(" ")).toContain("composer headers");
+    const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
+    expect(agent).toBeDefined();
+    expect(agent?.tokens.occupancyPct).toBeUndefined();
   });
 });
