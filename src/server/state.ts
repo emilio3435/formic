@@ -1,6 +1,6 @@
 import { open, readFile } from "node:fs/promises";
 import { homedir, uptime } from "node:os";
-import type { HubSnapshot, IssueLifecycle, OperatorIssue, Provider, SourceHealth, TriageQueueSummary } from "../shared/types";
+import type { AgentSnapshot, HubSnapshot, IssueLifecycle, OperatorIssue, Provider, SourceHealth, TriageQueueSummary } from "../shared/types";
 import { PROVIDERS } from "../shared/types";
 import {
   collectCmux,
@@ -16,6 +16,12 @@ import {
   type CmuxEventsRuntime,
 } from "./cmux-events";
 import {
+  CmuxSyncSupervisor,
+  registerSyncHandler,
+  type CmuxSyncEvent,
+  type CmuxSyncRuntime,
+} from "./cmux-sync";
+import {
   collectSessionProvider,
   collectSessions,
   DEFAULT_SESSION_WINDOW_MS,
@@ -25,6 +31,7 @@ import {
 } from "./collectors";
 import { withAttentionClasses } from "./attention-signal";
 import { buildSnapshot, type ProgramHint, withIssueDecoration, withPulse } from "./snapshot";
+import { rollupFor } from "./snapshot-programs";
 import { PulseTracker } from "./pulse";
 import type {
   ArchiveStore,
@@ -64,6 +71,7 @@ import {
   type SenderTranscriptEvidence,
 } from "./sender-verification";
 import { ProviderSettlementCoordinator } from "./provider-settlement";
+import { taskStateWantsHuman } from "./task-state";
 
 export interface HubCollectors {
   sessions: typeof collectSessions;
@@ -92,6 +100,37 @@ const DEFAULT_COLLECTORS: HubCollectors = {
 const MIN_REFRESH_WATCHDOG_MS = 12_000;
 const MIN_CONTROL_AGGREGATE_TIMEOUT_MS = 10_000;
 const PROVIDER_FINALIZATION_ALLOWANCE_MS = 1_000;
+
+function syncEventRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function endedByCmux(agent: AgentSnapshot): AgentSnapshot {
+  const {
+    attentionClass: _attentionClass,
+    attentionSignal: _attentionSignal,
+    nextAction: _nextAction,
+    ...retained
+  } = agent;
+  return {
+    ...retained,
+    status: "archived",
+    statusReason: "cmux-closed",
+    activity: "ended",
+    lifecycle: "finished",
+    provenance: "process-died",
+    processState: "died",
+    outcome: "healthy",
+    controlState: "observed-only",
+    attention: false,
+    controls: agent.controls.map((control) =>
+      control.action === "focus" || control.action === "instruct" || control.action === "interrupt"
+        ? { ...control, enabled: false, reason: "cmux-closed" }
+        : control),
+  };
+}
 
 async function readBoundedTranscriptTail(
   path: string,
@@ -177,6 +216,8 @@ export class HubState {
   #refreshingCmux = false;
   #cmuxEvents?: CmuxEventsSupervisor;
   #cmuxEventsBootId?: string;
+  #cmuxSync?: CmuxSyncSupervisor;
+  #unregisterCmuxSync?: () => void;
   #listeners = new Set<(snapshot: HubSnapshot) => void>();
   #issueLifecycle = new Map<string, IssueLifecycle>();
   #recentlyResolved: OperatorIssue[] = [];
@@ -387,12 +428,131 @@ export class HubState {
     });
     this.#cmuxEvents = supervisor;
     supervisor.start();
+    /* A test-injected coarse child owns its own fixture stream. Production's
+       default start owns both deliberately separate children. */
+    if (!runtime.spawn && !runtime.scheduleRestart) this.startCmuxSync();
   }
 
   stopCmuxEvents(): void {
     const supervisor = this.#cmuxEvents;
     this.#cmuxEvents = undefined;
     supervisor?.stop();
+    this.stopCmuxSync();
+  }
+
+  startCmuxSync(runtime: CmuxSyncRuntime = {}): void {
+    if (this.#cmuxSync) return;
+    /* SYNC-E */
+    const unregisterWorkspace = registerSyncHandler(
+      "workspace.closed",
+      (event) => this.#applyCmuxClosedEvent(event),
+    );
+    const unregisterSurface = registerSyncHandler(
+      "surface.closed",
+      (event) => this.#applyCmuxClosedEvent(event),
+    );
+    this.#unregisterCmuxSync = () => {
+      unregisterWorkspace();
+      unregisterSurface();
+    };
+    const supervisor = new CmuxSyncSupervisor({
+      executable: this.cmuxExecutable,
+      cursorStore: runtime.cursorStore,
+      spawn: runtime.spawn,
+      scheduleRestart: runtime.scheduleRestart,
+      onError: runtime.onError,
+      recollect: runtime.recollect ?? (() => this.refresh({ cmux: true }).then(() => undefined)),
+    });
+    this.#cmuxSync = supervisor;
+    supervisor.start();
+  }
+
+  stopCmuxSync(): void {
+    const supervisor = this.#cmuxSync;
+    this.#cmuxSync = undefined;
+    supervisor?.stop();
+    this.#unregisterCmuxSync?.();
+    this.#unregisterCmuxSync = undefined;
+  }
+
+  #applyCmuxClosedEvent(event: CmuxSyncEvent): void {
+    const params = syncEventRecord(event.payload.params);
+    const result = syncEventRecord(event.payload.result);
+    const resultWorkspace = syncEventRecord(result?.workspace);
+    const resultSurface = syncEventRecord(result?.surface);
+    const records = [event.payload, params, result, resultWorkspace, resultSurface];
+    const value = (...keys: string[]): string | undefined => {
+      for (const record of records) {
+        if (!record) continue;
+        for (const key of keys) {
+          const candidate = record[key];
+          if (typeof candidate === "string" && candidate.length > 0) return candidate;
+        }
+      }
+      return undefined;
+    };
+
+    const workspaceId = value("workspace_id", "workspaceId");
+    const surfaceId = value("surface_id", "surfaceId");
+    if (event.name === "surface.closed" && value("origin") === "workspace_teardown") return;
+    if (event.name === "workspace.closed") {
+      if (!workspaceId) return;
+      this.#surfaces = this.#surfaces.filter((surface) => surface.workspaceId !== workspaceId);
+    } else if (event.name === "surface.closed") {
+      if (!surfaceId) return;
+      this.#surfaces = this.#surfaces.filter((surface) => surface.surfaceId !== surfaceId);
+    } else {
+      return;
+    }
+
+    let changed = false;
+    const programs = this.#snapshot.programs.map((program) => {
+      const agents = program.agents.map((agent) => {
+        const matches = event.name === "workspace.closed"
+          ? agent.target.workspaceId === workspaceId
+          : agent.target.surfaceId === surfaceId;
+        if (!matches || agent.lifecycle === "finished" || agent.activity === "ended") return agent;
+        changed = true;
+        return endedByCmux(agent);
+      });
+      return agents.some((agent, index) => agent !== program.agents[index])
+        ? { ...program, agents, rollup: rollupFor(agents) }
+        : program;
+    });
+    if (!changed) return;
+
+    const allAgents = programs.flatMap((program) => program.agents);
+    const observed = allAgents.filter(
+      (agent) => agent.scope !== "retained" && agent.sourceFreshness !== "last-known",
+    );
+    const countLifecycle = (lifecycle: NonNullable<AgentSnapshot["lifecycle"]>): number =>
+      observed.filter((agent) => agent.lifecycle === lifecycle).length;
+    const next = withAttentionClasses({
+      ...this.#snapshot,
+      generatedAt: new Date().toISOString(),
+      programs,
+      totals: {
+        ...this.#snapshot.totals,
+        live: observed.filter((agent) => agent.activity === "working" || agent.activity === "idle").length,
+        attention: observed.filter((agent) => agent.attention === true).length,
+        working: observed.filter((agent) => agent.activity === "working").length,
+        idle: observed.filter((agent) => agent.activity === "idle").length,
+        ended: allAgents.filter((agent) => agent.activity === "ended").length,
+        byLifecycle: {
+          working: countLifecycle("working"),
+          waiting: countLifecycle("waiting"),
+          unverified: countLifecycle("unverified"),
+          finished: countLifecycle("finished"),
+        },
+        needsYou: observed.filter((agent) =>
+          agent.lifecycle !== "finished" && taskStateWantsHuman(agent)).length,
+        history: allAgents.filter((agent) => agent.activity === "ended").length,
+      },
+    });
+    const pulseNowMs = Date.now();
+    this.#pulse.observe(next, pulseNowMs);
+    this.#snapshot = withPulse(next, this.#pulse.report(pulseNowMs));
+    for (const listener of this.#listeners) listener(this.#snapshot);
   }
 
   #refreshFromCmuxEvent(frame: CmuxEventFrame): void {
