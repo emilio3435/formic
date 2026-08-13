@@ -54,7 +54,8 @@ Rules the deploy script enforces so you don't have to remember them:
 - Deploy worktree must be on `main`.
 - The worktree must be clean and its `HEAD` must match a freshly fetched `origin/main`.
 - The LaunchAgent `WorkingDirectory` and server entry must point back at that exact worktree.
-- **Red `tsc` or `bun test` aborts the deploy** — broken code never reaches :4701.
+- **Red `tsc` or a red hermetic suite (`bun run test:ci`) aborts the deploy** — broken code never reaches :4701, and no flag overrides that.
+- **The four local-evidence gates run as their own phase and also block** — `cross-source-token-agreement`, `physical-bounds`, `published-identities`, `reference-docs` (the list lives in `scripts/ci-tests.sh`; `--local-only` prints it). They read the running board, real burn history and local branches, and fail rather than skip when that evidence is missing. A red here has two meanings the script cannot tell apart: a real disagreement is a reason not to deploy, a **quiet fleet with too little recorded usage to compare is not**. Confirm which by running one directly (`bun test tests/cross-source-token-agreement.test.ts`); if it is the quiet fleet, deploy with `ANTHILL_DEPLOY_QUIET_FLEET=1 bash scripts/anthill-deploy.sh`, which prints exactly what went unverified.
 - Restart via `launchctl kickstart -k gui/$UID/ai.imaginethat.anthill`, then health-check.
 - On an unhealthy restart it fails loudly and points to revert-through-main recovery.
 
@@ -112,17 +113,25 @@ host port or restart the production service.
 | `bun run start:server` | The server alone, no launcher | 4701, **no reuse** |
 | `bun run dev` | The server alone, restarting on file change | 4701, **no reuse** |
 | `bun run setup:cmux` | One-time cmux password setup | — |
-| `bun run check` | `typecheck` then `test` — the gate `anthill-deploy.sh` runs | — |
+| `bun run check` | `typecheck` then the whole `test` suite — the strictest local pass | — |
 | `bun run test` / `typecheck` | Either half of it | — |
 | `bun run test:ci` | `scripts/ci-tests.sh` — everything except the four local-only files | — |
 
-**`test:ci` is not the gate; `check` is.** It exists because four test files
-assert against evidence that only exists on a working machine — the developer's
-live session history, and the board answering on 4701 — and they are written to
-fail rather than skip when that evidence is absent, which is correct locally and
-impossible in CI. `scripts/ci-tests.sh` names those four with a reason each and
-runs every other file, so a new test is covered without anyone remembering to
-add it. Before deploying, run `bun run check`, which still runs all of them.
+**`test:ci` is the hermetic half, not the whole gate.** It exists because four
+test files assert against evidence that only exists on a working machine — the
+developer's live session history, and the board answering on 4701 — and they are
+written to fail rather than skip when that evidence is absent, which is correct
+locally and impossible in CI. `scripts/ci-tests.sh` names those four with a
+reason each and runs every other file, so a new test is covered without anyone
+remembering to add it; `scripts/ci-tests.sh --local-only` prints just the four,
+which is how the deploy script gets the list without keeping a second copy.
+
+`anthill-deploy.sh` runs **both** halves: `test:ci` blocks unconditionally, then
+the four local-evidence files block too — but only that phase can be waved
+through, with `ANTHILL_DEPLOY_QUIET_FLEET=1`, for the case where they are red
+because the fleet is quiet rather than because something regressed. `bun run
+check` remains the strictest single command and runs everything with no
+override at all.
 
 Two will surprise you. **`start:external` does not bind externally** — it means
 "run in this shell instead of a cmux workspace", and the server is hardcoded to
