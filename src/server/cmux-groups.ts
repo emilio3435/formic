@@ -163,6 +163,10 @@ export interface CmuxGroup {
   id: string;
   name?: string;
   customColor?: string;
+  /* cmux materializes a group as a workspace row that heads it. Removing that
+     row destroys the group and leaves the row behind — verified live on
+     2026-08-13 — so the anchor is never filed, moved, or removed here. */
+  anchorWorkspaceId?: string;
   memberWorkspaceIds: string[];
 }
 
@@ -201,6 +205,7 @@ export function parseCmuxGroups(output: string): CmuxGroup[] {
       id,
       name: stringField(group, "name"),
       customColor: stringField(group, "custom_color"),
+      anchorWorkspaceId: stringField(group, "anchor_workspace_id"),
       memberWorkspaceIds: members.filter((member): member is string => typeof member === "string"),
     }];
   });
@@ -217,6 +222,7 @@ export function parseCreatedGroup(output: string): CmuxGroup | undefined {
     id,
     name: stringField(group, "name"),
     customColor: stringField(group, "custom_color"),
+    anchorWorkspaceId: stringField(group, "anchor_workspace_id"),
     memberWorkspaceIds: members.filter((member): member is string => typeof member === "string"),
   };
 }
@@ -367,8 +373,16 @@ export async function reconcileRepoGroups(
     const groups = groupsByWindow.get(windowId);
     if (!workspaceIds || !groups) continue;
 
+    /* Every group's anchor row, ours and the operator's alike. cmux lists these
+       rows as workspaces and TINT-F maps them to a repo like any other, since
+       an anchor inherits its group's cwd — filing one into a different group
+       would silently destroy the group it heads. */
+    const anchorIds = new Set(groups.flatMap((group) =>
+      group.anchorWorkspaceId ? [group.anchorWorkspaceId] : []));
+
     const byRepo = new Map<string, { hex: string; workspaceIds: string[] }>();
     for (const workspaceId of workspaceIds) {
+      if (anchorIds.has(workspaceId)) continue;
       const target = targetsByWorkspace.get(workspaceId);
       if (!target) continue;
       const bucket = byRepo.get(target.repoKey) ?? { hex: target.hex, workspaceIds: [] };
@@ -441,8 +455,12 @@ export async function reconcileRepoGroups(
 
       /* Only ever out of a group we created: cmux resolves `remove` from the
          workspace's own group, so running it on a member of somebody else's
-         group would quietly take their workspace out of it. */
+         group would quietly take their workspace out of it. The anchor is
+         exempt in both directions — removing it dissolves the group and orphans
+         the row, which on the next pass looks like a missing group and rebuilds
+         it: a create/destroy loop that never settles. */
       for (const workspaceId of live.memberWorkspaceIds) {
+        if (workspaceId === live.anchorWorkspaceId) continue;
         if (currentMembers.has(workspaceId) && desired.workspaceIds.includes(workspaceId)) continue;
         const outcome = await rpc(runner, executable, "workspace.group.remove", { workspace_id: workspaceId });
         if (!outcome.ok) {

@@ -25,16 +25,19 @@ interface FakeGroup {
   windowId: string;
   name: string;
   customColor: string | null;
+  /* cmux heads every group with a workspace row it creates itself. */
+  anchorWorkspaceId?: string;
   members: string[];
 }
 
 /* A cmux that behaves the way the real one did on 2026-08-13, verified by hand
    against cmux's own group RPCs: groups belong to a window, `create` names the
-   group itself ("Group N") and takes no name, `add` moves a workspace out of
-   whatever group it was in, and `remove` resolves the group from the workspace.
-   Modelling those four facts is the whole point — a fixture that just records
-   calls would pass while the module reconciled against a cmux that does not
-   exist. */
+   group itself ("Group N") and also creates the anchor workspace row that heads
+   it, `add` moves a workspace out of whatever group it was in, `remove`
+   resolves the group from the workspace, and removing the ANCHOR destroys the
+   group while leaving its row behind. Modelling those facts is the whole point
+   — a fixture that just records calls would pass while the module reconciled
+   against a cmux that does not exist. */
 class FakeCmux implements CommandRunner {
   readonly calls: Array<{ method: string; params: Record<string, unknown> }> = [];
   readonly windows = new Map<string, string[]>();
@@ -101,6 +104,7 @@ class FakeCmux implements CommandRunner {
               id,
               name: group.name,
               custom_color: group.customColor,
+              anchor_workspace_id: group.anchorWorkspaceId,
               member_workspace_ids: [...group.members],
             })),
         };
@@ -113,10 +117,19 @@ class FakeCmux implements CommandRunner {
         }
         const id = `group-${this.nextGroup}`;
         const name = `Group ${this.nextGroup}`;
+        const anchor = `anchor-${this.nextGroup}`;
         this.nextGroup += 1;
-        this.groups.set(id, { windowId, name, customColor: null, members: [...children] });
+        inWindow.push(anchor);
+        const members = [anchor, ...children];
+        this.groups.set(id, { windowId, name, customColor: null, anchorWorkspaceId: anchor, members });
         return {
-          group: { id, name, custom_color: null, member_workspace_ids: [...children] },
+          group: {
+            id,
+            name,
+            custom_color: null,
+            anchor_workspace_id: anchor,
+            member_workspace_ids: [...members],
+          },
         };
       }
       case "workspace.group.add": {
@@ -126,9 +139,15 @@ class FakeCmux implements CommandRunner {
         group.members.push(workspaceId);
         return { group_id: groupId, workspace_id: workspaceId };
       }
-      case "workspace.group.remove":
+      case "workspace.group.remove": {
+        /* Verified live 2026-08-13: removing the anchor takes the whole group
+           with it and leaves the anchor row orphaned in the sidebar. */
+        for (const [id, group] of this.groups) {
+          if (group.anchorWorkspaceId === workspaceId) this.groups.delete(id);
+        }
         this.detach(workspaceId);
         return { workspace_id: workspaceId };
+      }
       case "workspace.group.rename": {
         const group = this.groups.get(groupId);
         if (!group) throw new Error("Missing or invalid group_id");
@@ -152,6 +171,13 @@ class FakeCmux implements CommandRunner {
       if (!group.members.length && groupId.startsWith("group-")) continue;
     }
   }
+}
+
+/** Members minus the anchor row cmux heads every group with. */
+function membersOf(cmux: FakeCmux, groupId: string): string[] {
+  const group = cmux.groups.get(groupId);
+  if (!group) return [];
+  return group.members.filter((member) => member !== group.anchorWorkspaceId).sort();
 }
 
 function target(workspaceId: string, repoKey: string, hex: string): RepoGroupTarget {
@@ -216,11 +242,11 @@ describe("reconcileRepoGroups", () => {
       "window-1:the-mountain",
       "window-2:the-mountain",
     ]);
-    const mountainInWindowOne = groups.find(
-      (group) => group.name === "the-mountain" && group.windowId === "window-1",
+    const mountainInWindowOne = [...cmux.groups.entries()].find(
+      ([, group]) => group.name === "the-mountain" && group.windowId === "window-1",
     );
-    expect(mountainInWindowOne?.members.sort()).toEqual(["ws-a", "ws-b"]);
-    expect(mountainInWindowOne?.customColor).toBe("#5f7f2a");
+    expect(membersOf(cmux, mountainInWindowOne?.[0] ?? "")).toEqual(["ws-a", "ws-b"]);
+    expect(mountainInWindowOne?.[1].customColor).toBe("#5f7f2a");
     /* A repo spanning two windows gets a group in EACH window: cmux refuses a
        child workspace that is not in the group's window, so one global group
        would silently drop half the fleet. */
@@ -360,7 +386,10 @@ describe("reconcileRepoGroups", () => {
        workspaces, which would take an operator's running agent with it. */
     expect(cmux.methodCalls("workspace.group.ungroup")).toHaveLength(1);
     expect(result.errors).toEqual([]);
-    expect(cmux.windows.get("window-1")).toEqual(["ws-a"]);
+    /* The workspace survives the teardown. cmux keeps the anchor row it made
+       for the group, which the operator can close — dissolving must never
+       close a workspace. */
+    expect(cmux.windows.get("window-1")).toContain("ws-a");
   });
 
   test("flag off dissolves our groups and leaves the operator's alone", async () => {
@@ -449,7 +478,7 @@ describe("reconcileRepoGroups", () => {
       provenance,
       inputs: { mirrorGroups: true, setGroupColor: colors.setGroupColor, targets: [both[0]!] },
     });
-    expect(cmux.groups.get(provenance.list()[0]!.groupId)?.members).toEqual(["ws-a"]);
+    expect(membersOf(cmux, provenance.list()[0]!.groupId)).toEqual(["ws-a"]);
     expect(cmux.methodCalls("workspace.group.remove")).toEqual([{ workspace_id: "ws-b" }]);
   });
 
@@ -490,6 +519,69 @@ describe("reconcileRepoGroups", () => {
     });
     expect(result.absent).toBe(true);
     expect(result.errors).toEqual([]);
+  });
+
+  test("the anchor row is never removed, so the group survives the next pass", async () => {
+    const cmux = new FakeCmux({ "window-1": ["ws-a"] });
+    const provenance = new MemoryRepoGroupProvenanceStore();
+    const colors = funnel(cmux);
+    const inputs: RepoGroupInputs = {
+      mirrorGroups: true,
+      setGroupColor: colors.setGroupColor,
+      targets: [target("ws-a", "the-mountain", "#5F7F2A")],
+    };
+    await reconcileRepoGroups({ runner: cmux, provenance, inputs });
+    const groupId = provenance.list()[0]!.groupId;
+    const anchor = cmux.groups.get(groupId)?.anchorWorkspaceId;
+    expect(anchor).toBeTruthy();
+
+    /* The anchor is a member the board never maps, so a naive membership diff
+       removes it — and removing it takes the group with it, which the next pass
+       reads as "no group" and rebuilds. That is a create/destroy loop, not a
+       reconcile. */
+    const second = await reconcileRepoGroups({ runner: cmux, provenance, inputs });
+    expect(second.mutations).toBe(0);
+    expect(cmux.methodCalls("workspace.group.remove")).toEqual([]);
+    expect(cmux.groups.has(groupId)).toBe(true);
+    expect(membersOf(cmux, groupId)).toEqual(["ws-a"]);
+  });
+
+  test("an anchor mapped to another repo is never filed into that repo's group", async () => {
+    const cmux = new FakeCmux({ "window-1": ["ws-a", "ws-b"] });
+    const provenance = new MemoryRepoGroupProvenanceStore();
+    const colors = funnel(cmux);
+    await reconcileRepoGroups({
+      runner: cmux,
+      provenance,
+      inputs: {
+        mirrorGroups: true,
+        setGroupColor: colors.setGroupColor,
+        targets: [target("ws-a", "the-mountain", "#5F7F2A")],
+      },
+    });
+    const mountainGroupId = provenance.list()[0]!.groupId;
+    const anchor = cmux.groups.get(mountainGroupId)!.anchorWorkspaceId!;
+
+    /* An anchor inherits its group's cwd, so the board maps it to a repo like
+       any other workspace. Filing it elsewhere would dissolve the group it
+       heads. */
+    const result = await reconcileRepoGroups({
+      runner: cmux,
+      provenance,
+      inputs: {
+        mirrorGroups: true,
+        setGroupColor: colors.setGroupColor,
+        targets: [
+          target("ws-a", "the-mountain", "#5F7F2A"),
+          target("ws-b", "cooper-scheduler", "#2E66A8"),
+          target(anchor, "cooper-scheduler", "#2E66A8"),
+        ],
+      },
+    });
+    expect(cmux.groups.has(mountainGroupId)).toBe(true);
+    expect(cmux.groups.get(mountainGroupId)?.members).toContain(anchor);
+    expect(cmux.methodCalls("workspace.group.add").some((params) => params.workspace_id === anchor)).toBe(false);
+    expect(result.filed["cooper-scheduler"]).toEqual(["ws-b"]);
   });
 });
 
