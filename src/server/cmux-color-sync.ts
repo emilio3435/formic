@@ -462,22 +462,43 @@ export async function reconcileWorkspaceColors(input: ReconcileInput): Promise<R
 const REPO_COLOR_MODULE = "../shared/repo-color";
 const COLOR_FUNNEL_MODULE = "./cmux-color";
 
-export async function loadColorRuntime(): Promise<{
+/** Where the two implementations come from.
+ *
+ *  Injected so "the implementation is missing" is a condition a test can STATE
+ *  rather than one it inherits from the tree it happens to be standing in. On
+ *  `feat/tint-s` the funnel module genuinely did not exist, so the degradation
+ *  path was covered by ambient absence — and that coverage evaporated the moment
+ *  TINT-F merged and the absence became untrue, which is precisely the shape of
+ *  a test that stops testing without ever going red on its own branch. */
+export interface ColorRuntimeModules {
+  repoColor(): Promise<Partial<ColorRuntime>>;
+  funnel(): Promise<Partial<ColorFunnel>>;
+}
+
+const DEFAULT_RUNTIME_MODULES: ColorRuntimeModules = {
+  repoColor: async () => await import(REPO_COLOR_MODULE) as Partial<ColorRuntime>,
+  funnel: async () => await import(COLOR_FUNNEL_MODULE) as Partial<ColorFunnel>,
+};
+
+export async function loadColorRuntime(
+  modules: Partial<ColorRuntimeModules> = {},
+): Promise<{
   runtime?: ColorRuntime;
   errors: string[];
 }> {
+  const source = { ...DEFAULT_RUNTIME_MODULES, ...modules };
   const errors: string[] = [];
   let repoKeyForCwd: ColorRuntime["repoKeyForCwd"] | undefined;
   let funnel: ColorFunnel | undefined;
   try {
-    const module = await import(REPO_COLOR_MODULE) as Partial<ColorRuntime>;
+    const module = await source.repoColor();
     if (typeof module.repoKeyForCwd === "function") repoKeyForCwd = module.repoKeyForCwd;
     else errors.push("repo color sync is idle: repoKeyForCwd is not implemented yet (TINT-F)");
   } catch (error) {
     errors.push(`repo color contract could not be loaded: ${error instanceof Error ? error.message : String(error)}`);
   }
   try {
-    const module = await import(COLOR_FUNNEL_MODULE) as Partial<ColorFunnel>;
+    const module = await source.funnel();
     if (typeof module.setWorkspaceColor === "function" && typeof module.lastWrittenHex === "function") {
       funnel = {
         setWorkspaceColor: module.setWorkspaceColor,
@@ -539,6 +560,9 @@ export interface SyncCmuxColorsInput {
   settings: unknown;
   /** Injected by tests. Production resolves TINT-F's modules instead. */
   runtime?: ColorRuntime;
+  /** Where to resolve the implementations from, when `runtime` is not given.
+   *  Lets a test assert what the pass does when one of them is MISSING. */
+  modules?: Partial<ColorRuntimeModules>;
 }
 
 /** One reconcile pass, piggybacked on the cmux collector poll (locked decision
@@ -553,7 +577,7 @@ export async function syncCmuxColors(input: SyncCmuxColorsInput): Promise<Reconc
       if (collected.absent) return { decisions: [], workspaces: {}, errors: [] };
       const loaded = input.runtime
         ? { runtime: input.runtime, errors: [] as string[] }
-        : await loadColorRuntime();
+        : await loadColorRuntime(input.modules);
       const { runtime } = loaded;
       if (!runtime) {
         /* No runtime means no repo mapping and no funnel, so every observed

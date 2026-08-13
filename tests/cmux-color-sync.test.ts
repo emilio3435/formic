@@ -775,18 +775,55 @@ describe("syncCmuxColors — the pass the collector poll calls", () => {
   });
 
   test("without TINT-F's implementations the pass stays idle instead of guessing", async () => {
-    // The integration seam: no repoKeyForCwd, no funnel, so nothing is mapped
-    // and nothing is written — and the reason is stated rather than silent.
+    /* The missing implementations are STATED here, not inherited from the tree.
+       This test used to rely on `./cmux-color` genuinely not existing on this
+       lane's branch; that made it pass for a reason that stopped being true the
+       moment TINT-F merged, without ever going red on the branch that wrote it.
+
+       The board's settings below DO assign the-mountain a color, and the drifted
+       workspace's cwd IS in that repo — so a pass that guessed at repo mapping
+       would re-assert. With no runtime it must instead treat the workspace as
+       unmapped, write nothing, and say why. */
     resetColorSyncState();
     const result = await syncCmuxColors({
       runner: twoWindowRunner({ "MOUNTAIN-1": "#B05F3A" }),
       executable: "cmux",
       surfaces: [],
-      settings: {},
+      settings: {
+        repoColors: {
+          assignments: { "the-mountain": assignment("the-mountain", "#5F7F2A") },
+          mirrorGroups: true,
+          syncFromCmux: true,
+        },
+      },
+      modules: { repoColor: async () => ({}), funnel: async () => ({}) },
     });
 
     expect(result.decisions.every((decision) => decision.outcome !== "reassert")).toBe(true);
+    expect(result.workspaces).toEqual({ "MOUNTAIN-1": { hex: "#b05f3a", repoKey: null } });
     expect(result.errors.join(" ")).toContain("TINT-F");
+  });
+
+  test("half a runtime is no runtime — a funnel without repo mapping still writes nothing", async () => {
+    // Partial availability is the state an in-flight merge actually produces.
+    resetColorSyncState();
+    const spy = funnelSpy();
+    const result = await syncCmuxColors({
+      runner: twoWindowRunner({ "MOUNTAIN-1": "#B05F3A" }),
+      executable: "cmux",
+      surfaces: [],
+      settings: {
+        repoColors: {
+          assignments: { "the-mountain": assignment("the-mountain", "#5F7F2A") },
+          mirrorGroups: true,
+          syncFromCmux: true,
+        },
+      },
+      modules: { repoColor: async () => ({}), funnel: async () => spy.funnel },
+    });
+
+    expect(spy.writes).toEqual([]);
+    expect(result.errors.join(" ")).toContain("repoKeyForCwd is not implemented");
   });
 
   test("a second pass launched while one is running joins it rather than stacking writes", async () => {
@@ -824,14 +861,56 @@ describe("repoColorsSettingsFrom — reading TINT-F's settings without owning th
 });
 
 describe("loadColorRuntime — the seam reports what has not landed", () => {
-  test("names the missing implementation rather than failing silently", async () => {
+  const workingFunnel = () => funnelSpy().funnel;
+
+  test("both halves present yields a runtime and no complaint", async () => {
+    const loaded = await loadColorRuntime({
+      repoColor: async () => ({ repoKeyForCwd }),
+      funnel: async () => workingFunnel(),
+    });
+    expect(loaded.errors).toEqual([]);
+    expect(typeof loaded.runtime?.repoKeyForCwd).toBe("function");
+    expect(typeof loaded.runtime?.funnel.setWorkspaceColor).toBe("function");
+  });
+
+  test("each missing half is named, and neither leaves a half-built runtime", async () => {
+    const noFunnel = await loadColorRuntime({
+      repoColor: async () => ({ repoKeyForCwd }),
+      funnel: async () => ({}),
+    });
+    expect(noFunnel.runtime).toBeUndefined();
+    expect(noFunnel.errors.join(" ")).toContain("funnel is not implemented yet (TINT-F)");
+
+    const noRepoKey = await loadColorRuntime({
+      repoColor: async () => ({}),
+      funnel: async () => workingFunnel(),
+    });
+    expect(noRepoKey.runtime).toBeUndefined();
+    expect(noRepoKey.errors.join(" ")).toContain("repoKeyForCwd is not implemented yet (TINT-F)");
+  });
+
+  test("a module that cannot be resolved at all is reported, not thrown", async () => {
+    const loaded = await loadColorRuntime({
+      repoColor: async () => ({ repoKeyForCwd }),
+      funnel: async () => { throw new Error("Cannot find module './cmux-color'"); },
+    });
+    expect(loaded.runtime).toBeUndefined();
+    expect(loaded.errors.join(" ")).toContain("Cannot find module");
+  });
+
+  test("the real specifiers resolve to whatever this tree actually holds", async () => {
+    /* The one environment-dependent check, and deliberately tolerant: on this
+       lane's branch TINT-F's funnel does not exist, and on the integration
+       branch it does. Either answer is correct — what must never happen is a
+       half-built runtime or a silent failure. The behavior itself is pinned by
+       the injected tests above. */
     const loaded = await loadColorRuntime();
     if (loaded.runtime) {
-      // TINT-F has landed: both halves must be real functions.
       expect(typeof loaded.runtime.repoKeyForCwd).toBe("function");
       expect(typeof loaded.runtime.funnel.setWorkspaceColor).toBe("function");
+      expect(typeof loaded.runtime.funnel.lastWrittenHex).toBe("function");
     } else {
-      expect(loaded.errors.join(" ")).toContain("TINT-F");
+      expect(loaded.errors.length).toBeGreaterThan(0);
     }
   });
 });
