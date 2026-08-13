@@ -125,6 +125,9 @@ async function setupGuiComposerHome(options: {
   /** Adds a SECOND table row whose value is not JSON, to model one damaged row
       among good ones. */
   corruptTableRow?: boolean;
+  /** Creates the composerHeaders TABLE with columns this reader does not know,
+      to model Cursor migrating the payload again under the same table name. */
+  tableWrongColumns?: boolean;
   trackingModel?: string;
 }): Promise<string> {
   const home = await mkdtemp(join(tmpdir(), "mountain-cursor-composer-"));
@@ -173,8 +176,19 @@ async function setupGuiComposerHome(options: {
       "{ this is not json",
     ]);
   }
-  if (options.tableUsagePercent !== undefined || options.corruptTableRow) {
-    // The live schema, verbatim from `sqlite_master` on this machine (928 rows).
+  if (options.tableWrongColumns) {
+    // The table NAME Cursor writes today, carrying its payload under a column
+    // this reader does not know — the shape a further migration would take.
+    state.run("create table composerHeaders (composerId text primary key, payload text)");
+    state.run("insert into composerHeaders(composerId, payload) values (?, ?)", [
+      GUI_SESSION_ID,
+      JSON.stringify({ contextUsagePercent: 85.837109375 }),
+    ]);
+  } else if (options.tableUsagePercent !== undefined || options.corruptTableRow) {
+    /* The live schema on this machine, column names and order transcribed from
+       `sqlite_master` (928 rows). SQLite's declared types are case-insensitive
+       and `value` is TEXT in production; the readings below are bound as text,
+       so the fixture takes the same branch the live data does. */
     state.run(`create table composerHeaders (
       composerId text primary key,
       workspaceId text,
@@ -184,7 +198,7 @@ async function setupGuiComposerHome(options: {
       isSubagent integer,
       recency integer,
       checkpointAt integer,
-      value blob
+      value text
     )`);
     if (options.tableUsagePercent !== undefined) {
       state.run("insert into composerHeaders(composerId, value) values (?, ?)", [
@@ -1680,5 +1694,45 @@ describe("Cursor composer headers occupancy", () => {
     expect(result.errors).toEqual([]);
     const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
     expect(agent?.tokens.occupancyPct).toBe(17.5890625);
+  });
+
+  /* The inverse asymmetry to the damaged row: that costs one reading of 928,
+     but a renamed column costs EVERY Cursor GUI session. The table read runs
+     inside the readForeignSqlite callback, so a `no such column` throw is
+     classified as an unreadable state.vscdb and the whole scan reports the
+     database as broken. Cursor has moved this payload twice already and
+     versions it in flight, so the next migration is a question of when. A
+     schema change must cost occupancy and nothing else. */
+  test("a composerHeaders table with unknown columns costs occupancy, never the sessions", async () => {
+    const home = await setupGuiComposerHome({ tableWrongColumns: true, trackingModel: "grok-4.5" });
+    const result = await collectCursorSessions(home, 1784692000000);
+    expect(result.errors).toEqual([]);
+    const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
+    // The session survives in full — model, cwd and identity all intact.
+    expect(agent).toBeDefined();
+    expect(agent?.model).toBe("grok-4.5");
+    // Occupancy alone is absent, and absent honestly: unknown, not zero.
+    expect(agent?.tokens.occupancyPct).toBeUndefined();
+    expect(agent?.tokens.provenance).toBe("unknown");
+  });
+
+  /* On the live (table-gated) install the blob is only a fallback, so a
+     damaged blob costs nothing the table already covers. The error still has
+     to be raised — the fallback really is unreadable — but it must not claim
+     occupancy is missing while the very same scan publishes a percent. An
+     error that misstates its own consequence is the failure this board exists
+     to avoid, just aimed at the operator instead of the ring. */
+  test("a corrupt blob beside a healthy table reports the fallback, not a missing ring", async () => {
+    const home = await setupGuiComposerHome({
+      tableUsagePercent: 85.837109375,
+      corruptComposerHeaders: true,
+      trackingModel: "grok-4.5",
+    });
+    const result = await collectCursorSessions(home, 1784692000000);
+    expect(result.errors.length).toBe(1);
+    expect(result.errors[0]).toContain("the legacy header blob is unreadable");
+    expect(result.errors[0]).not.toContain("context occupancy will be missing");
+    const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
+    expect(agent?.tokens.occupancyPct).toBe(85.837109375);
   });
 });
