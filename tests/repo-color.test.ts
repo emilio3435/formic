@@ -26,6 +26,8 @@ import {
   repoColorDiscovery,
 } from "../src/server/settings";
 import { createMountainFetch, emptySnapshot } from "../src/server/app";
+import { statSync } from "node:fs";
+import { basename, join, resolve } from "node:path";
 import type { CommandResult, CommandRunner } from "../src/server/types";
 
 const ORIGIN = "http://127.0.0.1:4701";
@@ -97,11 +99,38 @@ describe("repoKeyForCwd", () => {
     expect(repoKeyForCwd("/repo", { exec })).toBeNull();
   });
 
-  test("the real git in this checkout resolves this worktree to its repository", () => {
+  test("the real git in this checkout answers with ONE key from anywhere inside it", () => {
     /* One live call, because every fake above encodes an assumption about what
-       `rev-parse --git-common-dir` prints in a LINKED worktree — and this file
-       is running inside one. */
-    expect(repoKeyForCwd(import.meta.dir)).toBe("the-mountain");
+       `rev-parse --git-common-dir` actually prints.
+
+       No repository NAME is asserted here. This checkout is called
+       `the-mountain` on the development machine and `the-ant-hill` on CI (the
+       runner clones into a directory named for the GitHub repo), so a test
+       that pins either string is testing the checkout path rather than the
+       code — it passed for weeks locally and failed on the first CI run.
+
+       What is true on every machine: one repository answers with ONE key, from
+       its root and from any subdirectory alike. Asserted non-null first, or a
+       repoKeyForCwd that had regressed to returning null everywhere would
+       satisfy the equalities below by agreeing with itself. */
+    const root = resolve(import.meta.dir, "..");
+    const key = repoKeyForCwd(root);
+    expect(key).not.toBeNull();
+    expect(repoKeyForCwd(import.meta.dir)).toBe(key);
+    expect(repoKeyForCwd(join(root, "src", "server"))).toBe(key);
+  });
+
+  test("a linked worktree collapses to its repository, not to its own directory", () => {
+    /* The `--show-toplevel` regression is only OBSERVABLE in a linked
+       worktree: in a plain clone (CI) the worktree directory and the
+       repository directory are the same directory, and no live assertion can
+       tell the two implementations apart. The fake-git test above is what pins
+       this claim everywhere; this one adds the live proof on the machine that
+       has a linked worktree to prove it with. A `.git` FILE (rather than a
+       directory) is what makes a checkout a linked worktree. */
+    const root = resolve(import.meta.dir, "..");
+    if (!statSync(join(root, ".git")).isFile()) return;
+    expect(repoKeyForCwd(root)).not.toBe(basename(root).toLowerCase());
   });
 });
 
@@ -611,12 +640,25 @@ describe("createMountainFetch wiring", () => {
     return { fetch, writes };
   }
 
-  /* This worktree IS a linked worktree of the-mountain, so the real
-     repoKeyForCwd behind the route has to collapse it to the repository — the
-     exact trap the fake-git tests above are written against. */
+  /* The route derives its key from this REAL path through the real git, so the
+     key is whatever this checkout is called — `the-mountain` here,
+     `the-ant-hill` on CI. Derived, never spelled: the checkout's name is not
+     one of this route's claims, and pinning it failed the first CI run.
+
+     Layering, not circularity: repoKeyForCwd's own correctness is pinned by
+     the fake-git and live tests above, so using it as the oracle here is the
+     unit under test (the ROUTE) being checked against a unit already proven. */
   const here = import.meta.dir;
+  const liveKey = repoKeyForCwd(here)!;
 
   test("GET /api/repo-colors reaches the handler and colours the live fleet", async () => {
+    /* The declared repoName is deliberately NOT the key: on this machine the
+       checkout is called `the-mountain` and the declared name is too, so the
+       two coincide and the map below reads the same in either direction. On CI
+       the key is `the-ant-hill`, which is what actually proves the DIRECTION —
+       `repoNames` maps a printed name to a canonical repoKey, because the
+       browser cannot run `git rev-parse` and has only the name to ask about
+       (see setRepoColors in app.js). */
     const { fetch, writes } = board([{
       id: "a1",
       repo: { repoKey: "hash", repoName: "the-mountain", worktreePath: here, ephemeral: false },
@@ -624,10 +666,11 @@ describe("createMountainFetch wiring", () => {
     }]);
     const body = await (await fetch(new Request(`${ORIGIN}/api/repo-colors`))).json() as any;
     expect(body.ok).toBe(true);
-    expect(Object.keys(body.settings.assignments)).toEqual(["the-mountain"]);
-    expect(body.repoNames).toEqual({ "the-mountain": "the-mountain" });
-    expect(body.workspaces["WS-LIVE"].repoKey).toBe("the-mountain");
-    expect(writes).toEqual([{ workspaceId: "WS-LIVE", hex: body.settings.assignments["the-mountain"].hex }]);
+    expect(liveKey).toBeTruthy();
+    expect(Object.keys(body.settings.assignments)).toEqual([liveKey]);
+    expect(body.repoNames).toEqual({ "the-mountain": liveKey });
+    expect(body.workspaces["WS-LIVE"].repoKey).toBe(liveKey);
+    expect(writes).toEqual([{ workspaceId: "WS-LIVE", hex: body.settings.assignments[liveKey].hex }]);
     fetch.dispose();
   });
 
@@ -637,7 +680,7 @@ describe("createMountainFetch wiring", () => {
       { id: "a2", repo: { repoKey: "h", repoName: "the-mountain", worktreePath: here, ephemeral: false }, target: { resolution: "none" } },
     ]);
     const body = await (await fetch(new Request(`${ORIGIN}/api/repo-colors`))).json() as any;
-    expect(Object.keys(body.settings.assignments)).toEqual(["the-mountain"]);
+    expect(Object.keys(body.settings.assignments)).toEqual([liveKey]);
     /* Authority rule 2 at the route: no workspace was resolved, so nothing in
        cmux is written to. */
     expect(body.workspaces).toEqual({});
