@@ -699,6 +699,11 @@ async function cursorStateEvidence(
           );
         }
       }
+      // Read in the SAME pass as ItemTable and cursorDiskKV: a second open would
+      // be a second read-only snapshot of a database Cursor is still writing.
+      const hasHeaderTable = database
+        .query("select name from sqlite_master where type = 'table' and name = 'composerHeaders'")
+        .get() !== null;
       const headerRow = database
         .query("select value from ItemTable where key = 'composer.composerHeaders'")
         .get() as { value?: string | Uint8Array | null } | null;
@@ -706,16 +711,27 @@ async function cursorStateEvidence(
         sessionCwds: guiSessionCwds(database),
         hasComposerData,
         composerData,
+        // Absent on installs whose gate has not flipped; silence, not a fault.
+        occupancyFromTable: hasHeaderTable ? readComposerHeaderTable(database) : undefined,
         composerHeadersRaw: headerRow?.value ?? undefined,
       };
     });
     /* Parsed OUTSIDE the sqlite callback so a damaged meter record degrades only
        the occupancy join: inside, a throw would be reported as an unreadable
        state.vscdb and delete every GUI session from this scan. */
-    const { composerHeadersRaw, ...rest } = evidence;
-    let occupancyPct = new Map<string, number>();
+    const { composerHeadersRaw, occupancyFromTable, ...rest } = evidence;
+    /* Table first: it is the source Cursor still writes. The blob is a
+       fallback for installs whose gate has not flipped, and it fills only ids
+       the table does not have — a stale reading must never overwrite a live
+       one. */
+    let occupancyPct = occupancyFromTable ?? new Map<string, number>();
     try {
-      occupancyPct = parseComposerHeaders(composerHeadersRaw);
+      const fromBlob = parseComposerHeaders(composerHeadersRaw);
+      if (occupancyPct.size === 0) {
+        occupancyPct = fromBlob;
+      } else {
+        for (const [id, pct] of fromBlob) if (!occupancyPct.has(id)) occupancyPct.set(id, pct);
+      }
     } catch (error) {
       errors.push(`cursor composer headers: ${error instanceof Error ? error.message : String(error)}; context occupancy will be missing for this scan`);
     }
@@ -810,6 +826,45 @@ function composerModelForSession(value: string | Uint8Array | undefined, session
   };
 }
 
+// One composer's occupancy reading, validated identically no matter which
+// source produced it: the legacy ItemTable blob or the composerHeaders table.
+// [0, 100.5] admits Cursor's 100.x floats; anything else is dropped, never
+// clamped, so a garbage reading never becomes a plausible one.
+function occupancyReading(id: unknown, pct: unknown): [string, number] | undefined {
+  if (typeof id !== "string" || !UUID_PATTERN.test(id)) return undefined;
+  if (typeof pct !== "number" || !Number.isFinite(pct) || pct < 0 || pct > 100.5) return undefined;
+  return [id, pct];
+}
+
+/* Cursor moved composer headers out of the ItemTable blob into this table
+   (ItemTable `composer.composerHeaders.tableGateEnabled` = true). The blob
+   still exists and still parses — it simply stopped being written, which is
+   the failure mode this read exists to avoid: a source that answers
+   confidently with data frozen weeks ago. One row per composer, its `value`
+   column the same JSON shape the blob's array elements had.
+
+   A row whose JSON is unreadable is skipped rather than throwing: unlike the
+   blob, where one bad parse means the whole source is unusable, here 927 good
+   rows should not be discarded because one is damaged. */
+export function readComposerHeaderTable(database: Database): Map<string, number> {
+  const map = new Map<string, number>();
+  const rows = database
+    .query("select composerId, value from composerHeaders")
+    .all() as Array<{ composerId?: unknown; value?: unknown }>;
+  for (const row of rows) {
+    if (row.value === undefined || row.value === null) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(typeof row.value === "string" ? row.value : Buffer.from(row.value as Uint8Array).toString("utf8"));
+    } catch {
+      continue;
+    }
+    const reading = occupancyReading(row.composerId, asRecord(parsed)?.contextUsagePercent);
+    if (reading) map.set(reading[0], reading[1]);
+  }
+  return map;
+}
+
 // ItemTable composer.composerHeaders carries Cursor's own context meter per
 // composer. The key has already moved once (composerData → composerHeaders):
 // a missing key or missing allComposers is Cursor changing shape and means
@@ -826,13 +881,8 @@ export function parseComposerHeaders(
   if (!Array.isArray(composers)) return map;
   for (const entry of composers) {
     const record = asRecord(entry);
-    const id = record?.composerId;
-    const pct = record?.contextUsagePercent;
-    if (typeof id !== "string" || !UUID_PATTERN.test(id)) continue;
-    // [0, 100.5]: drop garbage rather than clamp it; 100.x floats round-trip
-    // from Cursor and are capped at 100 only at render time.
-    if (typeof pct !== "number" || !Number.isFinite(pct) || pct < 0 || pct > 100.5) continue;
-    map.set(id, pct);
+    const reading = occupancyReading(record?.composerId, record?.contextUsagePercent);
+    if (reading) map.set(reading[0], reading[1]);
   }
   return map;
 }
