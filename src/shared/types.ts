@@ -813,6 +813,10 @@ export interface HubSnapshot {
   recentlyResolved?: OperatorIssue[];
   triageSummaries?: TriageQueueSummary[];
   pulse?: HubPulse;
+  /** Full cmux notification bodies come from notification.list, never events. */
+  cmuxNotifications?: CmuxNotificationSummary[];
+  /** Board-local operator judgments; never cmux or agent state. */
+  acks?: AgentAck[];
   programs: ProgramSnapshot[];
 }
 
