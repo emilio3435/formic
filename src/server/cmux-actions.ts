@@ -152,11 +152,25 @@ function unimplemented(lane: string): ActionResult {
   return { ok: false, code: "unimplemented", detail: `${lane} implements this verb` };
 }
 
+interface Refusal {
+  code: string;
+  detail: string;
+}
+
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined;
 }
+
+/* THREE refusal interpreters coexist below by design, not accident: the close
+   verbs (SYNC-CB) treat any stderr as failure and parse `code: detail` text
+   (failedAction); the notification verbs (SYNC-NB) additionally require a
+   parseable JSON RPC result (rpcRefusal, `invalid_response` otherwise); the
+   rename verb and its workspace lookup (SYNC-RB) use commandFailure +
+   stdoutFailure. Each verb family's tests pin its own interpreter. The
+   RUNNER/EXECUTABLE/TIMEOUT substrate is one: `config`, injected through
+   `configureCmuxActions` (master merge ruling, CB+NB+RB union). */
 
 function records(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value)
@@ -193,6 +207,95 @@ function stdoutFailure(stdout: string): ActionResult | undefined {
     const code = stringValue(error?.code, error?.type) ?? "cmux_error";
     const detail = stringValue(error?.message, error?.detail) ?? JSON.stringify(root.error);
     return { ok: false, code, detail };
+  } catch {
+    return undefined;
+  }
+}
+
+function rpcRefusal(result: CommandResult): ActionResult | undefined {
+  let parsed: Record<string, unknown> | undefined;
+  if (result.stdout.trim()) {
+    try {
+      parsed = record(JSON.parse(result.stdout));
+    } catch {
+      if (result.exitCode === 0) {
+        return { ok: false, code: "invalid_response", detail: "cmux RPC returned invalid JSON" };
+      }
+    }
+  }
+  const root = record(parsed?.result);
+  const rawError = parsed?.error ?? root?.error;
+  const error = record(rawError);
+  if (error) {
+    const code = typeof error.code === "string" ? error.code : "rpc_refused";
+    const detail = typeof error.message === "string"
+      ? error.message
+      : typeof error.detail === "string"
+        ? error.detail
+        : "cmux refused the RPC";
+    return { ok: false, code, detail };
+  }
+  if (typeof rawError === "string" && rawError.trim()) {
+    const detail = rawError.trim();
+    const code = /\b([a-z][a-z0-9_]*)\s*:/i.exec(detail)?.[1] ?? "rpc_refused";
+    return { ok: false, code, detail };
+  }
+  if (parsed?.ok === false || root?.ok === false || root?.success === false) {
+    return { ok: false, code: "rpc_refused", detail: "cmux refused the RPC" };
+  }
+  if (result.timedOut) {
+    return { ok: false, code: "timeout", detail: result.stderr.trim() || "cmux RPC timed out" };
+  }
+  if (result.exitCode !== 0) {
+    const detail = result.stderr.trim() || result.stdout.trim() || `cmux exited ${result.exitCode}`;
+    const typed = /\b([a-z][a-z0-9_]*)\s*:/i.exec(detail)?.[1];
+    return { ok: false, code: typed ?? "cmux_exit", detail };
+  }
+  if (!parsed) return { ok: false, code: "invalid_response", detail: "cmux RPC returned no JSON result" };
+  return undefined;
+}
+
+async function runNotificationAction(
+  method: "notification.mark_read" | "notification.dismiss",
+  id: string,
+): Promise<ActionResult> {
+  const params = { id };
+  const result = await config.runner.run(
+    cmuxCommand(config.executable, ["rpc", method, JSON.stringify(params)]),
+    ACTION_TIMEOUT_MS,
+  );
+  const refusal = rpcRefusal(result);
+  if (refusal) return refusal;
+  recordIssuedAction(method, params);
+  return { ok: true };
+}
+
+function refusalText(value: string): Refusal | undefined {
+  const text = value.trim().replace(/^Error:\s*/i, "");
+  if (!text) return undefined;
+  const match = /^([a-z][a-z0-9_]*)\s*:\s*(.+)$/is.exec(text);
+  return match
+    ? { code: match[1]!.toLowerCase(), detail: match[2]!.trim() }
+    : undefined;
+}
+
+function responseRefusal(stdout: string): Refusal | undefined {
+  try {
+    const root = record(JSON.parse(stdout));
+    const result = record(root?.result);
+    const value = root?.error ?? result?.error;
+    if (typeof value === "string") {
+      return refusalText(value) ?? { code: "cmux_failed", detail: value.trim() };
+    }
+    const error = record(value);
+    if (!error) return undefined;
+    const code = typeof error.code === "string" && error.code.trim()
+      ? error.code.trim().toLowerCase()
+      : "cmux_failed";
+    const detail = [error.message, error.detail].find(
+      (candidate): candidate is string => typeof candidate === "string" && candidate.trim().length > 0,
+    );
+    return { code, detail: detail?.trim() ?? `cmux reported ${code}` };
   } catch {
     return undefined;
   }
@@ -275,24 +378,66 @@ export async function resolveWorkspaceFromCmux(
   return found;
 }
 
+function failedAction(method: string, result: CommandResult): ActionResult | undefined {
+  if (executableMissing(result)) {
+    return { ok: false, code: "unavailable", detail: "cmux executable not found" };
+  }
+  if (result.timedOut) {
+    return { ok: false, code: "timeout", detail: `cmux ${method} timed out after ${ACTION_TIMEOUT_MS}ms` };
+  }
+  const refusal = refusalText(result.stderr) ?? responseRefusal(result.stdout);
+  if (refusal) return { ok: false, ...refusal };
+  if (result.exitCode !== 0) {
+    return {
+      ok: false,
+      code: "cmux_failed",
+      detail: `cmux ${method} exited ${result.exitCode}: ${result.stderr.trim() || result.stdout.trim() || "no detail"}`,
+    };
+  }
+  if (result.stderr.trim()) {
+    return {
+      ok: false,
+      code: "cmux_failed",
+      detail: `cmux ${method} exited 0 but reported: ${result.stderr.trim()}`,
+    };
+  }
+  return undefined;
+}
+
+async function write(
+  method: "surface.close" | "workspace.close",
+  params: Record<string, unknown>,
+  reason: string,
+): Promise<ActionResult> {
+  const result = await config.runner.run(
+    cmuxCommand(config.executable, ["rpc", method, JSON.stringify(params)]),
+    ACTION_TIMEOUT_MS,
+  );
+  const failure = failedAction(method, result);
+  if (failure) {
+    config.log(`[cmux-actions] ${method} (${reason}) failed [${failure.code}]: ${failure.detail}`);
+    return failure;
+  }
+  recordIssuedAction(method, params);
+  return { ok: true };
+}
+
 export async function closeSurface(surfaceId: string, reason: string): Promise<ActionResult> {
-  void surfaceId; void reason;
-  return unimplemented("SYNC-CB"); // SYNC-CB
+  if (!surfaceId.trim()) return { ok: false, code: "invalid_target", detail: "surface id is required" };
+  return write("surface.close", { surface_id: surfaceId }, reason); // SYNC-CB
 }
 
 export async function closeWorkspace(workspaceId: string, reason: string): Promise<ActionResult> {
-  void workspaceId; void reason;
-  return unimplemented("SYNC-CB"); // SYNC-CB
+  if (!workspaceId.trim()) return { ok: false, code: "invalid_target", detail: "workspace id is required" };
+  return write("workspace.close", { workspace_id: workspaceId }, reason); // SYNC-CB
 }
 
 export async function markNotificationRead(id: string): Promise<ActionResult> {
-  void id;
-  return unimplemented("SYNC-NB"); // SYNC-NB
+  return runNotificationAction("notification.mark_read", id); // SYNC-NB
 }
 
 export async function dismissNotification(id: string): Promise<ActionResult> {
-  void id;
-  return unimplemented("SYNC-NB"); // SYNC-NB
+  return runNotificationAction("notification.dismiss", id); // SYNC-NB
 }
 
 export async function renameWorkspace(

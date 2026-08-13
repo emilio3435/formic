@@ -184,6 +184,11 @@ export const state = {
   notify: { enabled: false, permission: "default", seen: null, baseTitle: "" },
   drafts: new Map(),      // agentId -> instruct draft text
   confirming: null,       // instance fkey: `[head:]act:${agentId}:${action}`
+  /* SYNC-CF: the open close-escalation dialog, or null. Set only from a route
+     refusal the client could fully read — { agentId, code, workspaceId,
+     siblingAgents: [{id, name}] } — so the dialog can never name a workspace or
+     a casualty list this board made up. */
+  syncClose: null,
   pending: new Set(),     // `${agentId}:${action}`
   feedback: new Map(),    // agentId -> { ok, action, message }
   triage: new Map(),      // issueId -> recommendation
