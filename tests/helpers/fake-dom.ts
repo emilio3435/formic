@@ -226,13 +226,14 @@ export async function setupRailDom(): Promise<{ doc: any; M: any }> {
   doc.register("compact-summary", compact);
 
   const headerToggle = makeNode("button");
-  headerToggle.className = "btn header-summary-toggle";
+  headerToggle.className = "btn masthead-icon header-summary-toggle";
   headerToggle.setAttribute("id", "header-summary-toggle");
   headerToggle.setAttribute("type", "button");
   headerToggle.setAttribute("aria-controls", "health-rail compact-summary");
   headerToggle.setAttribute("aria-expanded", "true");
+  headerToggle.setAttribute("aria-label", "Collapse header");
+  headerToggle.setAttribute("title", "Collapse header");
   headerToggle.dataset.fkey = "header-summary-toggle";
-  headerToggle.textContent = "Collapse header";
   doc.register("header-summary-toggle", headerToggle);
 
   const notify = makeNode("button");

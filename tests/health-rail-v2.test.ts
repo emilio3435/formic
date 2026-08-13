@@ -381,7 +381,7 @@ describe("header disclosure — collapse/expand state machine", () => {
       expect(doc.byId("compact-summary").hidden).toBe(true);
       const toggle = doc.byId("header-summary-toggle");
       expect(toggle.attributes["aria-expanded"]).toBe("true");
-      expect(textOf(toggle)).toBe("Collapse header");
+      expect(toggle.attributes["aria-label"]).toBe("Collapse header");
       expect(doc.body.classList.contains("header-summary-collapsed")).toBe(false);
     });
   });
@@ -404,7 +404,7 @@ describe("header disclosure — collapse/expand state machine", () => {
       expect(compact.hidden).toBe(false);
       expect(readingTuples(compact).length).toBeGreaterThan(0);
       expect(doc.body.classList.contains("header-summary-collapsed")).toBe(true);
-      expect(textOf(toggle)).toBe("Expand header");
+      expect(toggle.attributes["aria-label"]).toBe("Expand header");
       expect(toggle.attributes["aria-expanded"]).toBe("false");
       expect(storage.store.get("mtn3-header-collapsed")).toBe("true");
       expect(M.state.widgetCustomizerOpen).toBe(false);
@@ -414,7 +414,7 @@ describe("header disclosure — collapse/expand state machine", () => {
       /* Same static node, still focused — collapse must never rebuild it. */
       expect(doc.byId("header-summary-toggle")).toBe(toggle);
       expect(doc.activeElement).toBe(toggle);
-      expect(toggle.parent.children.at(-1)).toBe(toggle);
+      expect(toggle.parent.children[0]).toBe(toggle);
     });
   });
 
@@ -434,7 +434,7 @@ describe("header disclosure — collapse/expand state machine", () => {
       expect(doc.byId("health-rail").hidden).toBe(false);
       expect(doc.byId("compact-summary").hidden).toBe(true);
       expect(doc.body.classList.contains("header-summary-collapsed")).toBe(false);
-      expect(textOf(toggle)).toBe("Collapse header");
+      expect(toggle.attributes["aria-label"]).toBe("Collapse header");
       expect(toggle.attributes["aria-expanded"]).toBe("true");
       expect(M.state.widgetCustomizerOpen).toBe(false);
       expect(M.state.tldrView).toBe("the-mountain-main");
@@ -497,7 +497,7 @@ describe("header disclosure — collapse/expand state machine", () => {
     });
   });
 
-  test("collapse moves the toggle once; later paints leave it at the end", async () => {
+  test("collapse does not move the toggle; later paints leave it first", async () => {
     await withHeaderHarness(({ doc, M }) => {
       M.state.snap = repoSnapFixture();
       M.renderHealthRail();
@@ -510,13 +510,12 @@ describe("header disclosure — collapse/expand state machine", () => {
         return orig(...args);
       };
       fireClick(toggle);
-      expect(moves).toBe(1);
-      expect(signals.lastElementChild).toBe(toggle);
-      moves = 0;
+      expect(moves).toBe(0);
+      expect(signals.firstElementChild).toBe(toggle);
       M.renderHealthRail();
       M.renderHealthRail();
       expect(moves).toBe(0);
-      expect(signals.lastElementChild).toBe(toggle);
+      expect(signals.firstElementChild).toBe(toggle);
     });
   });
 });

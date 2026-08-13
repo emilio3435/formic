@@ -13,7 +13,7 @@
    button. It calls nothing else in the client, which is what let it come out
    whole. */
 
-import { $, el } from "./dom-primitives.js";
+import { $, el, icon } from "./dom-primitives.js";
 import { state } from "./client-state.js";
 import { agentName, agentsById } from "./presentation.js";
 import { blockingAgentIds } from "./notification-center.js";
@@ -210,11 +210,12 @@ export function renderNotifyToggle(count = 0, tone = "clear", open = false) {
   const btn = $("notify-toggle");
   if (!btn) return;
   const view = notifyToggleView(state.notify, notificationsSupported(), count, tone);
-  /* The label is "Notifications" in every state. It names what the control
-     governs, and it is the same word in the panel's footer switch and in
-     Settings; the delivery state it used to carry now lives on the switch that
-     actually changes it. */
-  btn.textContent = "Notifications";
+  /* The accessible name stays "Notifications" in every state. The visible
+     mark is the bell; the pip is the backlog reading. Delivery state still
+     lives on the switch inside the panel, not on this disclosure. */
+  btn.textContent = "";
+  btn.classList.add("masthead-icon");
+  btn.append(icon("bell"));
   /* The badge ALWAYS renders, zero included — a zero is a reading, an absent
      badge is an absence, and an operator cannot tell "nothing is waiting" from
      "this stopped working" by looking at a gap. The count is its own node so it

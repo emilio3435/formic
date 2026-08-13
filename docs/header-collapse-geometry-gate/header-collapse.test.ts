@@ -269,7 +269,7 @@ const MEASURE_HEADER = `(() => {
       readings,
     },
     toggle: {
-      text: (toggle.textContent || "").trim(),
+      text: (toggle.getAttribute("aria-label") || "").trim(),
       expanded: toggle.getAttribute("aria-expanded"),
       rect: rect(toggle),
       focused: document.activeElement === toggle,
@@ -577,12 +577,11 @@ describe("collapsed mode reclaims the header without breaking either face", () =
     }
   });
 
-  test("desktop collapsed row keeps the disclosure at the row's right edge", () => {
+  test("desktop collapsed row keeps the disclosure first in the signals cluster", () => {
     for (const k of ["1920x1080", "1530x862", "1366x768", "1025x768"]) {
       const g = collapsed.get(k) as HeaderGeometry;
-      for (const name of ["notify", "settings", "conn"] as const) {
-        expect(g.toggle.rect.left).toBeGreaterThanOrEqual(g.controls[name]!.rect.left);
-      }
+      expect(g.toggle.rect.left, k).toBeLessThanOrEqual(g.controls.notify!.rect.left);
+      expect(g.toggle.rect.left, k).toBeLessThanOrEqual(g.controls.settings!.rect.left);
     }
   });
 

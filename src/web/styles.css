@@ -241,8 +241,9 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
    anchored to the row's right edge rather than to the button, so a 452px panel
    cannot push past the viewport on a narrow window. */
 .masthead-signals { align-self: center; display: flex; align-items: center; gap: 0.5rem; position: relative; }
-.notify-toggle { white-space: nowrap; }
-.notify-toggle.is-open { background: var(--sand); border-color: var(--ink); }
+.notify-toggle { position: relative; overflow: visible; }
+.notify-toggle.is-open,
+.settings-toggle.is-open { background: var(--sand); color: var(--ink); }
 
 /* The badge's INK IS THE VERDICT, which is why it has three states and not a
    presence/absence.
@@ -251,21 +252,33 @@ code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
    else in this client may claim it, so if the button is red someone stopped and
    is waiting for you. Amber outline is the watcher having something while
    nobody is blocked. Grey outline still renders its zero: an absent badge and a
-   quiet fleet look identical, and only one of them is good news. */
+   quiet fleet look identical, and only one of them is good news.
+
+   It sits as a pip on the bell, not a second wordmark beside it. Round is the
+   status LED; the button itself is a ghost hit target, not a tile. */
 .notify-toggle .notify-badge {
-  margin-left: 0.4rem;
-  padding: 0 0.34rem;
+  position: absolute;
+  top: 7px;
+  right: 6px;
+  z-index: 1;
+  margin: 0;
+  min-width: 1.05rem;
+  height: 1.05rem;
+  padding: 0 0.18rem;
+  display: inline-grid;
+  place-items: center;
   border-radius: 999px;
   font-variant-numeric: tabular-nums;
   font-weight: 600;
-  font-size: 0.85em;
-  line-height: 1.45;
+  font-size: 9px;
+  line-height: 1;
   border: 1px solid transparent;
+  pointer-events: none;
 }
 .notify-badge.is-blocked { background: var(--color-status-danger); color: var(--color-text-on-brand); }
-.notify-badge.is-noticed { color: var(--color-status-warning-text); border-color: color-mix(in srgb, var(--color-status-warning) 45%, var(--color-border-default)); }
-.notify-badge.is-clear { color: var(--color-text-secondary); border-color: var(--color-border-default); }
-.notify-toggle.is-alerting { border-color: color-mix(in srgb, var(--color-status-danger) 45%, var(--color-border-default)); }
+.notify-badge.is-noticed { color: var(--color-status-warning-text); border-color: color-mix(in srgb, var(--color-status-warning) 45%, var(--color-border-default)); background: var(--color-surface-card); }
+.notify-badge.is-clear { color: var(--color-text-secondary); border-color: var(--color-border-default); background: var(--color-surface-card); }
+.notify-toggle.is-alerting { color: var(--color-status-danger-text); }
 
 .conn {
   align-self: center;
@@ -1367,7 +1380,7 @@ body.feed-frozen .programs { opacity: 0.62; }
   align-items: baseline;
   gap: 0.4rem;
 }
-.views { gap: 0; align-items: stretch; border-bottom: 1px solid var(--line-strong); }
+.views { gap: 0; align-items: stretch; width: 100%; border-bottom: 1px solid var(--line-strong); }
 .view-tab:hover { color: var(--ink); background: var(--sand); border-color: var(--line); border-bottom-color: var(--line-strong); }
 .view-tab.is-current { color: var(--ink); background: transparent; border-color: transparent; border-bottom: var(--signal-rail) solid var(--ink); }
 .view-tab .count { font-size: 11px; font-family: var(--font-mono); font-weight: 500; font-variant-numeric: tabular-nums; color: var(--faint); }
@@ -1376,6 +1389,23 @@ body.feed-frozen .programs { opacity: 0.62; }
    after the is-current rule so it wins by source order on the active Alerts tab. */
 .view-tab .count.is-alerting { color: var(--ember); }
 .view-tab .count:empty { display: none; }
+.views .conn {
+  margin-left: auto;
+  align-self: center;
+  min-height: 32px;
+  padding: 0 0.15rem 0 0.85rem;
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+}
+.views .conn-live,
+.views .conn-offline,
+.views .conn-reconnecting,
+.views .conn-stale {
+  background: transparent;
+  border: 0;
+}
+.views .server-health { align-self: center; }
 
 /* filter controls (above search).
 
@@ -3360,7 +3390,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .command-dock-cluster .dock-tool .ico { width: 1.2rem; height: 1.2rem; }
 /* The armed confirm strip replaces its tool in place. */
 .command-dock-cluster .command-confirm { flex: none; align-self: center; padding: 0 0.5rem; }
-.command-dock-cluster .command-dock-more { border: 0; padding: 0; }
 .dock-tool {
   display: inline-flex; align-items: center; gap: 0.3rem;
   min-height: 32px; padding: 0.25rem 0.5rem; border-radius: var(--radius-sm);
@@ -3372,40 +3401,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .dock-tool:disabled { color: var(--faint-strong); cursor: not-allowed; }
 .dock-tool-warn:hover:not(:disabled) { color: var(--bad); background: var(--ember-soft); }
 .command-confirm { flex: 1 1 100%; }
-.command-dock-more {
-  margin: 0;
-  font-size: 12px;
-  color: var(--faint-strong);
-  position: relative;
-}
-.command-dock-more > summary {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 44px;
-  min-height: 44px;
-  padding: 0;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-card);
-  cursor: pointer;
-  color: var(--muted);
-  list-style: none;
-}
-.command-dock-more > summary::-webkit-details-marker { display: none; }
-.command-dock-more > summary:hover { color: var(--ink); background: var(--sand); }
-.command-dock-more > summary .ico { width: 1.2rem; height: 1.2rem; }
-.command-dock-more[open] > .dock-tool {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 0.35rem);
-  z-index: 4;
-  white-space: nowrap;
-  color: var(--bad);
-  background: var(--raise);
-  border: 1px solid var(--line-strong);
-  box-shadow: 0 8px 22px rgba(18, 24, 32, 0.14);
-}
 .btn.sm { min-height: 32px; padding: 0.28rem 0.65rem; font-size: 12px; }
 
 .inspector-panel { display: flex; flex-direction: column; gap: var(--space-3); }
@@ -3543,6 +3538,50 @@ body.feed-frozen .programs { opacity: 0.62; }
 .btn.primary:hover:not(:disabled) { background: var(--color-brand-control-hover); border-color: var(--color-brand-control-hover); }
 .btn.confirm-yes { color: var(--color-text-on-brand); background: var(--color-status-danger-text); border-color: var(--color-status-danger-text); font-weight: 600; }
 .btn[aria-busy="true"] { opacity: 0.6; }
+/* Masthead ribbon — ghost hit targets. The glyph is the control; no tile,
+   no stadium, no border. Declared after .btn so size and chrome win. */
+.btn.masthead-icon {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  gap: 0;
+  color: var(--muted);
+  background: transparent;
+  border-color: transparent;
+  border-radius: var(--radius-md);
+}
+.btn.masthead-icon .ico {
+  width: 1.25rem;
+  height: 1.25rem;
+  stroke-width: 1.65;
+}
+.btn.masthead-icon.header-summary-toggle .ico {
+  width: 1rem;
+  height: 1rem;
+  stroke-width: 2;
+}
+.btn.masthead-icon:hover:not(:disabled) {
+  color: var(--ink);
+  background: var(--sand);
+  border-color: transparent;
+}
+.btn.masthead-icon.is-open {
+  color: var(--ink);
+  background: var(--sand);
+  border-color: transparent;
+}
+.btn.masthead-icon:focus-visible {
+  outline: none;
+  color: var(--ink);
+  background: var(--sand);
+  border-color: transparent;
+  box-shadow: inset 0 -2px 0 var(--color-interactive);
+}
 .inspector-close {
   flex: none;
   justify-content: center;
@@ -3667,9 +3706,9 @@ body.feed-frozen .programs { opacity: 0.62; }
      the only action the header offers, so it should not be the smallest target
      on the board on a phone. */
   .notify-act, .notify-row-acts .dock-tool, .verdict-cleanup, .filter-chip, .program-details,
-  .artifact-copy, .command-dock-more > summary, .command-dock-cluster .dock-tool,
+  .artifact-copy, .command-dock-cluster .dock-tool,
   .command-composer textarea, .rename-form input { min-height: 44px; }
-  .artifact-copy, .command-dock-more > summary { width: 44px; }
+  .artifact-copy { width: 44px; }
 }
 
 @media (max-width: 900px) {
@@ -5128,6 +5167,7 @@ body.feed-frozen .programs { opacity: 0.62; }
 /* Controls: clay is the primary action role, neutral surfaces are ghost
    actions, and indigo owns links and interaction. */
 .btn { color: var(--color-text-primary); background: var(--color-surface-card); border-color: var(--color-border-default); }
+.btn.masthead-icon { background: transparent; border-color: transparent; }
 .btn.primary { color: var(--color-text-on-brand); background: var(--color-brand-control); border-color: var(--color-brand-control); }
 .btn.primary:hover:not(:disabled) { background: var(--color-brand-control-hover); border-color: var(--color-brand-control-hover); }
 .btn.dw-ghost { color: var(--color-status-warning-text); border-color: color-mix(in srgb, var(--color-status-warning-text) 45%, var(--color-border-default)); }
@@ -5316,6 +5356,16 @@ body.feed-frozen .programs { opacity: 0.62; }
     padding: 0.25rem 0.4rem;
     font-size: 10px;
     min-height: 44px;
+  }
+  .masthead-signals .btn.masthead-icon {
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    min-height: 44px;
+    padding: 0;
+    font-size: 13px;
+    background: transparent;
+    border-color: transparent;
   }
   .masthead-signals .conn { margin: 0; }
 }
