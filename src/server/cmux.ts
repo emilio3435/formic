@@ -493,31 +493,80 @@ export function parseCmuxSidebarSnapshot(output: string): CmuxWorkspaceSnapshot[
   return [...byWorkspace.values()];
 }
 
+export function parseCmuxWindowIds(output: string): string[] {
+  const parsed = JSON.parse(output) as unknown;
+  const root = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? ((parsed as Record<string, unknown>).result ?? parsed)
+    : parsed;
+  const windows = root && typeof root === "object" && !Array.isArray(root)
+    ? (root as Record<string, unknown>).windows
+    : undefined;
+  if (!Array.isArray(windows)) throw new Error("cmux response did not contain a windows array");
+  return [...new Set(windows.flatMap((window): string[] => {
+    if (!window || typeof window !== "object" || Array.isArray(window)) return [];
+    const record = window as Record<string, unknown>;
+    const id = stringValue(record.id, record.window_id, record.windowId);
+    return id ? [id] : [];
+  }))];
+}
+
 export async function collectCmuxSidebar(
   runner: CommandRunner,
   executable = DEFAULT_CMUX_EXECUTABLE,
 ): Promise<CollectionResult<CmuxWorkspaceSnapshot[]>> {
-  const result = await runner.run(cmuxCommand(executable, [
-    "rpc",
-    "extension.sidebar.snapshot",
-    '{"all_windows":true}',
-  ]), 10_000);
-  if (executableMissing(result)) return { value: [], errors: [], absent: true };
-  if (result.timedOut) return { value: [], errors: ["cmux sidebar discovery timed out"] };
-  if (result.exitCode !== 0) {
+  const windows = await runner.run(
+    cmuxCommand(executable, ["rpc", "window.list", "{}"]),
+    10_000,
+  );
+  if (executableMissing(windows)) return { value: [], errors: [], absent: true };
+  if (windows.timedOut) return { value: [], errors: ["cmux window discovery timed out"] };
+  if (windows.exitCode !== 0) {
     return {
       value: [],
-      errors: [`cmux sidebar discovery exited ${result.exitCode}: ${result.stderr.trim() || "no stderr"}`],
+      errors: [`cmux window discovery exited ${windows.exitCode}: ${windows.stderr.trim() || "no stderr"}`],
     };
   }
+  let windowIds: string[];
   try {
-    return { value: parseCmuxSidebarSnapshot(result.stdout), errors: [] };
+    windowIds = parseCmuxWindowIds(windows.stdout);
   } catch (error) {
     return {
       value: [],
-      errors: [`cmux sidebar discovery returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`],
+      errors: [`cmux window discovery returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`],
     };
   }
+
+  const errors: string[] = [];
+  const perWindow = await Promise.all(windowIds.map(async (windowId) => {
+    const result = await runner.run(cmuxCommand(executable, [
+      "rpc",
+      "workspace.list",
+      JSON.stringify({ window_id: windowId }),
+    ]), 10_000);
+    if (result.timedOut) {
+      errors.push(`cmux workspace discovery for window ${windowId} timed out`);
+      return [];
+    }
+    if (result.exitCode !== 0) {
+      errors.push(
+        `cmux workspace discovery for window ${windowId} exited ${result.exitCode}: ${result.stderr.trim() || "no stderr"}`,
+      );
+      return [];
+    }
+    try {
+      return parseCmuxSidebarSnapshot(result.stdout);
+    } catch (error) {
+      errors.push(
+        `cmux workspace discovery for window ${windowId} returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return [];
+    }
+  }));
+  const byWorkspace = new Map<string, CmuxWorkspaceSnapshot>();
+  for (const workspace of perWindow.flat()) {
+    if (!byWorkspace.has(workspace.workspaceId)) byWorkspace.set(workspace.workspaceId, workspace);
+  }
+  return { value: [...byWorkspace.values()], errors };
 }
 
 export function parseCmuxNotifications(output: string): CmuxNotification[] {

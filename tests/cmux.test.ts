@@ -283,12 +283,19 @@ describe("cmux sidebar repository facts", () => {
     }]);
   });
 
-  test("runs exactly one all-window sidebar RPC per collection", async () => {
+  test("collects sidebar repository facts through the caller window id", async () => {
     const commands: readonly string[][] = [];
     const runner: CommandRunner = {
       run: async (command) => {
         (commands as string[][]).push([...command]);
-        return { exitCode: 0, stdout: sidebarSnapshot, stderr: "", timedOut: false };
+        return {
+          exitCode: 0,
+          stdout: command[2] === "window.list"
+            ? JSON.stringify({ windows: [{ id: "WINDOW-1" }] })
+            : sidebarSnapshot,
+          stderr: "",
+          timedOut: false,
+        };
       },
     };
 
@@ -302,11 +309,58 @@ describe("cmux sidebar repository facts", () => {
       }],
       errors: [],
     });
-    expect(commands).toEqual([[
-      "cmux",
-      "rpc",
-      "extension.sidebar.snapshot",
-      "{\"all_windows\":true}",
-    ]]);
+    expect(commands).toEqual([
+      ["cmux", "rpc", "window.list", "{}"],
+      ["cmux", "rpc", "workspace.list", '{"window_id":"WINDOW-1"}'],
+    ]);
+  });
+
+  test("enumerates every cmux window before collecting workspaces", async () => {
+    const commands: string[][] = [];
+    const runner: CommandRunner = {
+      run: async (command) => {
+        commands.push([...command]);
+        const method = command[2];
+        const params = command[3];
+        if (method === "window.list") {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({ windows: [{ id: "WINDOW-A" }, { id: "WINDOW-B" }] }),
+            stderr: "",
+            timedOut: false,
+          };
+        }
+        if (method === "workspace.list" && params === '{"window_id":"WINDOW-A"}') {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({ workspaces: [{ id: "WORKSPACE-A", project_root_path: "/tmp/a" }] }),
+            stderr: "",
+            timedOut: false,
+          };
+        }
+        if (method === "workspace.list" && params === '{"window_id":"WINDOW-B"}') {
+          return {
+            exitCode: 0,
+            stdout: JSON.stringify({ workspaces: [{ id: "WORKSPACE-B", project_root_path: "/tmp/b" }] }),
+            stderr: "",
+            timedOut: false,
+          };
+        }
+        return { exitCode: 1, stdout: "", stderr: `unexpected ${method} ${params}`, timedOut: false };
+      },
+    };
+
+    const result = await collectCmuxSidebar(runner, "cmux");
+
+    expect(result.value.map(({ workspaceId }) => workspaceId).sort()).toEqual([
+      "WORKSPACE-A",
+      "WORKSPACE-B",
+    ]);
+    expect(result.errors).toEqual([]);
+    expect(commands).toEqual([
+      ["cmux", "rpc", "window.list", "{}"],
+      ["cmux", "rpc", "workspace.list", '{"window_id":"WINDOW-A"}'],
+      ["cmux", "rpc", "workspace.list", '{"window_id":"WINDOW-B"}'],
+    ]);
   });
 });
