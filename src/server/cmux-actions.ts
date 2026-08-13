@@ -20,15 +20,36 @@
    Master commits the skeleton with fingerprinting; each lane implements its
    own verbs and nothing else (fences in the master plan). */
 
-import { cmuxCommand, runtimeCmuxExecutable } from "./cmux";
+import { cmuxCommand, DEFAULT_CMUX_EXECUTABLE, executableMissing } from "./cmux";
 import { BunCommandRunner } from "./command";
-import type { CommandResult } from "./types";
+import type { CommandResult, CommandRunner } from "./types";
 
 export interface ActionResult {
   ok: boolean;
   /** cmux's refusal class when !ok, e.g. "invalid_state". */
   code?: string;
   detail?: string;
+}
+
+const ACTION_TIMEOUT_MS = 10_000;
+
+interface FunnelConfig {
+  runner: CommandRunner;
+  executable: string;
+  log: (message: string) => void;
+}
+
+const config: FunnelConfig = {
+  runner: new BunCommandRunner(),
+  executable: DEFAULT_CMUX_EXECUTABLE,
+  log: (message) => console.error(message),
+};
+
+/** Point the process-wide funnel at the app's runner/executable. Production
+ *  calls this once while wiring the routes; fixture tests use the same seam so
+ *  they execute the real verbs without touching live cmux. */
+export function configureCmuxActions(options: Partial<FunnelConfig>): void {
+  Object.assign(config, options);
 }
 
 /* ---------------------------------------------------------------- echoes --- */
@@ -112,12 +133,23 @@ function unimplemented(lane: string): ActionResult {
   return { ok: false, code: "unimplemented", detail: `${lane} implements this verb` };
 }
 
+interface Refusal {
+  code: string;
+  detail: string;
+}
+
 function record(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
+  return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined;
 }
 
+/* Two refusal interpreters coexist below by design, not accident: the close
+   verbs (SYNC-CB) treat any stderr as failure and parse `code: detail` text;
+   the notification verbs (SYNC-NB) additionally require a parseable JSON RPC
+   result (`invalid_response` otherwise). Each verb family's tests pin its own
+   interpreter. The RUNNER/EXECUTABLE/TIMEOUT substrate is one: `config`,
+   injected through `configureCmuxActions` (master merge ruling, NB+CB union). */
 function rpcRefusal(result: CommandResult): ActionResult | undefined {
   let parsed: Record<string, unknown> | undefined;
   if (result.stdout.trim()) {
@@ -166,9 +198,9 @@ async function runNotificationAction(
   id: string,
 ): Promise<ActionResult> {
   const params = { id };
-  const result = await new BunCommandRunner().run(
-    cmuxCommand(runtimeCmuxExecutable(), ["rpc", method, JSON.stringify(params)]),
-    10_000,
+  const result = await config.runner.run(
+    cmuxCommand(config.executable, ["rpc", method, JSON.stringify(params)]),
+    ACTION_TIMEOUT_MS,
   );
   const refusal = rpcRefusal(result);
   if (refusal) return refusal;
@@ -176,14 +208,89 @@ async function runNotificationAction(
   return { ok: true };
 }
 
+function refusalText(value: string): Refusal | undefined {
+  const text = value.trim().replace(/^Error:\s*/i, "");
+  if (!text) return undefined;
+  const match = /^([a-z][a-z0-9_]*)\s*:\s*(.+)$/is.exec(text);
+  return match
+    ? { code: match[1]!.toLowerCase(), detail: match[2]!.trim() }
+    : undefined;
+}
+
+function responseRefusal(stdout: string): Refusal | undefined {
+  try {
+    const root = record(JSON.parse(stdout));
+    const result = record(root?.result);
+    const value = root?.error ?? result?.error;
+    if (typeof value === "string") {
+      return refusalText(value) ?? { code: "cmux_failed", detail: value.trim() };
+    }
+    const error = record(value);
+    if (!error) return undefined;
+    const code = typeof error.code === "string" && error.code.trim()
+      ? error.code.trim().toLowerCase()
+      : "cmux_failed";
+    const detail = [error.message, error.detail].find(
+      (candidate): candidate is string => typeof candidate === "string" && candidate.trim().length > 0,
+    );
+    return { code, detail: detail?.trim() ?? `cmux reported ${code}` };
+  } catch {
+    return undefined;
+  }
+}
+
+function failedAction(method: string, result: CommandResult): ActionResult | undefined {
+  if (executableMissing(result)) {
+    return { ok: false, code: "unavailable", detail: "cmux executable not found" };
+  }
+  if (result.timedOut) {
+    return { ok: false, code: "timeout", detail: `cmux ${method} timed out after ${ACTION_TIMEOUT_MS}ms` };
+  }
+  const refusal = refusalText(result.stderr) ?? responseRefusal(result.stdout);
+  if (refusal) return { ok: false, ...refusal };
+  if (result.exitCode !== 0) {
+    return {
+      ok: false,
+      code: "cmux_failed",
+      detail: `cmux ${method} exited ${result.exitCode}: ${result.stderr.trim() || result.stdout.trim() || "no detail"}`,
+    };
+  }
+  if (result.stderr.trim()) {
+    return {
+      ok: false,
+      code: "cmux_failed",
+      detail: `cmux ${method} exited 0 but reported: ${result.stderr.trim()}`,
+    };
+  }
+  return undefined;
+}
+
+async function write(
+  method: "surface.close" | "workspace.close",
+  params: Record<string, unknown>,
+  reason: string,
+): Promise<ActionResult> {
+  const result = await config.runner.run(
+    cmuxCommand(config.executable, ["rpc", method, JSON.stringify(params)]),
+    ACTION_TIMEOUT_MS,
+  );
+  const failure = failedAction(method, result);
+  if (failure) {
+    config.log(`[cmux-actions] ${method} (${reason}) failed [${failure.code}]: ${failure.detail}`);
+    return failure;
+  }
+  recordIssuedAction(method, params);
+  return { ok: true };
+}
+
 export async function closeSurface(surfaceId: string, reason: string): Promise<ActionResult> {
-  void surfaceId; void reason;
-  return unimplemented("SYNC-CB"); // SYNC-CB
+  if (!surfaceId.trim()) return { ok: false, code: "invalid_target", detail: "surface id is required" };
+  return write("surface.close", { surface_id: surfaceId }, reason); // SYNC-CB
 }
 
 export async function closeWorkspace(workspaceId: string, reason: string): Promise<ActionResult> {
-  void workspaceId; void reason;
-  return unimplemented("SYNC-CB"); // SYNC-CB
+  if (!workspaceId.trim()) return { ok: false, code: "invalid_target", detail: "workspace id is required" };
+  return write("workspace.close", { workspace_id: workspaceId }, reason); // SYNC-CB
 }
 
 export async function markNotificationRead(id: string): Promise<ActionResult> {

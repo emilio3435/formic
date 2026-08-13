@@ -10,11 +10,13 @@ import { CleanupProposeError, type CleanupProposer } from "./cleanup-propose";
 import { CLEANER_NAME, CleanupLaunchError, type CleanupLaunch, type CleanupLauncher } from "./cleanup-launch";
 import {
   defaultAttentionStore,
+  DEFAULT_CMUX_EXECUTABLE,
   MemoryAttentionStore,
+  cmuxCommand,
   type AttentionAction,
   type AttentionStore,
 } from "./cmux";
-import { dismissNotification, markNotificationRead } from "./cmux-actions";
+import { closeSurface, closeWorkspace, configureCmuxActions, dismissNotification, markNotificationRead } from "./cmux-actions";
 import { identityDebugResponse, transcriptResponse } from "./debug-identity";
 import { sessionCallsResponse } from "./session-calls";
 import { readPublishState, type PublishState } from "./publish-state";
@@ -1275,6 +1277,178 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
           error instanceof Error ? error.message : String(error),
         );
       }
+    }
+    if (url.pathname === "/api/sync/close") {
+      if (request.method !== "POST") {
+        return responseError(405, "METHOD_NOT_ALLOWED", "Use POST for sync close requests.");
+      }
+      if (!sameOriginLoopback(request)) {
+        return responseError(403, "ORIGIN_REJECTED", "Sync close requests require an exact same-origin loopback Origin header.");
+      }
+      if (request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+        return responseError(415, "CONTENT_TYPE_REJECTED", "Sync close requests require application/json.");
+      }
+      const body = await jsonRecord(request);
+      const keys = body ? Object.keys(body) : [];
+      if (
+        !body ||
+        (body.target !== "surface" && body.target !== "workspace") ||
+        typeof body.id !== "string" ||
+        !body.id.trim() ||
+        body.id.length > 300 ||
+        (body.confirm !== undefined && typeof body.confirm !== "boolean") ||
+        keys.some((key) => !["target", "id", "confirm"].includes(key))
+      ) {
+        return responseError(
+          400,
+          "INVALID_SYNC_CLOSE_REQUEST",
+          "Body must contain target surface or workspace and a non-empty id; confirm is the only optional field.",
+        );
+      }
+
+      const target = body.target as "surface" | "workspace";
+      const id = body.id;
+      const agents = dependencies.state.get().programs.flatMap((program) => program.agents);
+      const liveAgents = agents.filter((agent) =>
+        agent.activity !== "ended" && agent.lifecycle !== "finished" && agent.status !== "archived"
+      );
+      const nameOf = (agent: AgentSnapshot): string => agent.identity?.name ?? agent.displayName;
+      const escalation = (
+        workspaceId: string,
+        excludeSurfaceId?: string,
+      ): { workspaceId: string; siblingAgents: { id: string; name: string }[] } => ({
+        workspaceId,
+        siblingAgents: liveAgents.flatMap((agent) =>
+          agent.target.resolution === "exact" &&
+          agent.target.workspaceId === workspaceId &&
+          agent.target.surfaceId !== excludeSurfaceId
+            ? [{ id: agent.id, name: nameOf(agent) }]
+            : []
+        ),
+      });
+      const syncResponse = (value: object, status = 200): Response => Response.json(
+        value,
+        { status, headers: { ...SECURITY_HEADERS, "cache-control": "no-store" } },
+      );
+
+      configureCmuxActions({
+        runner: dependencies.runner,
+        executable: dependencies.cmuxExecutable ?? DEFAULT_CMUX_EXECUTABLE,
+      });
+
+      if (target === "surface") {
+        const agent = liveAgents.find((candidate) =>
+          candidate.target.resolution === "exact" && candidate.target.surfaceId === id
+        );
+        const workspaceId = agent?.target.workspaceId;
+        if (!workspaceId) {
+          return syncResponse({
+            ok: false,
+            code: "target_not_found",
+            detail: "No live agent has an exact snapshot binding to this surface.",
+          }, 409);
+        }
+        const result = await closeSurface(id, "board close");
+        if (!result.ok && result.code === "invalid_state") {
+          return syncResponse({
+            ...result,
+            escalation: escalation(workspaceId, id),
+          }, 409);
+        }
+        return syncResponse(result, result.ok ? 200 : 502);
+      }
+
+      /* Group anchors are materialized as workspaces, so an arbitrary id from
+         curl can name one even though no agent row ever binds to it. Group
+         lists are window-scoped: enumerate every window and pass window_id,
+         then refuse before the mutation funnel if any group owns this id. */
+      const executable = dependencies.cmuxExecutable ?? DEFAULT_CMUX_EXECUTABLE;
+      const readList = async (
+        method: "window.list" | "workspace.group.list",
+        params: Record<string, unknown>,
+        collection: "windows" | "groups",
+      ): Promise<{ values?: Record<string, unknown>[]; failure?: string }> => {
+        const result = await dependencies.runner.run(
+          cmuxCommand(executable, ["rpc", method, JSON.stringify(params)]),
+          10_000,
+        );
+        if (result.timedOut) return { failure: `${method} timed out` };
+        if (result.exitCode !== 0 || result.stderr.trim()) {
+          return {
+            failure: `${method} exited ${result.exitCode}: ${result.stderr.trim() || result.stdout.trim() || "no detail"}`,
+          };
+        }
+        try {
+          const parsed = JSON.parse(result.stdout) as unknown;
+          const root = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+            ? parsed as Record<string, unknown>
+            : undefined;
+          const nested = root?.result && typeof root.result === "object" && !Array.isArray(root.result)
+            ? root.result as Record<string, unknown>
+            : root;
+          const values = nested?.[collection];
+          return Array.isArray(values)
+            ? { values: values.filter(
+                (value): value is Record<string, unknown> =>
+                  value !== null && typeof value === "object" && !Array.isArray(value),
+              ) }
+            : { failure: `${method} response did not contain ${collection}` };
+        } catch (error) {
+          return { failure: `${method} returned invalid JSON: ${error instanceof Error ? error.message : String(error)}` };
+        }
+      };
+
+      const windows = await readList("window.list", {}, "windows");
+      if (windows.failure) {
+        return syncResponse({ ok: false, code: "anchor_check_failed", detail: windows.failure }, 503);
+      }
+      const anchorWorkspaceIds = new Set<string>();
+      for (const window of windows.values ?? []) {
+        const windowId = [window.id, window.window_id].find(
+          (value): value is string => typeof value === "string" && value.length > 0,
+        );
+        if (!windowId) continue;
+        const groups = await readList(
+          "workspace.group.list",
+          { window_id: windowId },
+          "groups",
+        );
+        if (groups.failure) {
+          return syncResponse({ ok: false, code: "anchor_check_failed", detail: groups.failure }, 503);
+        }
+        for (const group of groups.values ?? []) {
+          const anchor = group.anchor_workspace_id ?? group.anchorWorkspaceId;
+          if (typeof anchor === "string" && anchor.length > 0) anchorWorkspaceIds.add(anchor);
+        }
+      }
+      if (anchorWorkspaceIds.has(id)) {
+        return syncResponse({
+          ok: false,
+          code: "anchor",
+          detail: "Group-anchor workspaces cannot be closed by sync.",
+        }, 409);
+      }
+
+      const workspaceAgents = liveAgents.filter((agent) =>
+        agent.target.resolution === "exact" && agent.target.workspaceId === id
+      );
+      if (workspaceAgents.length === 0) {
+        return syncResponse({
+          ok: false,
+          code: "target_not_found",
+          detail: "No live agent has an exact snapshot binding to this workspace.",
+        }, 409);
+      }
+      const workspaceEscalation = escalation(id);
+      if (body.confirm !== true) {
+        return syncResponse({
+          ok: false,
+          code: "confirm_required",
+          escalation: workspaceEscalation,
+        }, 409);
+      }
+      const result = await closeWorkspace(id, "confirmed board close");
+      return syncResponse(result, result.ok ? 200 : 502);
     }
     if (url.pathname.startsWith("/api/")) {
       return new Response("Not found", { status: 404, headers: SECURITY_HEADERS });

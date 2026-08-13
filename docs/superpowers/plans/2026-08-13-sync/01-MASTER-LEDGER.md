@@ -17,10 +17,10 @@
 | Plan approved by Emilio | DONE | "implement this plan. Act as the orchestrator" — 2026-08-13 03:36 CDT |
 | `feat/sync-integration` cut, stubs committed first | DONE | ca8077d; floor: tsc 0, 3302/3303 (only red = tolerated canary) |
 | SYNC-E spawned (Sol · codex, ps-verified) | DONE | workspace:53, pid 88775: `-m gpt-5.6-sol · model_reasoning_effort=xhigh` via ~/.local/bin/codex; worktree sync-e @ ca8077d |
-| SYNC-E done + Grok verify PASS + master floor | PENDING | — |
-| E merged; six phase lanes spawned (ps-verified per lane) | PENDING | — |
-| CB merged (verify PASS + my floor) | PENDING | — |
-| CF merged | PENDING | — |
+| SYNC-E done + Grok verify PASS + master floor | DONE | BLOCK 04:14 (nested resume ack) -> fix red-first -> VERDICT-2 PASS 04:29; my floor tsc 0 · 3311/3312 canary-only |
+| E merged; six phase lanes spawned (ps-verified per lane) | DONE | merge 656f2a9, integration floor green; ws:55-60; codex pids 4629/4630/4661 = gpt-5.6-sol xhigh; claude pids 7122/7144/7414 = --model opus --effort high --permission-mode auto |
+| CB merged (verify PASS + my floor) | DONE | verify-cb PASS; master-committed 9f4dc5f; merged; floor tsc 0 · 3322/3323 canary-only |
+| CF merged | DONE | verify-cf PASS; merged; floor tsc 0 · 3346/3347 canary-only |
 | NB merged | PENDING | — |
 | NF merged | PENDING | — |
 | RB merged | PENDING | — |
@@ -34,20 +34,22 @@
 
 | Lane | Kickoff | Branch/worktree | Workspace | Model · vehicle | Status | Verify | My floor |
 |---|---|---|---|---|---|---|---|
-| SYNC-E | KICKOFF-E.md | `feat/sync-e` | `SYNC · events-foundation · sol · 08-13` | Sol xhigh · codex | NOT SPAWNED | — | — |
-| SYNC-CB | KICKOFF-CB.md | `feat/sync-cb` | `SYNC · close-be · sol · 08-13` | Sol xhigh · codex | NOT SPAWNED | — | — |
-| SYNC-CF | KICKOFF-CF.md | `feat/sync-cf` | `SYNC · close-fe · opus · 08-13` | Opus 5 high · claude | NOT SPAWNED | — | — |
-| SYNC-NB | KICKOFF-NB.md | `feat/sync-nb` | `SYNC · notify-be · sol · 08-13` | Sol xhigh · codex | NOT SPAWNED | — | — |
-| SYNC-NF | KICKOFF-NF.md | `feat/sync-nf` | `SYNC · notify-fe · opus · 08-13` | Opus 5 high · claude | NOT SPAWNED | — | — |
-| SYNC-RB | KICKOFF-RB.md | `feat/sync-rb` | `SYNC · rename-be · sol · 08-13` | Sol xhigh · codex | NOT SPAWNED | — | — |
-| SYNC-RF | KICKOFF-RF.md | `feat/sync-rf` | `SYNC · rename-fe · opus · 08-13` | Opus 5 high · claude | NOT SPAWNED | — | — |
+| SYNC-E | KICKOFF-E.md | `feat/sync-e` | `SYNC · events-foundation · sol · 08-13` (ws:53) | Sol xhigh · codex (pid 88775 ps-verified) | DONE as dirt + complete report (sandbox can't commit, expected) | verify-e ws:54, `cursor-grok-4.6-xhigh-fast` pid 82726 ps-verified — the `-fast` variant EXISTS and is what ran (plan honesty note) | tsc 0 · 3310/3311, only red = tolerated canary (lane's 9 extra sandbox fails vanish unsandboxed) |
+| SYNC-CB | KICKOFF-CB.md | `feat/sync-cb` | `SYNC · close-be · sol · 08-13` | Sol xhigh · codex | DONE staged + report | verify-cb ws:62 running | tsc 0 · 3322/3323 canary-only |
+| SYNC-CF | KICKOFF-CF.md | `feat/sync-cf` | `SYNC · close-fe · opus · 08-13` | Opus 5 high · claude | SPAWNED ws:58 ps-verified | — | — |
+| SYNC-NB | KICKOFF-NB.md | `feat/sync-nb` | `SYNC · notify-be · sol · 08-13` | Sol xhigh · codex | DONE as dirt + report | verify-nb ws:63 running | tsc 0 · 3320/3321 canary-only |
+| SYNC-NF | KICKOFF-NF.md | `feat/sync-nf` | `SYNC · notify-fe · opus · 08-13` | Opus 5 high · claude | SPAWNED ws:59 ps-verified | — | — |
+| SYNC-RB | KICKOFF-RB.md | `feat/sync-rb` | `SYNC · rename-be · sol · 08-13` | Sol xhigh · codex | DONE staged + report; 1 master-ruled cross-fence line in cmux-sync.ts (workspace.renamed own-echo exception, state-only handlers) | verify-rb ws:61 VERDICT: PASS 04:5x | tsc 0 · 3324/3325 canary-only |
+| SYNC-RF | KICKOFF-RF.md | `feat/sync-rf` | `SYNC · rename-fe · opus · 08-13` | Opus 5 high · claude | DONE committed 7225867 (mutation-tested, eyes-on isolated port) | verify-rf ws:64 running | tsc 0 · 3319/3320 canary-only |
 | verify-* | brief files per lane | read-only in lane worktrees | `SYNC · verify-<lane> · grok · 08-13` | Grok 4.6 xhigh · cursor-agent | as needed | — | — |
 
 ## Contract changes / Incidents / Rescues
 
 | When | What | Resolution |
 |---|---|---|
-| — | — | — |
+| 04:14 | 05:16 | verify-nb VERDICT: BLOCK — ack fingerprint uses hookLifecycleAt, which attachHookFacts sets from the hook store updatedAt (a heartbeat clock, live-proven in docs/S0-T1-DEAD-TIME-MEASUREMENT.md) so ordinary refresh revokes; revoke tests hand-freeze the clock instead of driving attachHookFacts; anchor fixture only exercises WINDOW-1 | 05:2x NB reopened via send_text with three-fix list; sentinel watching |
+| 04:14 | verify-e VERDICT: BLOCK — ack parser reads top-level `latest_seq` but live acks nest seqs under `resume` (verifier captured live frames + cited docs/cli-contract.md); gap test green only because its fixture invented the top-level shape (fixtures-are-not-payloads) | 04:16 lane reopened via send_text nudge (codex session alive): fix parser to nested `resume`, fixture must mirror live ack, gap test red-first; sentinel watching |
+| 03:48 | my sentinel v1 false STALL — `find` here is bfs; `-newermt "-25 minutes"` invalid, silent empty → misread | probe rewritten to `-mmin -25`, tested against live worktree before trusting (guards-must-measure-the-defect) |
 
 ## Carried context (from TINT + spec probes)
 
