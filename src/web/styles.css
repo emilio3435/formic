@@ -5688,3 +5688,119 @@ a.artifact-path:hover { text-decoration: underline; }
 }
 .drawer-desk .artifact-copy.is-copied { color: var(--moss); border-color: var(--moss); }
 .drawer-desk .identity-expand { color: var(--muted); }
+
+/* ---------- TINT-F: repo-identity colour ----------
+
+   One hex per repository, carried in as the custom property --repo-tint by
+   style.setProperty (the board's CSP has no 'unsafe-inline', so a style
+   ATTRIBUTE would be dropped silently, while a CSSOM property write is not).
+   Percentages here are the approved design values (artifact a902d450) — 45%
+   spine, 4% wash, 7% hover, 55% tick — not suggestions.
+
+   Two rules govern every selector below.
+
+   Status outranks identity (authority rule 5). Every repo treatment is written
+   :not() against the four attention classes and against selection, so an
+   alerting row REPLACES the repo wash with its ember rail and 6% ember wash
+   rather than mixing the two. Written as exclusions rather than left to source
+   order, because rule order is a fact about this file and the rule is a fact
+   about the product.
+
+   Text never wears repo colour (rule 6). The marks are the spine, the dot, the
+   tick and the pill border. No selector below sets `color`. */
+
+/* Whisper — the grouped repo band. */
+.repo-section.has-repo-tint {
+  border-left: 2px solid color-mix(in srgb, var(--repo-tint) 45%, transparent);
+}
+.repo-dot {
+  flex: none;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: var(--repo-tint);
+}
+.repo-section.has-repo-tint .agent-row:not(.is-needs-you):not(.is-blocked):not(.is-failed):not(.is-alerting):not(.is-selected) {
+  background: color-mix(in srgb, var(--repo-tint) 4%, var(--surface));
+}
+.repo-section.has-repo-tint .agent-row:not(.is-needs-you):not(.is-blocked):not(.is-failed):not(.is-alerting):not(.is-selected):hover {
+  background: color-mix(in srgb, var(--repo-tint) 7%, var(--surface));
+}
+
+/* Signal — the flat Needs-you strip, where a row's repository is not written
+   above it. A 3px tick rather than the band's 2px spine: it is carrying on one
+   line what the band carries over a whole card. */
+.agent-row.has-repo-tick:not(.is-needs-you):not(.is-blocked):not(.is-failed):not(.is-alerting):not(.is-selected) {
+  background: color-mix(in srgb, var(--repo-tint) 4%, var(--surface));
+  box-shadow: inset 3px 0 color-mix(in srgb, var(--repo-tint) 55%, transparent);
+}
+.agent-row.has-repo-tick:not(.is-needs-you):not(.is-blocked):not(.is-failed):not(.is-alerting):not(.is-selected):hover {
+  background: color-mix(in srgb, var(--repo-tint) 7%, var(--surface));
+}
+/* The focus ring is a navigation cue and outranks the tick, the same way it
+   already outranks the alert rails a few hundred lines above. */
+.agent-row.has-repo-tick:not(.is-needs-you):not(.is-blocked):not(.is-failed):not(.is-alerting):not(.is-selected):focus-visible {
+  box-shadow: inset 3px 0 color-mix(in srgb, var(--repo-tint) 55%, transparent), var(--color-focus-ring);
+}
+.strip-repo-pill {
+  flex: none;
+  padding: 0 0.3rem;
+  border: 1px solid color-mix(in srgb, var(--repo-tint) 55%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+/* The repo-colour region in Settings: one swatch row per repository. */
+.repo-colors {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.repo-colors-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.repo-colors-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+}
+.repo-colors-swatch {
+  flex: none;
+  width: 1.1rem;
+  height: 1.1rem;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--repo-tint);
+  cursor: pointer;
+}
+.repo-colors-source {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--faint);
+}
+.repo-colors-reset {
+  flex: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 10.5px;
+  padding: 0 0.3rem;
+  cursor: pointer;
+}
+.repo-colors-reset:hover { color: var(--ink); border-color: var(--line-strong); }
+.repo-colors-empty { margin: 0; color: var(--faint); font-size: 12px; }
