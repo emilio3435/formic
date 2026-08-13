@@ -478,8 +478,15 @@ export function parseCmuxSidebarSnapshot(output: string): CmuxWorkspaceSnapshot[
         : Array.isArray(workspace.pullRequestUrls)
           ? workspace.pullRequestUrls
           : [];
+    /* Present in the snapshot as `custom_color: null` for an uncolored
+       workspace, so an explicit null is carried through as "no color" while a
+       snapshot that never mentions the field stays undefined. (TINT-S) */
+    const customColor = "custom_color" in workspace || "customColor" in workspace
+      ? stringValue(workspace.custom_color, workspace.customColor) ?? null
+      : undefined;
     byWorkspace.set(workspaceId, {
       workspaceId,
+      ...(customColor === undefined ? {} : { customColor }),
       ...(stringValue(workspace.project_root_path, workspace.projectRootPath)
         ? { projectRootPath: stringValue(workspace.project_root_path, workspace.projectRootPath) }
         : {}),

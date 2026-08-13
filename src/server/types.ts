@@ -187,6 +187,11 @@ export interface CmuxWorkspaceSnapshot {
   projectRootPath?: string;
   branch?: string;
   dirty?: boolean;
+  /* The color cmux is wearing for this workspace, or null for none — never
+     black and never "unknown". Absent when the snapshot did not report the
+     field at all, which is what a fixture written before repo color looks
+     like. (TINT-S) */
+  customColor?: string | null;
   pullRequestUrls: string[];
 }
 
