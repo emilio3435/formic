@@ -223,13 +223,15 @@ function reportHandlerError(
 }
 
 /** Dispatch is deliberately fire-and-forget: one handler cannot delay the next
- *  seq or terminate the stream. Own write echoes are filtered before any phase
- *  handler can observe them. */
+ *  seq or terminate the stream. Own write echoes are filtered before mutation
+ *  handlers can observe them. A workspace rename is the exception because its
+ *  event is also the state payload: the title patch must land for our write as
+ *  well as a foreign one, and rename handlers are state-only by contract. */
 export function dispatchCmuxSyncEvent(
   event: CmuxSyncEvent,
   onError: (error: Error) => void = (error) => console.error(`[cmux-sync] ${error.message}`),
 ): void {
-  if (isOwnEcho(event)) return;
+  if (isOwnEcho(event) && event.name !== "workspace.renamed") return;
   for (const handler of syncHandlersFor(event.name)) {
     try {
       const result = handler(event);
