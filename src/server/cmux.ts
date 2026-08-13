@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { SessionIdentityClaim } from "../shared/types";
+import type { CmuxNotificationSummary, SessionIdentityClaim } from "../shared/types";
 import { cmuxCommand } from "./cmux-auth";
 import type {
   CmuxNotification,
@@ -508,6 +508,142 @@ export function parseCmuxWindowIds(output: string): string[] {
     const id = stringValue(record.id, record.window_id, record.windowId);
     return id ? [id] : [];
   }))];
+}
+
+export function parseCmuxNotificationSummaries(output: string): CmuxNotificationSummary[] {
+  const parsed = JSON.parse(output) as unknown;
+  const root = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? ((parsed as Record<string, unknown>).result ?? parsed)
+    : parsed;
+  const notifications = Array.isArray(root)
+    ? root
+    : root && typeof root === "object" && !Array.isArray(root)
+      ? (root as Record<string, unknown>).notifications
+      : undefined;
+  if (!Array.isArray(notifications)) {
+    throw new Error("cmux response did not contain a notifications array");
+  }
+  return notifications.flatMap((value): CmuxNotificationSummary[] => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+    const notification = value as Record<string, unknown>;
+    const createdAtRaw = stringValue(notification.created_at, notification.createdAt) ?? "";
+    const createdAtMs = Date.parse(createdAtRaw);
+    const isRead = [notification.is_read, notification.isRead, notification.read]
+      .find((candidate): candidate is boolean => typeof candidate === "boolean")
+      ?? notification.unread === false;
+    return [{
+      id: stringValue(notification.id, notification.notification_id) ?? "",
+      workspaceId: stringValue(notification.workspace_id, notification.workspaceId) ?? "",
+      surfaceId: stringValue(notification.surface_id, notification.surfaceId) ?? "",
+      title: stringValue(notification.title) ?? "",
+      subtitle: stringValue(notification.subtitle) ?? "",
+      body: stringValue(notification.body) ?? "",
+      isRead,
+      createdAt: Number.isFinite(createdAtMs) ? new Date(createdAtMs).toISOString() : createdAtRaw,
+    }];
+  });
+}
+
+export function parseCmuxAnchorWorkspaceIds(output: string): string[] {
+  const parsed = JSON.parse(output) as unknown;
+  const root = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? ((parsed as Record<string, unknown>).result ?? parsed)
+    : parsed;
+  const groups = Array.isArray(root)
+    ? root
+    : root && typeof root === "object" && !Array.isArray(root)
+      ? ((root as Record<string, unknown>).groups
+        ?? (root as Record<string, unknown>).workspace_groups)
+      : undefined;
+  if (!Array.isArray(groups)) throw new Error("cmux response did not contain a workspace groups array");
+  return [...new Set(groups.flatMap((value): string[] => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+    const group = value as Record<string, unknown>;
+    const id = stringValue(group.anchor_workspace_id, group.anchorWorkspaceId);
+    return id ? [id] : [];
+  }))];
+}
+
+export async function collectCmuxNotificationSummaries(
+  runner: CommandRunner,
+  executable = DEFAULT_CMUX_EXECUTABLE,
+): Promise<CollectionResult<CmuxNotificationSummary[]>> {
+  const listed = await runner.run(
+    cmuxCommand(executable, ["rpc", "notification.list", "{}"]),
+    10_000,
+  );
+  if (executableMissing(listed)) return { value: [], errors: [], absent: true };
+  if (listed.timedOut) return { value: [], errors: ["cmux notification.list timed out"] };
+  if (listed.exitCode !== 0) {
+    return {
+      value: [],
+      errors: [`cmux notification.list exited ${listed.exitCode}: ${listed.stderr.trim() || "no stderr"}`],
+    };
+  }
+  let notifications: CmuxNotificationSummary[];
+  try {
+    notifications = parseCmuxNotificationSummaries(listed.stdout);
+  } catch (error) {
+    return {
+      value: [],
+      errors: [`cmux notification.list returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`],
+    };
+  }
+
+  const windows = await runner.run(
+    cmuxCommand(executable, ["rpc", "window.list", "{}"]),
+    10_000,
+  );
+  if (executableMissing(windows)) return { value: [], errors: [], absent: true };
+  if (windows.timedOut) return { value: [], errors: ["cmux window discovery timed out"] };
+  if (windows.exitCode !== 0) {
+    return {
+      value: [],
+      errors: [`cmux window discovery exited ${windows.exitCode}: ${windows.stderr.trim() || "no stderr"}`],
+    };
+  }
+  let windowIds: string[];
+  try {
+    windowIds = parseCmuxWindowIds(windows.stdout);
+  } catch (error) {
+    return {
+      value: [],
+      errors: [`cmux window discovery returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`],
+    };
+  }
+
+  const errors: string[] = [];
+  const anchors = await Promise.all(windowIds.map(async (windowId): Promise<string[]> => {
+    const result = await runner.run(cmuxCommand(executable, [
+      "rpc",
+      "workspace.group.list",
+      JSON.stringify({ window_id: windowId }),
+    ]), 10_000);
+    if (result.timedOut) {
+      errors.push(`cmux workspace group discovery for window ${windowId} timed out`);
+      return [];
+    }
+    if (result.exitCode !== 0) {
+      errors.push(
+        `cmux workspace group discovery for window ${windowId} exited ${result.exitCode}: ${result.stderr.trim() || "no stderr"}`,
+      );
+      return [];
+    }
+    try {
+      return parseCmuxAnchorWorkspaceIds(result.stdout);
+    } catch (error) {
+      errors.push(
+        `cmux workspace group discovery for window ${windowId} returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return [];
+    }
+  }));
+  if (errors.length > 0) return { value: [], errors };
+  const anchorWorkspaceIds = new Set(anchors.flat());
+  return {
+    value: notifications.filter((notification) => !anchorWorkspaceIds.has(notification.workspaceId)),
+    errors: [],
+  };
 }
 
 export async function collectCmuxSidebar(

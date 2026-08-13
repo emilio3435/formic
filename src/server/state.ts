@@ -1,9 +1,11 @@
 import { open, readFile } from "node:fs/promises";
 import { homedir, uptime } from "node:os";
-import type { AgentSnapshot, HubSnapshot, IssueLifecycle, OperatorIssue, Provider, SourceHealth, TriageQueueSummary } from "../shared/types";
+import type { AgentSnapshot, CmuxNotificationSummary, HubSnapshot, IssueLifecycle, OperatorIssue, Provider, SourceHealth, TriageQueueSummary } from "../shared/types";
 import { PROVIDERS } from "../shared/types";
+import { alertFingerprintFor, MemoryAckStore, type AckStore } from "./ack";
 import {
   collectCmux,
+  collectCmuxNotificationSummaries,
   collectCmuxNotifications,
   collectCmuxSidebar,
   collectCmuxWorkspaceEnvs,
@@ -82,6 +84,7 @@ export interface HubCollectors {
   workspaceEnv?: typeof collectCmuxWorkspaceEnvs;
   manifests?: typeof readRunManifests;
   notifications: typeof collectCmuxNotifications;
+  syncNotifications?: typeof collectCmuxNotificationSummaries;
   enrichIdentity: typeof enrichCmuxIdentity;
 }
 
@@ -94,6 +97,7 @@ const DEFAULT_COLLECTORS: HubCollectors = {
   workspaceEnv: collectCmuxWorkspaceEnvs,
   manifests: readRunManifests,
   notifications: collectCmuxNotifications,
+  syncNotifications: collectCmuxNotificationSummaries,
   enrichIdentity: enrichCmuxIdentity,
 };
 
@@ -178,6 +182,7 @@ export interface HubStateOptions {
   refreshAggregateTimeoutMs?: number;
   sessionNames?: JsonSessionNameStore;
   witnessStore?: ProcessWitnessStore;
+  ackStore?: AckStore;
   /** Injectable so tests can pin a boot without a clock. */
   bootId?: string;
 }
@@ -190,6 +195,7 @@ export class HubState {
   #workspaceEnvs: CmuxWorkspaceEnv[] = [];
   #runManifests: RunManifest[] = [];
   #notifications: CmuxNotification[] = [];
+  #cmuxNotifications: CmuxNotificationSummary[] = [];
   #cmuxErrors: string[] = ["cmux discovery has not completed"];
   #cmuxReachable = false;
   #cmuxAbsent = false;
@@ -218,6 +224,8 @@ export class HubState {
   #cmuxEventsBootId?: string;
   #cmuxSync?: CmuxSyncSupervisor;
   #unregisterCmuxSync?: () => void;
+  #notificationRelistQueued = false;
+  #notificationRelistGeneration = 0;
   #listeners = new Set<(snapshot: HubSnapshot) => void>();
   #issueLifecycle = new Map<string, IssueLifecycle>();
   #recentlyResolved: OperatorIssue[] = [];
@@ -247,6 +255,7 @@ export class HubState {
      keeps the derived names rather than requiring a naming store. */
   private readonly sessionNames?: JsonSessionNameStore;
   private readonly witnessStore?: ProcessWitnessStore;
+  private readonly ackStore: AckStore;
 
   constructor(
     private readonly runner: CommandRunner,
@@ -263,6 +272,7 @@ export class HubState {
     this.refreshAggregateTimeoutMs = options.refreshAggregateTimeoutMs;
     this.sessionNames = options.sessionNames;
     this.witnessStore = options.witnessStore;
+    this.ackStore = options.ackStore ?? new MemoryAckStore();
     this.#bootId = options.bootId ?? currentBootId(uptime(), Date.now());
     this.#pulse = new PulseTracker(this.burnReader);
     const bootSettings = this.settingsReader?.();
@@ -276,6 +286,8 @@ export class HubState {
       cmuxErrors: this.#cmuxErrors,
       cmuxReachable: this.#cmuxReachable,
       cmuxLastCheckedAt: this.#cmuxLastCheckedAt,
+      cmuxNotifications: this.#cmuxNotifications,
+      acks: this.ackStore.list(),
       issueLifecycle: this.#issueLifecycle,
       recentlyResolved: this.#recentlyResolved,
       triageSummaries: this.triageReader?.(),
@@ -451,9 +463,12 @@ export class HubState {
       "surface.closed",
       (event) => this.#applyCmuxClosedEvent(event),
     );
+    const unregisterNotifications = ["notification.created", "notification.read", "notification.removed"]
+      .map((name) => registerSyncHandler(name, () => this.#queueNotificationRelist()));
     this.#unregisterCmuxSync = () => {
       unregisterWorkspace();
       unregisterSurface();
+      for (const unregister of unregisterNotifications) unregister();
     };
     const supervisor = new CmuxSyncSupervisor({
       executable: this.cmuxExecutable,
@@ -470,9 +485,38 @@ export class HubState {
   stopCmuxSync(): void {
     const supervisor = this.#cmuxSync;
     this.#cmuxSync = undefined;
+    this.#notificationRelistGeneration += 1;
     supervisor?.stop();
     this.#unregisterCmuxSync?.();
     this.#unregisterCmuxSync = undefined;
+  }
+
+  #queueNotificationRelist(): void {
+    if (this.#notificationRelistQueued) return;
+    this.#notificationRelistQueued = true;
+    queueMicrotask(() => {
+      this.#notificationRelistQueued = false;
+      if (!this.#cmuxSync) return;
+      const generation = ++this.#notificationRelistGeneration;
+      void this.#relistNotifications(generation).catch((error) => {
+        console.error(`[HubState] cmux notification re-list failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
+    });
+  }
+
+  async #relistNotifications(generation: number): Promise<void> {
+    const collector = this.collectors.syncNotifications;
+    if (!collector) return;
+    const result = await collector(this.runner, this.cmuxExecutable);
+    if (generation !== this.#notificationRelistGeneration || !this.#cmuxSync) return;
+    if (result.errors.length > 0) throw new Error(result.errors.join("; "));
+    this.#cmuxNotifications = [...result.value];
+    this.#snapshot = {
+      ...this.#snapshot,
+      generatedAt: new Date().toISOString(),
+      cmuxNotifications: [...this.#cmuxNotifications],
+    };
+    for (const listener of this.#listeners) listener(this.#snapshot);
   }
 
   #applyCmuxClosedEvent(event: CmuxSyncEvent): void {
@@ -722,6 +766,7 @@ export class HubState {
     type SidebarResult = Awaited<ReturnType<typeof collectCmuxSidebar>>;
     type WorkspaceEnvResult = Awaited<ReturnType<typeof collectCmuxWorkspaceEnvs>>;
     type NotificationsResult = Awaited<ReturnType<HubCollectors["notifications"]>>;
+    type SyncNotificationsResult = Awaited<ReturnType<typeof collectCmuxNotificationSummaries>>;
     type IdentityResult = Awaited<ReturnType<HubCollectors["enrichIdentity"]>>;
     let sessionsResult: SessionsResult | undefined;
     const providerSettledAtMs: Partial<Record<Provider, number>> = {};
@@ -732,6 +777,7 @@ export class HubState {
     let workspaceEnvResult: WorkspaceEnvResult | undefined;
     let runManifestsResult: RunManifest[] | undefined;
     let notificationsResult: NotificationsResult | undefined;
+    let syncNotificationsResult: SyncNotificationsResult | undefined;
     let identityResult: IdentityResult | undefined;
     const collectionErrors: string[] = [];
     let controlDeadlineExpired = false;
@@ -838,6 +884,15 @@ export class HubState {
                 notificationsResult = value;
               },
             ),
+            ...(this.collectors.syncNotifications
+              ? [capture(
+                  "cmux sync notification collection failed",
+                  this.collectors.syncNotifications(this.runner, this.cmuxExecutable),
+                  (value) => {
+                    syncNotificationsResult = value;
+                  },
+                )]
+              : []),
           ]
         : []),
     ]).then(async () => {
@@ -934,6 +989,9 @@ export class HubState {
     const notifications = options.cmux
       ? notificationsResult ?? { value: [], errors: [reasonFor("cmux notification collection failed")] }
       : undefined;
+    const syncNotifications = options.cmux && this.collectors.syncNotifications
+      ? syncNotificationsResult ?? { value: [], errors: [reasonFor("cmux sync notification collection failed")] }
+      : undefined;
     const collectedAt = new Date().toISOString();
     for (const provider of providers) {
       const source = sessions[provider];
@@ -1011,6 +1069,9 @@ export class HubState {
       if (notifications && notifications.errors.length === 0) {
         this.#notifications = notifications.value;
       }
+      if (syncNotifications && syncNotifications.errors.length === 0) {
+        this.#cmuxNotifications = syncNotifications.value;
+      }
       if (sidebar && sidebar.errors.length === 0) {
         this.#sidebarWorkspaces = sidebar.value;
       }
@@ -1025,6 +1086,7 @@ export class HubState {
         ...(sidebar?.errors ?? []),
         ...(workspaceEnv?.errors ?? []),
         ...(notifications?.errors ?? []),
+        ...(syncNotifications?.errors ?? []),
         ...identityErrors,
         ...bindingErrors,
         ...collectionErrors,
@@ -1103,6 +1165,8 @@ export class HubState {
       sidebarWorkspaces: this.#sidebarWorkspaces,
       runManifests: this.#runManifests,
       notifications: this.#notifications,
+      cmuxNotifications: this.#cmuxNotifications,
+      acks: this.ackStore.list(),
       programHints: this.programHints,
       sourceErrors,
       sourceAbsent: this.#sourceAbsent,
@@ -1131,7 +1195,15 @@ export class HubState {
       if (issue.lifecycle) nextLifecycle.set(issue.id, issue.lifecycle);
     }
     this.#issueLifecycle = nextLifecycle;
-    const published = withAttentionClasses(built);
+    const classified = withAttentionClasses(built);
+    const currentAlerts = new Map<string, string>();
+    for (const agent of classified.programs.flatMap((program) => program.agents)) {
+      const fingerprint = alertFingerprintFor(agent);
+      if (fingerprint) currentAlerts.set(agent.id, fingerprint);
+    }
+    await this.ackStore.reconcile(currentAlerts);
+    if (this.#superseded(generation)) return this.#snapshot;
+    const published = { ...classified, acks: [...this.ackStore.list()] };
     const pulseNowMs = Date.now();
     this.#pulse.observe(published, pulseNowMs);
     this.#pulse.maybeRefreshBurnCost();

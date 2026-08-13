@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import type { AgentSnapshot, HubSnapshot, ProgramSnapshot, TriageQueueItem } from "../shared/types";
+import { alertFingerprintFor, MemoryAckStore, type AckStore } from "./ack";
 import { ARCHIVE_RETENTION_MS, MAX_ARCHIVE_RECORDS } from "./archive";
 import { handleBroadcastRequest } from "./broadcast";
 import { handleUsageRequest } from "./burnbar";
@@ -15,7 +16,7 @@ import {
   type AttentionAction,
   type AttentionStore,
 } from "./cmux";
-import { closeSurface, closeWorkspace, configureCmuxActions } from "./cmux-actions";
+import { closeSurface, closeWorkspace, configureCmuxActions, dismissNotification, markNotificationRead } from "./cmux-actions";
 import { identityDebugResponse, transcriptResponse } from "./debug-identity";
 import { sessionCallsResponse } from "./session-calls";
 import { readPublishState, type PublishState } from "./publish-state";
@@ -328,6 +329,7 @@ export interface MountainAppDependencies {
   archiveStore: ArchiveStore;
   actionLogStore?: ActionLogStore;
   attentionStore?: AttentionStore;
+  ackStore?: AckStore;
   triageStore?: TriageQueueStore;
   triageRunner?: TriageInvestigationRunner;
   programAliasStore?: ProgramAliasStore;
@@ -487,6 +489,7 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
     : resolve(dependencies.webRoot) === resolve(import.meta.dir, "../web")
       ? defaultAttentionStore()
       : Promise.resolve(new MemoryAttentionStore());
+  const ackStore = dependencies.ackStore ?? new MemoryAckStore(dependencies.now);
   const cleanupObserveIntervalMs = dependencies.cleanupObserveIntervalMs ?? CLEANER_OBSERVE_INTERVAL_MS;
   let recollectInFlight: Promise<HubSnapshot> | undefined;
   const recollect = (): Promise<HubSnapshot> => {
@@ -1174,6 +1177,107 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
          SYNC-CB: POST /api/sync/close
          SYNC-NB: POST /api/sync/notifications · PUT/DELETE /api/sync/ack/:agentId
          SYNC-RB: POST /api/sync/rename */
+    if (url.pathname === "/api/sync/notifications") {
+      if (request.method !== "POST") {
+        return responseError(405, "METHOD_NOT_ALLOWED", "Use POST for cmux notification changes.");
+      }
+      if (!sameOriginLoopback(request)) {
+        return responseError(403, "ORIGIN_REJECTED", "Notification changes require an exact same-origin loopback Origin header.");
+      }
+      if (request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+        return responseError(415, "CONTENT_TYPE_REJECTED", "Notification changes require application/json.");
+      }
+      const body = await jsonRecord(request);
+      const keys = body ? Object.keys(body) : [];
+      const action = body?.action;
+      const id = body?.id;
+      if (
+        keys.length !== 2
+        || !keys.includes("action")
+        || !keys.includes("id")
+        || (action !== "mark_read" && action !== "dismiss")
+        || typeof id !== "string"
+        || !id.trim()
+        || id.length > 300
+      ) {
+        return responseError(
+          400,
+          "INVALID_NOTIFICATION_REQUEST",
+          "Body must contain exactly action (mark_read or dismiss) and a non-empty notification id.",
+        );
+      }
+      const result = action === "mark_read"
+        ? await markNotificationRead(id)
+        : await dismissNotification(id);
+      return Response.json(result, {
+        status: result.ok ? 200 : result.code === "invalid_state" ? 409 : 502,
+        headers: { ...SECURITY_HEADERS, "cache-control": "no-store" },
+      });
+    }
+    if (url.pathname.startsWith("/api/sync/ack/")) {
+      if (request.method !== "PUT" && request.method !== "DELETE") {
+        return responseError(405, "METHOD_NOT_ALLOWED", "Use PUT to Ack or DELETE to unack an agent alert.");
+      }
+      if (!sameOriginLoopback(request)) {
+        return responseError(403, "ORIGIN_REJECTED", "Ack changes require an exact same-origin loopback Origin header.");
+      }
+      const encodedAgentId = url.pathname.slice("/api/sync/ack/".length);
+      let agentId: string;
+      try {
+        agentId = decodeURIComponent(encodedAgentId);
+      } catch {
+        return responseError(400, "INVALID_AGENT_ID", "The Ack route contains an invalid encoded agent id.");
+      }
+      if (!agentId || agentId.length > 300 || agentId.includes("/")) {
+        return responseError(400, "INVALID_AGENT_ID", "Ack requires one non-empty agent id no longer than 300 characters.");
+      }
+      try {
+        if (request.method === "PUT") {
+          const agent = dependencies.state.get().programs
+            .flatMap((program) => program.agents)
+            .find((candidate) => candidate.id === agentId);
+          if (!agent) return responseError(404, "AGENT_NOT_FOUND", "The agent is not present in the current snapshot.");
+          const alertFingerprint = alertFingerprintFor(agent);
+          if (!alertFingerprint) {
+            return responseError(409, "AGENT_NOT_ALERTING", "Only an agent with a current alert can be acknowledged.");
+          }
+          const ack = await ackStore.put(agentId, alertFingerprint);
+          try {
+            await dependencies.state.refresh();
+          } catch (error) {
+            return responseError(
+              500,
+              "ACK_REFRESH_FAILED",
+              `Ack was persisted, but the snapshot refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+          return Response.json(
+            { ok: true, ack },
+            { headers: { ...SECURITY_HEADERS, "cache-control": "no-store" } },
+          );
+        }
+        await ackStore.delete(agentId);
+        try {
+          await dependencies.state.refresh();
+        } catch (error) {
+          return responseError(
+            500,
+            "ACK_REFRESH_FAILED",
+            `Ack was removed, but the snapshot refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+        return Response.json(
+          { ok: true, agentId },
+          { headers: { ...SECURITY_HEADERS, "cache-control": "no-store" } },
+        );
+      } catch (error) {
+        return responseError(
+          500,
+          "ACK_WRITE_FAILED",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
     if (url.pathname === "/api/sync/close") {
       if (request.method !== "POST") {
         return responseError(405, "METHOD_NOT_ALLOWED", "Use POST for sync close requests.");

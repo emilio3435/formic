@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { JsonAckStore } from "./ack";
 import { JsonArchiveStore } from "./archive";
 import { createAgentLinkFetch } from "./agent-links";
 import { createMountainFetch } from "./app";
@@ -48,6 +49,7 @@ const programHints = await loadProgramHints(join(PROJECT_ROOT, "config/programs.
    titles a previous run wrote down. `open` never rejects — an unreadable cache
    costs the names, not the boot. */
 const sessionNameStore = await JsonSessionNameStore.open();
+const ackStore = await JsonAckStore.open(join(PROJECT_ROOT, "data/acks.json"));
 
 const state = new HubState(runner, archiveStore, programHints, {
   settingsReader: () => settingsStore.get(),
@@ -56,6 +58,7 @@ const state = new HubState(runner, archiveStore, programHints, {
   bindingStore: identityBindingStore,
   sessionNames: sessionNameStore,
   witnessStore: processWitnessStore,
+  ackStore,
 });
 await state.refresh({ cmux: true });
 state.startCmuxEvents();
@@ -64,6 +67,7 @@ const mountainFetch = createMountainFetch({
   state,
   runner,
   archiveStore,
+  ackStore,
   triageStore,
   triageRunner,
   programAliasStore,
