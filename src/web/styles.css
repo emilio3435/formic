@@ -1606,6 +1606,11 @@ body.feed-frozen .programs { opacity: 0.62; }
 }
 .scope-clear:hover { color: var(--ink); text-decoration: underline; }
 .scope-stale { color: var(--ember); font-weight: 600; }
+/* SYNC-NF. What the operator's own Acks are holding out of the alert list. It
+   sits in the sentence that already reconciles two populations, and it takes
+   quiet ink for the same reason the mark on the row does: a hidden alert is a
+   fact about a DECISION, not a state the fleet reached. */
+.scope-acked { color: var(--muted); font-weight: 500; }
 
 /* ---------- programs ---------- */
 
@@ -2279,6 +2284,49 @@ body.feed-frozen .programs { opacity: 0.62; }
    can be dead AND asking — the two marks must never fight over one slot. The
    .row-died pill carries the words; this is the scannable echo. */
 .agent-row.is-died { border-right: 3px solid var(--failed); }
+
+/* ---------- SYNC-NF · terminal notifications and the board-local Ack ----------
+
+   Every one of these is deliberately achromatic. The status palette (--needs,
+   --ember, --moss, --amber) means "the fleet is in this state"; none of these
+   three marks is a state the fleet reached. The badge counts what a TERMINAL is
+   holding, and the ack mark and its button report a decision a PERSON made —
+   painting either in a status colour would put the board's loudest ink on the
+   one thing that is not a reading about a session. */
+.cmux-badge {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--muted);
+  background: var(--sand);
+  border-radius: 3px;
+  padding: 0 0.3rem;
+  white-space: nowrap;
+}
+/* The operator's word, in the faintest weight on the row: it explains why this
+   row is not in the strip, and it must never read as a verdict on the agent. */
+.acked-mark {
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.sync-ack {
+  padding: 0 0.35rem;
+  font: 500 10.5px/1.6 var(--font-ui);
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.sync-ack:hover:not([disabled]) { color: var(--ink); border-color: var(--line-strong); }
+.sync-ack[disabled] { opacity: 0.55; cursor: default; }
+/* Pressed state carries no colour either — only the border firms up, so the
+   toggle is legible without borrowing the alert channel. */
+.sync-ack.is-acked { border-style: dashed; }
 
 /* A declared task state. Quiet by construction — this is the one mark on the
    board that says a row is silent BECAUSE someone decided it should be, so it
@@ -3063,6 +3111,28 @@ body.feed-frozen .programs { opacity: 0.62; }
   vertical-align: baseline;
   display: inline-block;
 }
+/* SYNC-RF — the cmux workspace this session sits in, printed under the name
+   because it is a different object with a different owner: cmux holds the
+   title, the board only shows it. Quiet mono, one line, ellipsised — a fact
+   with an editor, never a second heading. The editor replaces the row in place
+   and drops the band chrome .rename-form wears in the program head, which would
+   otherwise cut a full-width rule across the middle of this header. */
+.drawer-workspace { display: flex; align-items: center; gap: 0.4rem; min-width: 0; font: 500 11.5px/1.35 var(--font-mono); color: var(--muted); }
+.drawer-workspace-label { flex: none; font-size: 9.5px; letter-spacing: 0.075em; text-transform: uppercase; color: var(--faint-strong); }
+.drawer-workspace-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+.drawer-workspace-rename {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 1.6rem; height: 1.6rem;
+  color: var(--faint);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+}
+.drawer-workspace-rename:hover { color: var(--ink); border-color: var(--line-strong); background: var(--raise); }
+.drawer-workspace-rename .ico { width: 0.9rem; height: 0.9rem; }
+.sync-rename-form { padding: 0.5rem 0; border-bottom: 0; background: none; }
+
 .drawer-session-facts {
   grid-column: 1 / -1;
   display: grid;
@@ -3403,6 +3473,58 @@ body.feed-frozen .programs { opacity: 0.62; }
 .command-confirm { flex: 1 1 100%; }
 .btn.sm { min-height: 32px; padding: 0.28rem 0.65rem; font-size: 12px; }
 
+/* SYNC-CF — close the terminal, and the escalation it can raise.
+   The tile borrows dock-tool-warn's hue rather than adding a colour: it is the
+   same class of act as Archive, one step further on. */
+.sync-close-tool { color: var(--muted); }
+.sync-close-tool:hover:not(:disabled) { color: var(--bad); border-color: var(--bad); }
+.sync-close-tool:disabled { color: var(--faint-strong); }
+/* It is a CHILD of the drawer it is about — the escalation names that session's
+   siblings — but it is laid out as a modal over the viewport: the drawer is a
+   scroll container, and a dialog that scrolls away with the transcript behind it
+   is a dialog an operator can lose. `fixed` keeps the settings modal's grammar
+   and stays under it (z-index 60) if both are somehow open. */
+.sync-close-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: color-mix(in srgb, var(--ink) 38%, transparent);
+}
+.sync-close-inner {
+  width: min(30rem, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  display: grid;
+  gap: 0.6rem;
+  padding: 1rem 1.15rem 1.15rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  /* A signal rail, not a filled panel: severity reads as an edge the eye can
+     scan past, and the copy keeps the page's own contrast. */
+  border-left: 3px solid var(--bad);
+  border-radius: var(--radius-md);
+  box-shadow: 0 18px 48px color-mix(in srgb, var(--ink) 28%, transparent);
+}
+.sync-close-title { margin: 0; font-size: 15px; line-height: 1.3; color: var(--ink); }
+.sync-close-lede { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--muted); }
+.sync-close-siblings { display: grid; gap: 0.3rem; }
+.sync-close-siblings-lead { margin: 0; font-size: 12px; color: var(--muted); }
+.sync-close-siblings-empty { margin: 0; font-size: 12px; color: var(--faint-strong); }
+.sync-close-sibling-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.2rem; }
+.sync-close-sibling {
+  font: 500 12px/1.4 var(--font-mono);
+  color: var(--ink);
+  padding-left: 0.55rem;
+  border-left: 2px solid var(--line);
+}
+.sync-close-warning { margin: 0; font-size: 12px; font-weight: 600; color: var(--bad); }
+.sync-close-actions { display: flex; justify-content: flex-end; gap: 0.5rem; padding-top: 0.15rem; }
+.sync-close-confirm { border-color: var(--bad); color: var(--bad); }
+.sync-close-confirm:hover:not(:disabled) { background: var(--ember-soft); }
+
 .inspector-panel { display: flex; flex-direction: column; gap: var(--space-3); }
 .names-disclosure {
   border: 1px solid var(--line);
@@ -3707,6 +3829,9 @@ body.feed-frozen .programs { opacity: 0.62; }
      on the board on a phone. */
   .notify-act, .notify-row-acts .dock-tool, .verdict-cleanup, .filter-chip, .program-details,
   .artifact-copy, .command-dock-cluster .dock-tool,
+  /* SYNC-RF: the drawer's workspace-rename pencil is the same size and the same
+     kind of inline control as .program-rename, so it joins the same sweep. */
+  .drawer-workspace-rename,
   .command-composer textarea, .rename-form input { min-height: 44px; }
   .artifact-copy { width: 44px; }
 }
@@ -4315,6 +4440,33 @@ body.feed-frozen .programs { opacity: 0.62; }
   border-top: 1px solid var(--line);
 }
 .notify-sect-hint { font-size: 0.72rem; color: var(--faint); }
+
+/* SYNC-NF. cmux's own notifications, in the section furniture the panel already
+   uses — this is one more list, not a second design. It is the only list here
+   that carries controls, because these are the only items with an id the board
+   can clear; everything else on this panel is a reading about a session. */
+.cmux-notify { display: block; padding-bottom: 0.4rem; }
+.cmux-notify-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.35rem 0.95rem;
+}
+.cmux-notify-name { font: 500 0.8rem/1.4 var(--font-ui); color: var(--ink); }
+.cmux-notify-body { font: 400 0.75rem/1.45 var(--font-ui); color: var(--muted); }
+.cmux-notify-acts { display: flex; gap: 0.35rem; margin-left: auto; }
+.cmux-notify-act {
+  padding: 0 0.4rem;
+  font: 500 0.72rem/1.7 var(--font-ui);
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.cmux-notify-act:hover:not([disabled]) { color: var(--ink); border-color: var(--line-strong); }
+.cmux-notify-act[disabled] { opacity: 0.55; cursor: default; }
 .notify-quiet {
   display: flex;
   align-items: baseline;
@@ -5688,3 +5840,119 @@ a.artifact-path:hover { text-decoration: underline; }
 }
 .drawer-desk .artifact-copy.is-copied { color: var(--moss); border-color: var(--moss); }
 .drawer-desk .identity-expand { color: var(--muted); }
+
+/* ---------- TINT-F: repo-identity colour ----------
+
+   One hex per repository, carried in as the custom property --repo-tint by
+   style.setProperty (the board's CSP has no 'unsafe-inline', so a style
+   ATTRIBUTE would be dropped silently, while a CSSOM property write is not).
+   Percentages here are the approved design values (artifact a902d450) — 45%
+   spine, 4% wash, 7% hover, 55% tick — not suggestions.
+
+   Two rules govern every selector below.
+
+   Status outranks identity (authority rule 5). Every repo treatment is written
+   :not() against the four attention classes and against selection, so an
+   alerting row REPLACES the repo wash with its ember rail and 6% ember wash
+   rather than mixing the two. Written as exclusions rather than left to source
+   order, because rule order is a fact about this file and the rule is a fact
+   about the product.
+
+   Text never wears repo colour (rule 6). The marks are the spine, the dot, the
+   tick and the pill border. No selector below sets `color`. */
+
+/* Whisper — the grouped repo band. */
+.repo-section.has-repo-tint {
+  border-left: 2px solid color-mix(in srgb, var(--repo-tint) 45%, transparent);
+}
+.repo-dot {
+  flex: none;
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 50%;
+  background: var(--repo-tint);
+}
+.repo-section.has-repo-tint .agent-row:not(.is-needs-you):not(.is-blocked):not(.is-failed):not(.is-alerting):not(.is-selected) {
+  background: color-mix(in srgb, var(--repo-tint) 4%, var(--surface));
+}
+.repo-section.has-repo-tint .agent-row:not(.is-needs-you):not(.is-blocked):not(.is-failed):not(.is-alerting):not(.is-selected):hover {
+  background: color-mix(in srgb, var(--repo-tint) 7%, var(--surface));
+}
+
+/* Signal — the flat Needs-you strip, where a row's repository is not written
+   above it. A 3px tick rather than the band's 2px spine: it is carrying on one
+   line what the band carries over a whole card. */
+.agent-row.has-repo-tick:not(.is-needs-you):not(.is-blocked):not(.is-failed):not(.is-alerting):not(.is-selected) {
+  background: color-mix(in srgb, var(--repo-tint) 4%, var(--surface));
+  box-shadow: inset 3px 0 color-mix(in srgb, var(--repo-tint) 55%, transparent);
+}
+.agent-row.has-repo-tick:not(.is-needs-you):not(.is-blocked):not(.is-failed):not(.is-alerting):not(.is-selected):hover {
+  background: color-mix(in srgb, var(--repo-tint) 7%, var(--surface));
+}
+/* The focus ring is a navigation cue and outranks the tick, the same way it
+   already outranks the alert rails a few hundred lines above. */
+.agent-row.has-repo-tick:not(.is-needs-you):not(.is-blocked):not(.is-failed):not(.is-alerting):not(.is-selected):focus-visible {
+  box-shadow: inset 3px 0 color-mix(in srgb, var(--repo-tint) 55%, transparent), var(--color-focus-ring);
+}
+.strip-repo-pill {
+  flex: none;
+  padding: 0 0.3rem;
+  border: 1px solid color-mix(in srgb, var(--repo-tint) 55%, transparent);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+/* The repo-colour region in Settings: one swatch row per repository. */
+.repo-colors {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.repo-colors-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.45rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.repo-colors-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+}
+.repo-colors-swatch {
+  flex: none;
+  width: 1.1rem;
+  height: 1.1rem;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--repo-tint);
+  cursor: pointer;
+}
+.repo-colors-source {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--faint);
+}
+.repo-colors-reset {
+  flex: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 10.5px;
+  padding: 0 0.3rem;
+  cursor: pointer;
+}
+.repo-colors-reset:hover { color: var(--ink); border-color: var(--line-strong); }
+.repo-colors-empty { margin: 0; color: var(--faint); font-size: 12px; }

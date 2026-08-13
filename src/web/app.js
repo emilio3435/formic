@@ -1543,6 +1543,11 @@ globalThis.TheAntHill = {
   snapshotFreshness, connLabelText, connVerdictFor, reconnectPlan, fallbackPollDue, eventSnapshot,
   feedAlarm, clocksFrozen, feedFrozen, elapsedTickText, staleControlNote, feedAlarmNode, tickClocks,
   renderCommandDock, renderDockTool, composerCanSend, resizeComposer,
+  /* SYNC-CF. The gate, the envelope reader and the two renderers: the request
+     functions are driven for real against a fake fetch, and the pure halves let
+     the gating and the envelope rules be asserted without a DOM. */
+  syncCloseView, syncCloseReason, syncCloseEscalation, syncCloseVerdict,
+  renderSyncCloseTool, renderSyncCloseDialog, cancelSyncClose,
   // The TRANSCRIPT_* limits stay out for the same TDZ reason as CONN_LABELS:
   // they are `const`s declared below this block. Assert the behavior instead.
   transcriptUrl, clampTranscriptLimit, nextTranscriptLimit, normalizeTranscript,
@@ -1578,6 +1583,11 @@ globalThis.TheAntHill = {
   // (RUN_GROUP_PREFIX stays out — it is a `const` declared below this block,
   // the TDZ hazard the note above is about.)
   repoGroups, worktreeLabel,
+  /* TINT-F. The colour join, the two paints, and the three surfaces that wear
+     them — exported so the treatments are assertable as functions rather than
+     as substrings of this file. */
+  setRepoColors, repoTintFor, repoTintOfProgram, normalizeRepoHex, fetchRepoColors,
+  renderRepoSection, repoShellSig, stripRowOpts, renderStripGroupHead,
   // The shelf's governor. Exported because the lookback clause inside it is the
   // only thing standing between a 24-row shelf and a 446-row one, and a
   // property that load-bearing has to be assertable directly.
@@ -3174,6 +3184,11 @@ function notifyPanelPaintSig(model, open) {
     cleanerView(state.snap, state.cleaner).state,
     state.cleaner.error,
     feedFrozen() ? "held" : "",
+    /* SYNC-NF. The unread terminal set is NOT in `model` — that model is the
+       board's own attention derivation over sessions, and these are cmux's own
+       notifications — so without this a cleared notification would sit on
+       screen until something unrelated moved the signature. */
+    unreadCmuxNotifications(state.snap).map((note) => note.id).join(","),
   ].join("\u001f");
 }
 
@@ -3300,6 +3315,54 @@ function notifyQuietRow(item) {
     el("span", { class: "notify-quiet-time", text: notifyWaitText(item) }));
 }
 
+/* ---------- SYNC-NF · the terminal's own notifications, in the panel ----------
+
+   Minimal by instruction: this is one more section in the list the panel
+   already draws, in the same section furniture (.notify-sect / .notify-eyebrow)
+   as Watching and Running on its own. The notification center's own shape is
+   unsettled and two competing mockups for it are unpicked — adjudicating that
+   from inside this lane would be the redesign the kickoff forbids.
+
+   It is here and not only on the rows because the clear verbs need a SINGLE
+   notification to act on. A row's badge can stand for several, and a control
+   that fans out over an unknown number of terminal alerts is a control whose
+   effect the operator cannot predict before pressing it. */
+function cmuxNotifyRow(note) {
+  const name = [note.title, note.subtitle].filter((part) => typeof part === "string" && part.trim()).join(" — ")
+    || "Untitled terminal notification";
+  const verb = (action, label) => el("button", {
+    type: "button",
+    class: "cmux-notify-act",
+    disabled: syncPending.has("notify:" + note.id) ? "" : null,
+    /* Named for the notification, not for the verb. Several of these coexist in
+       one panel, and "Mark read" alone tells a screen reader nothing about
+       which terminal alert it is about to answer. */
+    "aria-label": label + ": " + name,
+    dataset: { fkey: "sync-notify:" + action + ":" + note.id },
+    onclick: () => { void clearCmuxNotification(note.id, action); },
+  }, label);
+  return el("div", { class: "cmux-notify-row" },
+    el("span", { class: "cmux-notify-name", text: name }),
+    /* The body, which only this surface has: the event stream redacts it, so
+       the server re-listed it. Bounded by the same helper the peek lines use. */
+    note.body ? el("q", { class: "cmux-notify-body", text: conciseText(note.body, 140) }) : null,
+    el("span", { class: "cmux-notify-acts" }, verb("mark_read", "Mark read"), verb("dismiss", "Dismiss")));
+}
+
+function renderCmuxNotifySection(snap = state.snap) {
+  const unread = unreadCmuxNotifications(snap);
+  if (!unread.length) return null;
+  const section = el("section", { class: "cmux-notify", "aria-label": "Terminal notifications" },
+    el("div", { class: "notify-sect" },
+      el("span", { class: "notify-eyebrow", text: "Terminal" }),
+      /* Says whose list this is. These are cmux's own notifications, not the
+         board's readings about sessions — the two are different populations and
+         a reader who conflates them will go looking for an agent that is fine. */
+      el("span", { class: "notify-sect-hint", text: unread.length + " unread in cmux" })));
+  for (const note of unread) section.append(cmuxNotifyRow(note));
+  return section;
+}
+
 function renderNotificationCenter() {
   const panel = $("notifications-panel");
   const toggle = $("notify-toggle");
@@ -3355,6 +3418,12 @@ function renderNotificationCenter() {
       el("span", { class: "notify-eyebrow", text: "Running on its own" })));
     for (const item of model.investigations) panel.append(notifyQuietRow(item));
   }
+
+  // SYNC-NF. Last of the lists, above the proof line: a terminal notification
+  // is the least urgent thing on this panel — nobody is stopped by one — and it
+  // is the only one carrying controls, so it goes where a scan ends.
+  const terminalNotifications = renderCmuxNotifySection(state.snap);
+  if (terminalNotifications) panel.append(terminalNotifications);
 
   /* All clear does not go blank. "Watching, found nothing" and "not watching"
      are the two states an empty panel is otherwise ambiguous between, and the
@@ -3746,6 +3815,9 @@ function renderSettingsPanel() {
     /* The local display pref rebuilds the panel too, or the radio the operator
        just clicked would keep the stale checkmark until a server value moved. */
     state.needsYouDisplay || "",
+    // Same argument for the repo-colour region: its data arrives on its own
+    // clock and moves nothing else in here.
+    String(repoColorsVersion),
   ].join("\u001f");
   if (paintUnchanged("settings", sig)) {
     /* The two things that must follow the board without disturbing the form:
@@ -3827,6 +3899,15 @@ function renderSettingsPanel() {
         }),
         el("span", { text: label }),
         el("span", { class: "settings-help", text: help })))),
+    /* TINT-F. Fleet-shared like the fields above, but written per repository
+       through its own endpoint the moment a swatch changes — so it sits outside
+       the Save flow, the way the display preference above does, and for the
+       same reason: Save posts a fixed set of scalars and would have nothing to
+       say about a colour. */
+    el("fieldset", { class: "settings-local" },
+      el("legend", { text: "Repository colours" }),
+      el("p", { class: "settings-help", text: "Six fixed hues, then neutral clay. A colour you pick here also travels to that repository's cmux workspaces." }),
+      renderRepoColorSettings()),
     /* The two answers a save can give, said where the save happened. A stable
        node rather than a conditional child, so it can appear, change and expire
        without rebuilding the form around it. */
@@ -3861,6 +3942,90 @@ function renderSettingsPanel() {
       }, "Done"))));
   renderSettingsPreview();
   renderSettingsVerdict();
+}
+
+/* TINT-F. Which repository wears which colour, and the override.
+
+   A repository the operator picks a colour for stops being "auto" and frees its
+   palette slot server-side, so the next repository to appear takes a real hue
+   instead of overflow clay — which is why Reset is offered beside the swatch
+   rather than only as a global wipe.
+
+   It reads `state.repoColorSettings.assignments`, keyed by the canonical repo
+   key (the git common dir's basename), which is also the word an operator
+   recognises — `the-mountain`, `cooper-scheduler`. No live board data is needed
+   here at all: an assignment outlives the session that caused it. */
+function renderRepoColorSettings(settings = state.repoColorSettings) {
+  const assignments = (settings && settings.assignments) || {};
+  const keys = Object.keys(assignments).sort();
+  if (!keys.length) {
+    return el("div", { class: "repo-colors" },
+      el("p", {
+        class: "repo-colors-empty",
+        text: "No repository has been given a colour yet — one is assigned the first time the board sees a session in it.",
+      }));
+  }
+  return el("div", { class: "repo-colors" }, ...keys.map((key) => {
+    const assignment = assignments[key] || {};
+    const hex = normalizeRepoHex(assignment.hex) || "";
+    const row = el("div", { class: "repo-colors-row" },
+      el("span", { class: "repo-colors-name", text: key }),
+      el("span", {
+        class: "repo-colors-source",
+        text: assignment.source === "user" ? "your colour" : "auto",
+      }),
+      /* A native colour input, so the picker is the operating system's and this
+         board ships no swatch grid of its own. Its own value is the current
+         hex, which is also what the swatch shows through --repo-tint. */
+      el("input", {
+        type: "color",
+        class: "repo-colors-swatch",
+        value: hex,
+        "aria-label": "Colour for " + key,
+        dataset: { fkey: "repo-color:" + key },
+        onchange: (event) => { void putRepoColor(key, event.currentTarget.value); },
+      }),
+      assignment.source === "user"
+        ? el("button", {
+          type: "button",
+          class: "repo-colors-reset",
+          "aria-label": "Reset " + key + " to its assigned colour",
+          dataset: { fkey: "repo-color-reset:" + key },
+          onclick: () => { void putRepoColor(key, null); },
+        }, "Reset")
+        : null);
+    return paintRepoTint(row, hex, "has-repo-tint");
+  }));
+}
+
+/* One write, both verbs: a hex sets an override, null clears it. Re-fetches
+   rather than patching local state, because the server's answer also carries
+   whatever the clear re-assigned the repository to. */
+async function putRepoColor(repoKey, hex) {
+  const normalized = hex === null ? null : normalizeRepoHex(hex);
+  if (hex !== null && !normalized) {
+    toast("That is not a colour this board can store", "warn");
+    return;
+  }
+  try {
+    const res = await apiFetch("/api/repo-colors/" + encodeURIComponent(repoKey), normalized
+      ? {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ hex: normalized }),
+      }
+      : { method: "DELETE" }, API_WRITE_TIMEOUT_MS);
+    const body = await res.json().catch(() => null);
+    if (!res.ok || !body || body.ok !== true) {
+      throw new Error(body && body.error && body.error.message ? body.error.message : "Save failed (HTTP " + res.status + ")");
+    }
+    setRepoColors(body.repoNames, body.settings);
+    state.repoColorSettings = body.settings;
+    render();
+    renderSettingsPanel();
+  } catch (err) {
+    toast(err && err.message ? err.message : "Colour save failed", "warn");
+  }
 }
 
 function renderWidgetCustomizer() {
@@ -6788,6 +6953,16 @@ function renderFilterBar(ui = state) {
      server setting, so the disclaimer was false for the first chip on the bar. */
 }
 
+/* What an Ack is holding back, in the sentence's own voice: what was hidden,
+   and — the half that matters — what is still true of the sessions it hid. */
+function acknowledgedClause(count) {
+  return el("span", {
+    class: "scope-acked",
+    title: "You acknowledged these alerts. They are out of Needs you; the sessions are unchanged and may still be waiting on a person.",
+    text: count + " acknowledged — hidden from Needs you, still waiting",
+  });
+}
+
 /* Two slots, one line at a time.
 
    D4: the board's sentence moved INTO the filter bar row, between the lenses and
@@ -6839,10 +7014,22 @@ function renderScopeNote(shown) {
      already said everything there is to say. */
   const active = activeLenses(state);
   const narrowing = Boolean(state.query) || Boolean(state.facetProgram) || active.length > 0;
-  if (!narrowing && !state.fetchFailed) { note.hidden = true; return; }
+  /* SYNC-NF. An Ack takes a row out of the alert list, which is a narrowing the
+     operator did on purpose — and the ONE thing this region exists to prevent
+     is a board that is quietly showing less than it appears to. It speaks here
+     rather than in a mark on the strip because #bar-scope-note is the live
+     region that survives the repaint: an aria-live element that is destroyed
+     and recreated announces nothing, so a sentence built anywhere else would
+     never reach a screen reader at all. */
+  const acknowledged = acknowledgedCount(state.snap);
+  if (!narrowing && !acknowledged && !state.fetchFailed) { note.hidden = true; return; }
   note.hidden = false;
   if (!narrowing) {
-    note.append(el("span", { class: "scope-stale", text: "last refresh failed" }));
+    if (acknowledged) note.append(acknowledgedClause(acknowledged));
+    if (state.fetchFailed) {
+      if (acknowledged) note.append(" · ");
+      note.append(el("span", { class: "scope-stale", text: "last refresh failed" }));
+    }
     return;
   }
 
@@ -6897,6 +7084,10 @@ function renderScopeNote(shown) {
      the sentence can never quote a total the tab beside it disagrees with. */
   line.append(" — ", el("span", { class: "scope-count", text: shown + " of " + workingSet(state).length }));
   note.append(line);
+  // SYNC-NF, after the reconciliation and before Clear: the acks are a fact
+  // about the alert list rather than about this count, so they never join the
+  // "N of M" arithmetic — they are stated beside it.
+  if (acknowledged) note.append(" · ", acknowledgedClause(acknowledged));
   /* Clears the LENSES and the query, and deliberately not the two things that
      are not lenses: the review policy belongs to the fleet rather than to this
      browser, and the time window is the working set itself — a "clear filters"
@@ -6950,6 +7141,103 @@ function clearEveryLens() {
 function repoOf(program) {
   const carrier = program && program.agents && program.agents.find((agent) => agent && agent.repo);
   return carrier ? carrier.repo : null;
+}
+
+/* ---------- TINT-F: repo-identity colour ----------
+
+   One hex per repository, six fixed hues and clay for the seventh, assigned and
+   persisted by the server (`/api/repo-colors`) so the board, the cmux
+   workspaces and the sidebar groups can never disagree about what colour
+   `cooper-scheduler` is.
+
+   The client joins on the repository NAME it already prints, lowercased,
+   because the canonical key is the basename of the git common dir and a browser
+   cannot run `git rev-parse` to derive it. `repoNames` in the endpoint's
+   response is that join table, built server-side from the same walk that made
+   the assignments.
+
+   Two treatments, from the approved design (artifact a902d450):
+
+     Whisper — the grouped repo bands. A 2px spine at 45% down the card, a dot
+       beside the name, a 4% wash on the rows inside it and 7% on hover.
+     Signal — the flat Needs-you strip, where rows from every repository are
+       interleaved. A 3px tick at 55% down each row, the same 4% wash, and a
+       quiet repo pill on the group heading, which is the surface's stand-in for
+       the band name it does not have.
+
+   Status outranks identity in every pixel (authority rule 5): a row wearing any
+   attention treatment drops the repo wash and the repo tick entirely rather
+   than blending with them, and the stylesheet says so with :not() rather than
+   by relying on rule order. Text never wears repo colour (rule 6) — the marks
+   are the spine, the dot, the tick and the pill border, and nothing else.
+
+   Carried into the DOM with `style.setProperty`, not a `style` attribute: the
+   board ships a strict CSP with no 'unsafe-inline', which kills `style="…"`
+   silently, while CSSOM property writes are untouched by it (the inspector's
+   --inspector-visible-top already rides this path). */
+const repoColors = new Map();   // lowercased repo name -> "#rrggbb"
+let repoColorsVersion = 0;      // bumped on every load; paint signatures read it
+
+/* The join is TWO hops, and collapsing it to one is how this shipped broken
+   once: `repoNames` maps a printed name to a canonical repoKey, and
+   `assignments` maps that key to a hex. They are different tables and the
+   middle value is not a colour — feeding `repoNames` straight in left every
+   entry failing normalizeRepoHex, so the map stayed empty and the board never
+   tinted while every test stayed green.
+
+   The two names genuinely differ on this very checkout: the repository's origin
+   is `…/the-ant-hill.git`, so RepoIdentity.repoName — what the band prints — is
+   `the-ant-hill`, while repoKeyForCwd reads the git common dir and answers
+   `the-mountain`. The table exists precisely for that split, which is why
+   `name === key` is never a safe shortcut. */
+function setRepoColors(repoNames, settings) {
+  repoColors.clear();
+  const assignments = (settings && settings.assignments) || {};
+  for (const [name, repoKey] of Object.entries(repoNames || {})) {
+    const assignment = assignments[repoKey];
+    const hex = normalizeRepoHex(assignment && assignment.hex);
+    if (hex) repoColors.set(String(name).toLowerCase(), hex);
+  }
+  repoColorsVersion += 1;
+}
+
+/* Same normalization the server applies, for the same reason: `#2E66A8` and
+   `#2e66a8` are one colour, and two spellings of it in two places is how a
+   comparison starts reporting drift that is only spelling. */
+function normalizeRepoHex(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  const short = /^#([0-9a-fA-F]{3})$/.exec(trimmed);
+  if (short) {
+    const [r, g, b] = short[1];
+    return ("#" + r + r + g + g + b + b).toLowerCase();
+  }
+  return /^#[0-9a-fA-F]{6}$/.test(trimmed) ? trimmed.toLowerCase() : null;
+}
+
+/** The hex a repository wears, or "" when the server has not assigned it one.
+ *  Empty rather than a fallback colour: a repository with no assignment is a
+ *  repository the endpoint has not seen, and painting it a default hue would
+ *  claim an identity the fan-out to cmux is not backing up. */
+function repoTintFor(repoName) {
+  const key = String(repoName || "").trim().toLowerCase();
+  return (key && repoColors.get(key)) || "";
+}
+
+/** Put a tint on a node, CSP-safely, and mark it so the stylesheet can find it. */
+function paintRepoTint(node, hex, className) {
+  if (!node || !hex) return node;
+  node.classList.add(className);
+  node.style?.setProperty?.("--repo-tint", hex);
+  return node;
+}
+
+/* The repo colour a PROGRAM's rows should wear. Reads the same RepoIdentity the
+   band head prints, so the strip row and the band it was pinned out of can
+   never show two different colours for one repository. */
+function repoTintOfProgram(program) {
+  const repo = repoOf(program);
+  return repoTintFor(repo && repo.repoName);
 }
 
 function baseName(path) {
@@ -7174,6 +7462,11 @@ function repoShellSig(group, ui) {
     // programShellSig): a view switch must rebuild the shell.
     ui.view,
     group.name,
+    /* The band's repo colour. It arrives on its own clock — one fetch after
+       boot, and again whenever an operator picks a colour — with nothing else
+       in this signature moving, so without it the first paint's untinted card
+       is the card forever. */
+    repoTintFor(group.name),
     repoOpen(group, ui) ? "open" : "shut",
     String(group.worktrees.length),
     group.pullRequestUrls.join(","),
@@ -7197,6 +7490,7 @@ function renderRepoSection(group, ui = state) {
   const open = repoOpen(group, ui);
   const bodyId = "repo-body-" + group.key;
   const count = group.worktrees.length;
+  const tint = repoTintFor(group.name);
   /* The band is the program tier, so it carries the program-tier facts: the
      fold, the name, the PRs, and the rollup over its WHOLE population —
      before this the unit the operator buckets attention by was the only unit
@@ -7213,6 +7507,12 @@ function renderRepoSection(group, ui = state) {
       dataset: { fkey: "repo:" + group.key },
       onclick: () => toggleRepo(group),
     }, icon("caret")),
+    /* Whisper's mark on the head. A dot, not tinted text: the repository's name
+       is the loudest word in this tier and colouring it would spend identity on
+       the one thing that already carries it (rule 6). Decorative — the name is
+       right beside it, so there is nothing here for a screen reader to say and
+       nothing lost to a reader who cannot separate the hues. */
+    tint ? el("span", { class: "repo-dot", "aria-hidden": "true" }) : null,
     el("span", { class: "repo-name", text: group.name }),
     el("span", {
       class: "repo-worktree-count",
@@ -7227,12 +7527,12 @@ function renderRepoSection(group, ui = state) {
     })),
     programHeadRollup(bandAgents(group), null, { view: ui.view }));
 
-  const section = el("section", {
+  const section = paintRepoTint(el("section", {
     class: "repo-section" + (open ? " open" : ""),
     "aria-label": group.name,
   },
     el("h2", { class: "visually-hidden", text: group.name }),
-    head);
+    head), tint, "has-repo-tint");
   /* One column header for the whole band, not one per worktree: five labels
      that never change were painted once per checkout — ten copies over
      fifteen rows on the measured board, the strongest repeating rhythm on the
@@ -7323,6 +7623,101 @@ const programSectionCache = new Map(); // programId -> { sig, node }
 const programBodies = new Map();       // programId -> the .program-agents node
 const agentRowCache = new Map();       // "<programId>\u001f<rowKey>" -> { sig, node }
 
+/* ---------- SYNC-NF · cmux notifications and the board-local Ack ----------
+
+   Two snapshot fields, rendered verbatim and derived nowhere else:
+   `cmuxNotifications` — the unread TERMINAL alerts cmux is holding, listed
+   server-side because the event stream redacts their bodies — and `acks`, the
+   operator's own judgments.
+
+   The Ack is the one that has to be said twice. It hides a row from the alert
+   list and it changes NOTHING about the session: it does not write to cmux, it
+   does not answer the agent, and the fleet counters keep counting the agent
+   because the agent really is still waiting. It self-revokes SERVER-side on a
+   fresh alert fingerprint, which is why nothing in this client remembers an
+   ack — the only reason a row is hidden is that this snapshot says so, so a
+   revoked ack comes back on the next poll with no expiry timer here to get
+   stuck. (An expiring record kept client-side is exactly the shape the
+   attention snooze above has a scar for.)
+
+   And the two are deliberately independent. Clearing a notification does not
+   take a row out of Needs-you: "cmux is holding an unread alert" and "this
+   agent is asking for a person" were one field once, and folding them lost the
+   second one every time the first was answered. */
+
+const cmuxNotifyCache = new WeakMap();  // snap -> Map<workspaceId, unread summaries>
+const ackCache = new WeakMap();         // snap -> Set<agentId>
+
+/* Unread only, indexed by workspace. Read notifications are not items: they are
+   the record of an answered one, and counting them would make a badge that can
+   never reach zero. */
+function unreadCmuxByWorkspace(snap = state.snap) {
+  if (!snap || typeof snap !== "object") return new Map();
+  const cached = cmuxNotifyCache.get(snap);
+  if (cached) return cached;
+  const index = new Map();
+  for (const note of Array.isArray(snap.cmuxNotifications) ? snap.cmuxNotifications : []) {
+    if (!note || note.isRead) continue;
+    const workspaceId = typeof note.workspaceId === "string" ? note.workspaceId : "";
+    if (!workspaceId) continue;
+    index.set(workspaceId, [...(index.get(workspaceId) || []), note]);
+  }
+  cmuxNotifyCache.set(snap, index);
+  return index;
+}
+
+// Oldest first, so the dropdown reads in the order the terminal produced them.
+function unreadCmuxNotifications(snap = state.snap) {
+  return [...unreadCmuxByWorkspace(snap).values()].flat()
+    .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")) || String(a.id).localeCompare(String(b.id)));
+}
+
+/* WORKSPACE-scoped, not surface-scoped, because that is the question the badge
+   answers: cmux notifies a workspace, and every session parked in it is one an
+   operator would go to that terminal for. */
+function agentUnreadCmux(agent, snap = state.snap) {
+  const workspaceId = agent && agent.target && agent.target.workspaceId;
+  if (!workspaceId) return [];
+  return unreadCmuxByWorkspace(snap).get(workspaceId) || [];
+}
+
+function ackedIds(snap = state.snap) {
+  if (!snap || typeof snap !== "object") return new Set();
+  const cached = ackCache.get(snap);
+  if (cached) return cached;
+  const ids = new Set();
+  for (const record of Array.isArray(snap.acks) ? snap.acks : []) {
+    if (record && typeof record.agentId === "string" && record.agentId) ids.add(record.agentId);
+  }
+  ackCache.set(snap, ids);
+  return ids;
+}
+
+function ackedAgent(agent, snap = state.snap) {
+  return Boolean(agent) && ackedIds(snap).has(agent.id);
+}
+
+/* Alert-LIST membership, which is what an Ack governs — deliberately not a
+   second opinion about alerting(). The row keeps every other consequence of
+   asking for a human (its state word, its ink, its place in the rollup); what
+   it loses is its seat in the strip. */
+function stripAlerting(agent, snap = state.snap) {
+  return alerting(agent) && !ackedAgent(agent, snap);
+}
+
+/* How many rows the operator's own judgment is holding out of the alert list.
+   Counted over the snapshot rather than over the rendered strip, so a filtered
+   board still reports it: an ack the current lens happens to hide is still an
+   ack the operator made, and a count that silently dropped it would tell them
+   nothing is hidden while something is. */
+function acknowledgedCount(snap = state.snap) {
+  let count = 0;
+  for (const { agent } of agentsById(snap).values()) {
+    if (ackedAgent(agent, snap) && alerting(agent)) count += 1;
+  }
+  return count;
+}
+
 /* ---------- the pinned Needs-you strip ----------
 
    Everything alerting(), across every program, in one block at the top of the
@@ -7346,10 +7741,10 @@ const STRIP_ID = "\u0000needs-you";
    Built from the ALREADY-FILTERED list, so a search or a facet narrows the
    strip exactly as it narrows the groups. An operator who filtered to one
    program is not shown another program's alert and told it needs them. */
-function needsYouStrip(visible) {
+function needsYouStrip(visible, ui = state) {
   const rows = [];
   for (const { program, agents } of visible) {
-    for (const agent of agents) if (alerting(agent)) rows.push({ agent, program });
+    for (const agent of agents) if (stripAlerting(agent, ui.snap)) rows.push({ agent, program });
   }
   return rows;
 }
@@ -7435,7 +7830,12 @@ function renderNeedsYouStrip(rows) {
 function hollowInPane(agents, finished, ui) {
   if (ui.view !== "board" || needsYouDisplayOf(ui) !== "pane") return false;
   if (!agents.length) return false;
-  if (!agents.every((agent) => alerting(agent))) return false;
+  /* stripAlerting, not alerting: an ACKED row is drawn in this group rather
+     than pinned, so a group holding one is not hollow. Reading alerting() here
+     would skip the section that is now the only place that row is drawn — the
+     row would vanish off the board entirely, which is the one thing an Ack is
+     forbidden to do. */
+  if (!agents.every((agent) => stripAlerting(agent, ui.snap))) return false;
   return !(finished || []).length;
 }
 
@@ -7517,6 +7917,16 @@ function agentRowSig(agent, ui, opts = {}) {
     // this signature moving, so it has to be in here or the row keeps its
     // cached, unmarked node.
     opts.alerting ? "alert-mark" : "",
+    /* Signal's tick. It arrives on the colour endpoint's clock rather than the
+       snapshot's, so nothing else in this signature moves when it lands. */
+    opts.repoTint || "",
+    /* SYNC-NF. Both of this lane's row facts live on the SNAPSHOT rather than
+       on the agent record, so agentRecordSig carries neither: a notification
+       arriving, or an ack landing, moves nothing else in this string and the
+       row would keep its cached, unchanged node. Documented failure class,
+       same as opts.alerting directly above. */
+    "cmux:" + agentUnreadCmux(agent, ui.snap).length,
+    ackedAgent(agent, ui.snap) ? "acked" : "",
     swarmNote(agent, opts) || "",
   ].join("\u001f");
 }
@@ -7559,6 +7969,11 @@ function programsPaintSig(visible, ui) {
     LENS_AXES.map((axis) => axis.key + "=" + [...(ui[axis.stateKey] || [])].sort().join("+")).join(";"),
     ui.lookbackHours,
     ui.showReviewWorkers ? "1" : "0",
+    /* Sixth instance of the mutates-only-itself failure class the note above
+       names: the repo-colour fetch writes `repoColors` and nothing else, so
+       without this the board would stay untinted until an unrelated repaint —
+       and on a quiet fleet that is never. */
+    String(repoColorsVersion),
     /* Fifth instance of the mutates-only-itself failure class: the settings
        radio writes needsYouDisplay and nothing else, so without this the strip
        would neither leave nor return until something unrelated repainted. */
@@ -7740,7 +8155,9 @@ function syncProgramList(root, visible, ui = state) {
         const label = stripChipLabel(program);
         plan.push({
           key: STRIP_ID + "\u001fhead:" + program.id,
-          sig: "head\u001f" + label,
+          // The pill's hex too, or the heading keeps its cached, pill-less
+          // node when the colour endpoint answers.
+          sig: "head\u001f" + label + "\u001f" + repoTintOfProgram(program),
           build: () => renderStripGroupHead(program, label),
         });
       }
@@ -7787,6 +8204,21 @@ function syncProgramList(root, visible, ui = state) {
    than a per-row chip, because the chip stole the title's width on every line
    and repeated one fact per row that a run of rows shares. */
 function renderStripGroupHead(program, label) {
+  const repo = repoOf(program);
+  const repoName = (repo && repo.repoName) || "";
+  const tint = repoTintFor(repoName);
+  /* Signal's quiet repo pill. The strip is the board's one surface with no band
+     name above it, so this is where the repository is said — a bordered pill,
+     never tinted text (rule 6). The word inside it is already the first half of
+     `label`, so the pill is decoration over a fact the heading states in full;
+     the button's aria-label carries the whole thing either way. */
+  const pill = tint
+    ? paintRepoTint(
+      el("span", { class: "strip-repo-pill", "aria-hidden": "true", text: repoName }),
+      tint,
+      "has-repo-tint",
+    )
+    : null;
   return el("button", {
     class: "strip-group-head",
     title: "Jump to " + label,
@@ -7794,6 +8226,7 @@ function renderStripGroupHead(program, label) {
     dataset: { fkey: "strip-head:" + program.id },
     onclick: () => jumpToProgramGroup(program),
   },
+    pill,
     el("span", { class: "strip-group-name", text: label }),
     el("span", { class: "strip-group-go", "aria-hidden": "true", text: "↗" }));
 }
@@ -7815,6 +8248,27 @@ function stripRowOpts(program, board) {
     fullById: board.byId,
     ambiguousNames: board.ambiguous,
     sharedNames: board.sharedNames,
+    /* NO repo tint here, deliberately, and that omission is the whole fix for
+       authority rule 5 on this surface.
+
+       `needsYouStrip` admits only alerting agents, so every row in this strip
+       is an attention row. Rule 5 gives an attention row to status outright, so
+       identity is carried by the heading pill above the run rather than by
+       anything on the row itself.
+
+       Offering a tick here and relying on the stylesheet to drop it does NOT
+       work, and that is the trap: most strip rows get an ember class from their
+       OUTCOME (needs-you / blocked / failed), but a hook-needsInput agent is
+       alerting with a HEALTHY outcome and so carries none of them. It would
+       match every `:not(.is-…)` identity selector and wear a repo wash on an
+       attention row — precisely inverted.
+
+       The tempting second fix — set `alerting: true` so the row takes the ember
+       class — is wrong here for a reason outside this lane: pane mode
+       deliberately does not double-mark, because the strip IS the signal
+       ("inline mode marks every row the strip would have taken", in
+       tests/web-client.test.ts). Not offering identity in the first place
+       closes the hole without overruling that. */
   };
 }
 
@@ -8262,6 +8716,19 @@ const SECTION_HEADS = {
    `board` is the once-per-paint fleet index; it is optional so the plan can be
    driven directly in a test with nothing but a program and a ui. */
 function agentRowPlan(program, agents, ui = state, board = boardIndex(ui), opts = {}) {
+  /* Signal, on the INTERLEAVED surface: a flat program section is not grouped
+     by repository, so nothing above these rows says which one they belong to
+     and each carries its own 3px tick. A banded row sits inside a tinted card
+     that washes it by descent — a tick there would say the same thing twice on
+     every line, which is the difference between Whisper and Signal.
+
+     Read once here rather than per row: it is constant for the program, and
+     inside the walk below `opts` is shadowed by each row's own options object,
+     so reaching for the parameter there is a temporal-dead-zone error rather
+     than the value it looks like. The stylesheet drops the tick again on any
+     row wearing an attention class, so this is identity offered and status
+     taking precedence, never the two mixed. */
+  const rowRepoTint = opts.banded ? "" : repoTintOfProgram(program);
   const visibleIds = new Set(agents.map((agent) => agent.id));
   const programById = new Map(program.agents.map((agent) => [agent.id, agent]));
   const relevantIds = new Set(visibleIds);
@@ -8326,7 +8793,7 @@ function agentRowPlan(program, agents, ui = state, board = boardIndex(ui), opts 
      mode only, for the same reason: inline mode draws no strip, so pinning a
      row away here would remove it from the only place it is drawn. */
   const pinnedIds = ui.view === "board" && needsYouDisplayOf(ui) === "pane"
-    ? new Set(agents.filter((agent) => alerting(agent)).map((agent) => agent.id))
+    ? new Set(agents.filter((agent) => stripAlerting(agent, ui.snap)).map((agent) => agent.id))
     : new Set();
 
   /* Inline mode's row-level signal. The strip used to BE the signal; with it
@@ -8369,6 +8836,7 @@ function agentRowPlan(program, agents, ui = state, board = boardIndex(ui), opts 
            "open me and see" must only fire when opening shows it. */
         swarmAlerting: !open && hasDrawnAlertingDescendant(agent.id),
         alerting: markAlerting && alerting(agent),
+        repoTint: rowRepoTint,
       };
       plan.push({
         key: "row:" + agent.id,
@@ -8981,6 +9449,10 @@ function renderAgentRow(agent, program, opts = {}) {
          reader arrowing row-to-row may never visit the heading between them. */
       null),
     el("span", { class: "row-identity-tags" },
+      /* SYNC-NF. The ack mark leads the line — it is the reason this row is not
+         in the strip where the operator last saw it, so it has to be the first
+         thing read here rather than the last. */
+      ackedMarkNode(agent, state.snap),
       /* Session tag, only when this row's name is not unique on the board. It
          rides the existing identity-tags line rather than adding a row, and it
          is the same short id the drawer and the copy-id buttons speak, so an
@@ -9080,7 +9552,14 @@ function renderAgentRow(agent, program, opts = {}) {
           return el("span", { class: "swarm-chip", title: where, "aria-label": where }, "swarm " + fullCount);
         }
         return null;
-      })()),
+      })(),
+      /* SYNC-NF, at the tail: the terminal's own unread count, then the one
+         control this row offers over the alert list. Both pass the row diet's
+         test — the badge says a terminal is holding something the operator has
+         to go and read, and the button is the only way to answer the strip
+         without lying about the session. */
+      cmuxBadgeNode(agent, state.snap),
+      syncAckButton(agent, state.snap)),
     description ? el("span", { class: "row-identity-tags row-summary row-description", title: "Latest human message or current status summary. Select for full details.", text: description }) : null);
 
   // Right-side instrument cluster: status word · outcome, model + ctx%, tokens,
@@ -9228,6 +9707,14 @@ function renderAgentRow(agent, program, opts = {}) {
     },
   }, line1);
 
+  /* Signal's 3px tick, on the flat surfaces that pass one. The stylesheet
+     decides whether it is actually drawn: a row already wearing an attention
+     treatment keeps the ember rail and the repo tick is evicted, never blended
+     (authority rule 5). Painted here rather than folded into rowClass because
+     the hex is a value, and a value on a CSP-strict page travels as a custom
+     property, not as a class. */
+  paintRepoTint(row, opts.repoTint, "has-repo-tick");
+
   if (!editing) return row;
 
   const kind = nameTarget.kind;
@@ -9243,6 +9730,68 @@ function renderAgentRow(agent, program, opts = {}) {
           : "Workspace id stays " + nameTarget.workspaceId)
         : "Source agent: " + sourceName + " · id stays " + agent.id,
     }));
+}
+
+/* ---------- SYNC-NF · the three row nodes ----------
+
+   All three are omitted rather than rendered empty, which is why the row is
+   byte-identical on the overwhelming majority of sessions: no unread terminal
+   notification, no ack, nothing asking. */
+
+/* The count, in QUIET ink. It is a fact about the terminal, not a verdict about
+   the session — cmux holding an unread alert says nothing about whether the
+   agent is stuck — so it takes --muted and leaves the status palette alone.
+   Clicking it does nothing on purpose: a clear acts on ONE notification and
+   this can stand for several, so the verbs live on the dropdown entries where
+   each one has its own id and its own title to name. */
+function cmuxBadgeNode(agent, snap = state.snap) {
+  const unread = agentUnreadCmux(agent, snap);
+  if (!unread.length) return null;
+  const words = unread.length + " unread terminal notification" + (unread.length === 1 ? "" : "s");
+  return el("span", {
+    class: "cmux-badge",
+    title: words + " in this cmux workspace. Clear them from the notifications panel.",
+    "aria-label": words + " in this session's cmux workspace",
+    text: String(unread.length),
+  });
+}
+
+/* The operator's word, and only ever the operator's word. Every phrasing that
+   suggested the SESSION had reached a state — done, resolved, cleared — is
+   wrong here: the agent may be sitting at the same prompt it was sitting at
+   before the click. So the mark says who judged, and says what did not change. */
+function ackedMarkNode(agent, snap = state.snap) {
+  if (!ackedAgent(agent, snap)) return null;
+  const said = "You acknowledged this alert, so it is out of Needs you. "
+    + "The agent is still waiting — nothing about its state changed.";
+  return el("span", { class: "acked-mark", title: said, "aria-label": said, text: "acked ·" });
+}
+
+/* One control slot, two states. An Ack the operator cannot take back is a
+   one-way door on a judgment they made from a one-line summary. */
+function syncAckButton(agent, snap = state.snap) {
+  if (!alerting(agent)) return null;
+  const on = ackedAgent(agent, snap);
+  const name = agentName(agent);
+  return el("button", {
+    type: "button",
+    class: "sync-ack" + (on ? " is-acked" : ""),
+    disabled: syncPending.has("ack:" + agent.id) ? "" : null,
+    /* The accessible name OVERRIDES the visible text, so it has to CONTAIN it —
+       WCAG 2.5.3, the rule notifyQuietRow above carries the scar of. A voice
+       operator reads "Ack" off the screen and says it; a name that opened with
+       "Acknowledge" would not match the word they can see. So the visible label
+       leads, and the sentence that says what this does — and what it does NOT
+       do — follows it. */
+    "aria-label": on
+      ? "Unack — undo the acknowledgement for " + name + ": returns it to alerts"
+      : "Ack — Acknowledge " + name + ": removes from alerts; agent may still be waiting",
+    title: on
+      ? "Put this session back in Needs you."
+      : "Take this session out of Needs you. It does not answer the agent and does not change its state.",
+    dataset: { fkey: "sync-ack:" + agent.id },
+    onclick: (e) => { e.stopPropagation(); void applySyncAck(agent, !on); },
+  }, on ? "Unack" : "Ack");
 }
 
 function swarmNote(agent, opts) {
@@ -9488,9 +10037,19 @@ function inspectorPaintSig(sel, view, ui) {
     agent ? [...ui.pending].filter((key) => key.startsWith(agent.id + ":")).sort().join(",") : "",
     agent && feedback ? (feedback.ok ? "ok" : "err") + ":" + feedback.action + ":" + feedback.message : "",
     ui.confirming || "",
+    /* SYNC-CF: the escalation dialog is a child of this drawer, so the drawer
+       has to repaint when it opens, closes, or changes what it would kill. */
+    ui.syncClose && agent && ui.syncClose.agentId === agent.id
+      ? ui.syncClose.code + ":" + ui.syncClose.workspaceId + ":" + (ui.syncClose.siblingAgents || []).map((s) => s.id + "/" + s.name).join(",")
+      : "",
     ui.renaming || "",
     ui.renamePending ? "1" : "0",
     ui.renameError || "",
+    // SYNC-RF: same three flags for the workspace-rename editor, and the draft
+    // excluded for the same reason renameDraft is.
+    ui.wsRenaming || "",
+    ui.wsRenamePending ? "1" : "0",
+    ui.wsRenameError || "",
     ui.labelsLoading ? "1" : "0",
     ui.labelLoadError || "",
     // Narrow drawers switch the visible in-flow panel from Chat to Evidence.
@@ -10231,6 +10790,188 @@ function drawerSessionTag(agent, ui = state) {
   return visibleSessionTag(agent, boardIndex(ui));
 }
 
+/* ---------- SYNC-RF: inline workspace rename ----------
+
+   The one place on the board that writes a cmux WORKSPACE title. Three things
+   make it different from the presentation-label rename beside it, and each one
+   is why this path is its own machinery rather than a fourth `target.kind`:
+
+     - It mutates another process. `/api/sync/rename` goes through the action
+       funnel and can be REFUSED (an empty title, a group anchor); a board-local
+       alias never can, so the alias path has no refusal vocabulary to reuse.
+     - It renames an object this session SHARES. Sibling panes hang off one
+       workspace, so the editor says which id it is about rather than leaving
+       the operator to infer the scope from the session they opened.
+     - The board is not the author of the result. On success this writes NOTHING
+       locally: the title on screen is the snapshot's, so a rename someone else
+       makes in cmux between our save and the next snapshot simply wins. That is
+       the FE half of the never-re-assert rule — titles have no
+       board-authoritative copy, unlike repo colors.
+
+   Agent and session display names are board derivations and stay out: they are
+   renamed, if at all, through the Names disclosure and `/api/program-aliases`. */
+
+const SYNC_RENAME_ERRORS = {
+  invalid_title: "cmux needs a workspace title with at least one visible character.",
+  anchor: "This workspace anchors a cmux group, so its title is not ours to change.",
+  invalid_state: "cmux refused the rename in this state.",
+};
+
+function syncRenameErrorText(status, body) {
+  if (!status) return "Could not reach the server to rename this workspace.";
+  const code = body && typeof body.code === "string" ? body.code : "";
+  if (SYNC_RENAME_ERRORS[code]) return SYNC_RENAME_ERRORS[code];
+  const detail = body && typeof body.detail === "string" ? body.detail : "";
+  return "Rename failed"
+    + (code ? " [" + code + "]" : "")
+    + (detail ? ": " + detail : " (HTTP " + status + ")");
+}
+
+/* Which workspace this drawer may rename, or null.
+
+   `exact` and `unique-cwd` are the same pair Focus routes on — cmux either
+   attests the session is there, or it is the only pane in that directory. An
+   ambiguous or missing link would put the operator's typing into a workspace
+   the board only guessed at, and a rename lands on every sibling pane at once.
+
+   No title, no affordance: the mission is a rename control WHERE THE TITLE
+   RENDERS, and printing an empty field just to hang a pencil on it is the
+   omit-empty rule broken for chrome. The title is used raw (trimmed only) —
+   spinner-stripping it here would make "save unchanged" a real rename. */
+function renameableWorkspace(agent) {
+  const target = agent && agent.target;
+  if (!target || !target.workspaceId) return null;
+  if (target.resolution !== "exact" && target.resolution !== "unique-cwd") return null;
+  const title = typeof target.workspaceTitle === "string" ? target.workspaceTitle.trim() : "";
+  if (!title) return null;
+  return { workspaceId: target.workspaceId, title };
+}
+
+const syncRenameFkey = (workspaceId) => "ws-rename:" + workspaceId;
+const syncRenameInputFkey = (workspaceId) => "ws-rename-input:" + workspaceId;
+
+/* Focus by fkey, the same handle render() restores through. Used on the way out
+   of the editor: the control the operator opened it from is gone from the DOM
+   by then, so the automatic restore in render() cannot find it and would drop
+   a keyboard operator on the drawer lead. */
+function focusByFkey(fkey, select = false) {
+  if (typeof document === "undefined" || typeof CSS === "undefined") return;
+  const node = document.querySelector(`[data-fkey="${CSS.escape(fkey)}"]`);
+  if (!node) return;
+  node.focus({ preventScroll: true });
+  if (select && node.select) node.select();
+}
+
+function renderWorkspaceRename(agent) {
+  const ws = renameableWorkspace(agent);
+  if (!ws) return null;
+  if (state.wsRenaming === ws.workspaceId) return renderWorkspaceRenameForm(ws);
+  return el("div", { class: "drawer-workspace" },
+    el("span", { class: "drawer-workspace-label", text: "Workspace" }),
+    el("span", { class: "drawer-workspace-title", title: ws.title, text: ws.title }),
+    el("button", {
+      type: "button",
+      class: "drawer-workspace-rename",
+      "aria-label": "Rename workspace " + ws.title,
+      dataset: { fkey: syncRenameFkey(ws.workspaceId) },
+      onclick: () => startWorkspaceRename(ws),
+    }, icon("rename")));
+}
+
+function renderWorkspaceRenameForm(ws) {
+  return el("form", {
+    class: "rename-form sync-rename-form",
+    // Returns the promise: the browser ignores a listener's return value, and a
+    // test that fires this handler can then await the write it started.
+    onsubmit: (e) => { e.preventDefault(); return submitWorkspaceRename(ws); },
+  },
+    el("input", {
+      type: "text",
+      value: state.wsRenameDraft,
+      maxlength: "80",
+      placeholder: "Title for this cmux workspace",
+      "aria-label": "New title for workspace " + ws.title,
+      disabled: state.wsRenamePending ? "" : null,
+      dataset: { fkey: syncRenameInputFkey(ws.workspaceId) },
+      oninput: (e) => { state.wsRenameDraft = e.target.value; },
+      onkeydown: (e) => { if (e.key === "Escape") { e.preventDefault(); cancelWorkspaceRename(ws.workspaceId); } },
+    }),
+    el("button", {
+      type: "submit", class: "btn primary",
+      disabled: state.wsRenamePending ? "" : null,
+      "aria-busy": state.wsRenamePending ? "true" : null,
+      dataset: { fkey: "ws-rename-save:" + ws.workspaceId },
+    }, state.wsRenamePending ? "Saving…" : "Save"),
+    el("button", {
+      type: "button", class: "btn",
+      disabled: state.wsRenamePending ? "" : null,
+      dataset: { fkey: "ws-rename-cancel:" + ws.workspaceId },
+      onclick: () => cancelWorkspaceRename(ws.workspaceId),
+    }, "Cancel"),
+    el("span", {
+      class: "rename-source",
+      text: "cmux workspace " + ws.workspaceId + " · every pane in it shares this title",
+    }),
+    state.wsRenameError ? el("p", { class: "rename-error", role: "alert", text: state.wsRenameError }) : null);
+}
+
+function startWorkspaceRename(ws) {
+  state.wsRenaming = ws.workspaceId;
+  // Seeded from cmux's title, not from the agent's display name: this box edits
+  // the workspace, and the two are different strings on most linked sessions.
+  state.wsRenameDraft = ws.title;
+  state.wsRenameError = "";
+  render();
+  focusByFkey(syncRenameInputFkey(ws.workspaceId), true);
+}
+
+function cancelWorkspaceRename(workspaceId) {
+  state.wsRenaming = null;
+  state.wsRenameError = "";
+  render();
+  focusByFkey(syncRenameFkey(workspaceId));
+}
+
+async function submitWorkspaceRename(ws) {
+  if (state.wsRenamePending) return;
+  const title = state.wsRenameDraft.trim();
+  state.wsRenamePending = true;
+  state.wsRenameError = "";
+  render();
+
+  let status = 0;
+  let body = null;
+  try {
+    const res = await apiFetch("/api/sync/rename", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ workspaceId: ws.workspaceId, title }),
+    }, API_WRITE_TIMEOUT_MS);
+    status = res.status;
+    body = await res.json().catch(() => null);
+    /* An unreachable server leaves status 0, which syncRenameErrorText reads as
+       "could not reach" — the one failure that is not cmux refusing anything. */
+  } catch { /* handled below, by the absent ok */ }
+
+  state.wsRenamePending = false;
+  if (status >= 200 && status < 300 && body && body.ok === true) {
+    state.wsRenaming = null;
+    /* Deliberately no local write of `title`. The field re-reads the snapshot,
+       which SYNC-RB patches from cmux's own `workspace.renamed` event, so a
+       foreign rename that landed while this request was in flight is what the
+       operator sees next — not what they typed. */
+    toast("Renamed workspace to " + title, "ok");
+    render();
+    focusByFkey(syncRenameFkey(ws.workspaceId));
+    return;
+  }
+  state.wsRenameError = syncRenameErrorText(status, body);
+  // The refused draft is not left in the box pretending to be the title.
+  state.wsRenameDraft = ws.title;
+  render();
+  focusByFkey(syncRenameInputFkey(ws.workspaceId));
+}
+
 function renderAgentDrawer(pane, view) {
   const { agent, program } = view;
   const outcome = deriveOutcome(agent);
@@ -10379,7 +11120,10 @@ function renderAgentDrawer(pane, view) {
         /* Same value the subtraction below compares against — one call, so the
            two can never disagree about what the title said. */
         title,
-        tag ? el("span", { class: "inspector-tag mono", text: "#" + tag }) : null)),
+        tag ? el("span", { class: "inspector-tag mono", text: "#" + tag }) : null),
+      /* Under the name, because it is a different object: the cmux workspace
+         this session sits in, and the only renameable thing in this header. */
+      renderWorkspaceRename(agent)),
     el("div", { class: "verdict-side" }, closeButton()),
     hasFacts ? facts : null));
 
@@ -10525,6 +11269,12 @@ function renderAgentDrawer(pane, view) {
   }, chatMode, evidenceMode);
   grid = el("div", { class: "drawer-grid" + (evidenceExpanded ? " is-evidence" : "") }, modeSwitch, doc, desk);
   pane.append(grid);
+
+  /* SYNC-CF. Last child of the drawer so it overlays the pane it is about: the
+     escalation names THIS agent's siblings, and a modal about one session
+     hoisted to the page would have to re-state which session that was. */
+  const closeDialog = renderSyncCloseDialog(agent);
+  if (closeDialog) pane.append(closeDialog);
 
   if (typeof chatScroll.scrollHeight === "number") {
     const plan = chatScrollPlan(agent.id, _chatKey, _chatScrollMemo, _chatScrollSaved);
@@ -10865,8 +11615,13 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
      quiet toolbar below the composer. Same tools, fkeys, capability gates and
      destructive-isolation disclosure; only the visual hierarchy changes. */
   const unarchivable = Boolean(unarchiveCap && unarchiveCap.enabled);
+  /* SYNC-CF. Not a ControlCapability: closing is a cmux write on its own route
+     with its own resolution rule, so it is built here rather than pulled out of
+     `agent.controls`. It sits after Archive because it is the furthest-reaching
+     verb in the group — filing a record, then destroying the terminal. */
+  const closeTool = renderSyncCloseTool(agent, { held });
   let cluster = null;
-  if (focusCap || interruptCap || archiveCap || unarchivable) {
+  if (focusCap || interruptCap || archiveCap || unarchivable || closeTool) {
     cluster = el("div", { class: "command-dock-cluster", role: "group", "aria-label": "Session actions" });
     if (focusCap) cluster.append(renderDockTool(agent, focusCap, "focus", { held, iconOnly: true }));
     if (interruptCap) cluster.append(renderDockTool(agent, interruptCap, "interrupt", { held, iconOnly: true }));
@@ -10874,6 +11629,7 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
        <details> made a one-action menu that stole the click. Confirm still
        isolates the destructive step. */
     if (archiveCap) cluster.append(renderDockTool(agent, archiveCap, "archive", { held, iconOnly: true }));
+    if (closeTool) cluster.append(closeTool);
     // The undo is not destructive and does not hide behind the lock.
     if (unarchivable) cluster.append(renderDockTool(agent, unarchiveCap, "unarchive", { held, iconOnly: true }));
   }
@@ -11070,6 +11826,255 @@ function renderDockTool(agent, cap, action, opts = {}) {
     opts.iconOnly
       ? null
       : accessibleName);
+}
+
+/* ---------- sync: closing the terminal ----------
+
+   The board's half of `POST /api/sync/close`. cmux owns every rule about what
+   may close; this renders what the route answers and decides nothing itself.
+   There is one URL, no retry, and exactly two request shapes — the frozen
+   surface envelope and the frozen workspace envelope. */
+
+/* Why close is gated harder than the rest of the dock.
+
+   Focus and Send accept `unique-cwd`: the board calls such a row `linked`,
+   because looking at a pane and typing into one are recoverable if the folder
+   match picked the wrong terminal. Closing is not recoverable, so it takes the
+   strictest resolution the identity tiers can mint and nothing weaker. A gate
+   written as "linked" would put a destructive button on a folder-strength
+   guess.
+
+   `isTerminal` is the other half: a finished session and a session that has
+   left the scan window are both records rather than live terminals, and there
+   is nothing behind them to close. Returns null for those (no control at all),
+   a disabled view with a reason for everything short of exact. */
+function syncCloseView(agent) {
+  if (!agent || isTerminal(agent)) return null;
+  const target = (agent && agent.target) || { resolution: "missing" };
+  const surfaceId = target.surfaceId || "";
+  if (target.resolution === "exact" && surfaceId) return { enabled: true, surfaceId, reason: "" };
+  return { enabled: false, surfaceId, reason: syncCloseReason(surfaceId ? target.resolution : "missing") };
+}
+
+/* Operator language, deliberately NOT the resolver's `reason` string, for the
+   same cause renderControlBanner states at length: served reasons carry raw
+   cmux evidence ("surface a1b2 is claimed by two sessions"), and this sentence
+   is read by a person deciding whether to destroy a terminal. */
+function syncCloseReason(resolution) {
+  if (resolution === "unique-cwd") return "This session is matched by folder only — closing needs an exact terminal match.";
+  if (resolution === "ambiguous") return "More than one terminal claims this session, so closing could close the wrong one.";
+  return "No cmux terminal is linked to this session.";
+}
+
+/* The dock's most destructive tile. Same shape, classes and held-behaviour as
+   renderDockTool, but deliberately NOT routed through it: that function is the
+   one gate over the server's ControlCapability list, and close is not on it —
+   it is a cmux write with its own route and its own resolution rule. */
+function renderSyncCloseTool(agent, opts = {}) {
+  const view = syncCloseView(agent);
+  if (!view) return null;
+  const key = agent.id + ":sync-close";
+  const busy = state.pending.has(key);
+  const held = opts.held === undefined ? feedFrozen() : Boolean(opts.held);
+  const blocked = !view.enabled || held || busy;
+  const label = "Close terminal";
+  return el("button", {
+    type: "button",
+    class: "dock-tool dock-tool-warn sync-close-tool" + (held ? " is-held" : ""),
+    disabled: blocked ? "" : null,
+    "aria-busy": busy ? "true" : null,
+    title: held ? "Held — the board is not current" : view.enabled ? label : view.reason,
+    /* Icon-only tile, so the reason has to travel with the accessible NAME: a
+       title on an element with no text content is a description plenty of
+       operators never hear, and "why is this off" is the whole point of
+       rendering a disabled control instead of hiding it. */
+    "aria-label": busy ? label + "…" : view.enabled ? label : label + " — unavailable: " + view.reason,
+    dataset: { fkey: "sync-close:" + agent.id },
+    onclick: () => {
+      if (blocked) return;
+      sendSyncClose(agent, { target: "surface", id: view.surfaceId });
+    },
+  }, icon("close"));
+}
+
+/* The escalation envelope, read strictly or not at all.
+
+   `invalid_state` on the last surface in a workspace is the one refusal that
+   turns into a question for a person, and the question is "these agents die
+   too — still?". Answering it requires the workspace this is about and the
+   full casualty list, so a payload missing either is not downgraded into a
+   quieter dialog: it produces none.
+
+   The `length` check is the important line. Dropping entries the client cannot
+   name would render "No other agents share this workspace" over a list that
+   holds two of them — a fixture-shaped reply buying a confident sentence about
+   something nobody read. Partial understanding of the envelope is treated as
+   no understanding. */
+function syncCloseEscalation(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const workspaceId = typeof raw.workspaceId === "string" ? raw.workspaceId.trim() : "";
+  if (!workspaceId || !Array.isArray(raw.siblingAgents)) return null;
+  const siblingAgents = raw.siblingAgents
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return null;
+      const id = typeof entry.id === "string" ? entry.id.trim() : "";
+      const name = (typeof entry.name === "string" ? entry.name.trim() : "") || id;
+      return name ? { id, name } : null;
+    })
+    .filter(Boolean);
+  if (siblingAgents.length !== raw.siblingAgents.length) return null;
+  return { workspaceId, siblingAgents };
+}
+
+/* What a reply MEANS, separated from what is done about it so the classification
+   is testable without a DOM and cannot drift between the two call sites. HTTP
+   completion is never a close: only `ok === true` is. */
+function syncCloseVerdict(reply) {
+  const body = reply && reply.body && typeof reply.body === "object" ? reply.body : null;
+  if (body && body.ok === true) return { kind: "ok", message: "Terminal closed." };
+  if (body && body.ok === false) {
+    const code = typeof body.code === "string" ? body.code : "";
+    if (code === "invalid_state" || code === "confirm_required") {
+      const escalation = syncCloseEscalation(body.escalation);
+      if (escalation) return { kind: "escalate", code, escalation };
+      return { kind: "failed", message: "Close refused (" + code + ") without naming the workspace it would take. Nothing was closed." };
+    }
+    const detail = typeof body.detail === "string" && body.detail ? ": " + body.detail : "";
+    return { kind: "failed", message: "Close refused" + (code ? " (" + code + ")" : "") + detail };
+  }
+  return { kind: "failed", message: "Close failed: the server answered HTTP " + (reply && reply.status) + " with an unexpected response." };
+}
+
+/* The one writer. Both envelopes go through here, so the pending key, the
+   feedback record and the escalation branch cannot disagree between the tile
+   and the dialog's confirm. */
+async function sendSyncClose(agent, body) {
+  const key = agent.id + ":sync-close";
+  if (state.pending.has(key)) return;
+  state.pending.add(key);
+  state.feedback.delete(agent.id);
+  render();
+
+  let verdict;
+  try {
+    const res = await apiFetch("/api/sync/close", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }, API_WRITE_TIMEOUT_MS);
+    let payload = null;
+    try { payload = await res.json(); } catch { /* non-JSON body */ }
+    verdict = syncCloseVerdict({ status: res.status, body: payload });
+  } catch (err) {
+    verdict = { kind: "failed", message: err && err.message ? err.message : "Close failed" };
+  }
+
+  state.pending.delete(key);
+  if (verdict.kind === "escalate") {
+    /* Not an error, and never retried: cmux refusing to strand a workspace is
+       the signal that a bigger decision is due. No toast either — a failure
+       affordance beside a dialog asking for a decision reads as "something went
+       wrong", and nothing has. */
+    state.syncClose = { agentId: agent.id, code: verdict.code, ...verdict.escalation };
+    render();
+    focusSyncCloseCancel(agent);
+    return;
+  }
+  state.syncClose = null;
+  state.feedback.set(agent.id, { ok: verdict.kind === "ok", action: "sync-close", message: verdict.message });
+  render();
+  toast(verdict.message.split("\n")[0], verdict.kind === "ok" ? "ok" : "err");
+}
+
+/* After the repaint, never before: the node this handler was built on is
+   detached by then, and focusing a detached element is a silent no-op that
+   lands the operator on <body>. */
+function focusSyncCloseCancel(agent) {
+  if (typeof document === "undefined" || !document.querySelector) return;
+  const node = document.querySelector(`[data-fkey="sync-close-cancel:${CSS.escape(agent.id)}"]`);
+  if (node && node.focus) node.focus();
+}
+
+function cancelSyncClose() {
+  state.syncClose = null;
+  render();
+}
+
+const SYNC_CLOSE_LEDE = {
+  invalid_state: "This is the last terminal in its workspace, so cmux will not close it on its own. Closing the workspace closes everything in it.",
+  confirm_required: "Closing a workspace closes every terminal in it.",
+};
+
+/* The escalation dialog. It exists to state a cost before it is paid, so every
+   sentence in it is either the route's own data or a fact about what the
+   confirm button does — no reassurance, no summary of what was attempted.
+
+   Modal in the ARIA sense (role + aria-modal) and in the keyboard sense: Tab is
+   trapped between the two buttons and Escape cancels. Escape stops here rather
+   than bubbling, because the board's own Escape chain would otherwise carry on
+   past a cancelled dialog and close the drawer behind it. */
+function renderSyncCloseDialog(agent) {
+  const record = state.syncClose;
+  if (!agent || !record || record.agentId !== agent.id) return null;
+  const siblings = record.siblingAgents || [];
+  const busy = state.pending.has(agent.id + ":sync-close");
+  const titleId = "sync-close-title-" + agent.id;
+
+  const cancel = el("button", {
+    type: "button",
+    class: "btn sync-close-cancel",
+    dataset: { fkey: "sync-close-cancel:" + agent.id },
+    onclick: () => cancelSyncClose(),
+  }, "Cancel");
+  const confirm = el("button", {
+    type: "button",
+    class: "btn sync-close-confirm",
+    disabled: busy ? "" : null,
+    "aria-busy": busy ? "true" : null,
+    dataset: { fkey: "sync-close-confirm:" + agent.id },
+    onclick: () => sendSyncClose(agent, { target: "workspace", id: record.workspaceId, confirm: true }),
+  }, busy ? "Closing…" : "Close workspace");
+  const stops = [cancel, confirm];
+
+  const roster = siblings.length
+    ? el("div", { class: "sync-close-siblings" },
+      el("p", { class: "sync-close-siblings-lead", text: siblings.length === 1
+        ? "One other agent is working in this workspace and closes with it:"
+        : siblings.length + " other agents are working in this workspace and close with it:" }),
+      el("ul", { class: "sync-close-sibling-list" },
+        ...siblings.map((sibling) => el("li", { class: "sync-close-sibling", text: sibling.name }))))
+    : el("p", { class: "sync-close-siblings-empty", text: "No other agents share this workspace." });
+
+  return el("div", {
+    class: "sync-close-dialog",
+    role: "dialog",
+    "aria-modal": "true",
+    "aria-labelledby": titleId,
+    onkeydown: (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        cancelSyncClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      event.preventDefault();
+      /* The stops are the dialog's own nodes rather than a selector query: the
+         trap must hold on the elements this paint built, and a query would also
+         reach whatever the board left behind it. */
+      const at = stops.indexOf(typeof document !== "undefined" ? document.activeElement : null);
+      const next = event.shiftKey
+        ? stops[(at <= 0 ? stops.length : at) - 1]
+        : stops[(at + 1) % stops.length];
+      if (next && next.focus) next.focus();
+    },
+  },
+    el("div", { class: "sync-close-inner" },
+      el("h2", { id: titleId, class: "sync-close-title", text: "Close " + agentName(agent) + "’s workspace?" }),
+      el("p", { class: "sync-close-lede", text: SYNC_CLOSE_LEDE[record.code] || SYNC_CLOSE_LEDE.confirm_required }),
+      roster,
+      el("p", { class: "sync-close-warning", text: "Closing a workspace cannot be undone." }),
+      el("div", { class: "sync-close-actions" }, cancel, confirm)));
 }
 
 function sourceWorkspaceLabel(target) {
@@ -12077,6 +13082,86 @@ async function sendControl(agent, action, instruction) {
   refreshActions(); // the server just journalled this attempt — success or not
 }
 
+/* ---------- SYNC-NF · the two writes ----------
+
+   `/api/sync/notifications` carries a clear through the server's action funnel
+   to cmux; `/api/sync/ack/:agentId` writes the operator's board-local judgment
+   and never touches cmux at all. They share one request shape because they
+   share one honesty rule: HTTP completion is not evidence. cmux answers a wrong
+   parameter with exit code 0 and does nothing, so the server surfaces its
+   refusals as a typed `ActionResult` and this believes `ok` only when the
+   envelope says so in a boolean. Anything else is a refusal with a name.
+
+   In-flight keys live here rather than in client-state.js: they are this file's
+   own bookkeeping, and the shared state object is contended by three lanes. */
+
+const syncPending = new Set(); // "ack:<agentId>" | "notify:<notificationId>"
+
+async function syncRequest(url, method, body) {
+  try {
+    const res = await apiFetch(url, {
+      method,
+      headers: body ? { "content-type": "application/json" } : { accept: "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+    }, API_WRITE_TIMEOUT_MS);
+    let envelope = null;
+    try { envelope = await res.json(); } catch { /* a build without the route answers HTML */ }
+    if (envelope && envelope.ok === true) return { ok: true };
+    return {
+      ok: false,
+      // The server's own refusal class when it named one ("invalid_state"), and
+      // the status when it did not — never a bare "failed" with no handle on it.
+      code: (envelope && typeof envelope.code === "string" && envelope.code) || "HTTP_" + res.status,
+      detail: (envelope && typeof envelope.detail === "string" && envelope.detail) || "",
+    };
+  } catch (err) {
+    return { ok: false, code: "unreachable", detail: err && err.message ? err.message : "network error" };
+  }
+}
+
+function syncFailureText(what, result) {
+  return what + " failed [" + result.code + "]" + (result.detail ? ": " + result.detail : "");
+}
+
+/* One notification, by its own id. The `all` / `all_read` / `tab_id` variants of
+   cmux's vocabulary are deliberately unreachable from here: a board control
+   that cleared every terminal notification on the machine is not a control an
+   operator can take back. */
+async function clearCmuxNotification(id, action) {
+  const key = "notify:" + id;
+  if (syncPending.has(key)) return { ok: false, code: "pending" };
+  syncPending.add(key);
+  render();
+  const result = await syncRequest("/api/sync/notifications", "POST", { action, id });
+  syncPending.delete(key);
+  // The badge is a reading off the snapshot, so re-reading it is what makes the
+  // count visibly drop — nothing here edits the client's copy of the list.
+  if (result.ok) await fetchSnapshot();
+  else toast(syncFailureText(action === "dismiss" ? "Dismiss" : "Mark read", result), "err");
+  render();
+  return result;
+}
+
+async function applySyncAck(agent, on) {
+  const agentId = agent && agent.id;
+  if (!agentId) return { ok: false, code: "no_agent" };
+  const key = "ack:" + agentId;
+  if (syncPending.has(key)) return { ok: false, code: "pending" };
+  syncPending.add(key);
+  render();
+  const result = await syncRequest("/api/sync/ack/" + encodeURIComponent(agentId), on ? "PUT" : "DELETE");
+  syncPending.delete(key);
+  /* Same re-read, same reason, and here it is the WHOLE mechanism: the client
+     keeps no ack of its own, so the row leaves (or rejoins) the strip only
+     because the next snapshot's `acks` says so. A refused ack therefore moves
+     nothing at all, which is exactly right — the operator's judgment did not
+     land, so the board must not act as though it had. */
+  if (result.ok) await fetchSnapshot();
+  else toast(syncFailureText(on ? "Ack" : "Unack", result), "err");
+  render();
+  return result;
+}
+
 /* ---------- presentation labels (source identities stay authoritative) ---------- */
 
 async function fetchLabels() {
@@ -12095,6 +13180,26 @@ async function fetchLabels() {
     console.warn("label fetch failed:", err);
   } finally {
     state.labelsLoading = false;
+  }
+}
+
+/* TINT-F. One fetch at boot, and one after every colour an operator picks.
+   There is deliberately no poll: an assignment only changes when a repository
+   the board has never seen appears — which is a fresh GET's own doing, since
+   this endpoint is what assigns it — or when somebody presses a swatch. A
+   failure here costs the tint and nothing else, so it warns and leaves the
+   board uncoloured rather than reaching for a fallback palette the cmux
+   workspaces would not be wearing. */
+async function fetchRepoColors() {
+  try {
+    const res = await apiFetch("/api/repo-colors", { headers: { accept: "application/json" } }, API_READ_TIMEOUT_MS);
+    const body = await res.json();
+    if (!res.ok || !body || body.ok !== true || !body.settings) throw new Error("bad repo-colour response");
+    setRepoColors(body.repoNames, body.settings);
+    state.repoColorSettings = body.settings;
+    render();
+  } catch (err) {
+    console.warn("repo colour fetch failed:", err);
   }
 }
 
@@ -12988,6 +14093,7 @@ function boot() {
 
   fetchSnapshot();
   fetchLabels();
+  void fetchRepoColors();
   fetchTriageQueue();
   // One attempt at boot. It populates the drawer's "last action" fact, and on a
   // build without the route it latches available=false so nothing retries it.
@@ -13020,6 +14126,8 @@ Object.assign(globalThis.TheAntHill, {
   // Declared below the first export block, so they would be a TDZ error there —
   // same reason CONN_LABELS and the transcript limits live down here.
   settingsPreview, settingsPreviewText, SETTINGS_PRESETS, renderSettingsPanel,
+  // TINT-F: the repo-colour region and its one write.
+  renderRepoColorSettings, putRepoColor,
   passesLookback, isUnverified,
   // `const`s, so they would be a TDZ error in the hoisted block above.
   STRIP_ID, SECTION_HEADS,
@@ -13042,11 +14150,15 @@ Object.assign(globalThis.TheAntHill, {
   // is no way to assert the behaviour without both ends.
   state,
   // Request/confirmation logic. Each one is driven in tests with a fake fetch.
-  apiFetch, sendControl, recollectSnapshot, fetchSnapshot,
+  apiFetch, sendControl, sendSyncClose, recollectSnapshot, fetchSnapshot,
   applySnapshot, applySnapshotDelta, handleEventPayload, handleDeltaPayload, tickFreshnessSurfaces,
   syncInspectorViewportHeight,
   triageIssue, removeTriageItem, fetchTriageQueue,
   fetchLabels, submitRename, startRename,
+  // SYNC-RF: the cmux workspace rename path, driven end to end against a fake
+  // fetch — the gate, the editor, the POST, and the refusal vocabulary.
+  renameableWorkspace, renderWorkspaceRename,
+  startWorkspaceRename, cancelWorkspaceRename, submitWorkspaceRename, syncRenameErrorText,
   loadTranscript, loadActions, applyAttention,
   // Surfaces added this wave, plus the const limits FE-C had to leave out.
   // Startup path + the server-health probe, driven for real by tests.
@@ -13057,6 +14169,17 @@ Object.assign(globalThis.TheAntHill, {
   TRANSCRIPT_DEFAULT_LIMIT, TRANSCRIPT_MAX_LIMIT, TRANSCRIPT_RENDER_CAP,
   ACTIONS_DEFAULT_LIMIT, ACTIONS_MAX_LIMIT,
   ATTENTION_SNOOZE_MS, API_READ_TIMEOUT_MS, API_TRANSCRIPT_TIMEOUT_MS, API_WRITE_TIMEOUT_MS,
+  /* SYNC-NF. The snapshot readers, the two writes and the surfaces they paint.
+     `syncPending` is here for the same reason `state` is: the request functions
+     write it and the renderers read it, so a disabled control mid-flight is not
+     assertable without both ends. `notifyPanelPaintSig` joins the surface it
+     signs — the unread set is not in the panel model, so the guard against a
+     cleared notification staying on screen has to be exercised directly. */
+  unreadCmuxByWorkspace, unreadCmuxNotifications, agentUnreadCmux,
+  ackedIds, ackedAgent, stripAlerting, acknowledgedCount,
+  cmuxBadgeNode, ackedMarkNode, syncAckButton, acknowledgedClause,
+  renderCmuxNotifySection, cmuxNotifyRow, notifyPanelPaintSig,
+  clearCmuxNotification, applySyncAck, syncRequest, syncFailureText, syncPending,
 });
 
 if (typeof document !== "undefined" && typeof window !== "undefined") {

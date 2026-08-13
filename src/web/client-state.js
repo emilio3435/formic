@@ -131,6 +131,14 @@ export const state = {
   renameDraft: "",
   renamePending: false,
   renameError: "",
+  /* SYNC-RF — the cmux workspace-rename editor. Separate from the presentation
+     label state above because it writes another process through
+     /api/sync/rename and can be refused; `wsRenaming` holds the workspace id
+     being edited, never a presentation-label key. */
+  wsRenaming: null,
+  wsRenameDraft: "",
+  wsRenamePending: false,
+  wsRenameError: "",
   programOverrides: new Map(), // programId -> "open" | "closed"
   /* Which repositories the operator has folded up. Keyed by repoKey — the FNV
      of the git common dir, which is stable across every worktree of the repo
@@ -184,6 +192,11 @@ export const state = {
   notify: { enabled: false, permission: "default", seen: null, baseTitle: "" },
   drafts: new Map(),      // agentId -> instruct draft text
   confirming: null,       // instance fkey: `[head:]act:${agentId}:${action}`
+  /* SYNC-CF: the open close-escalation dialog, or null. Set only from a route
+     refusal the client could fully read — { agentId, code, workspaceId,
+     siblingAgents: [{id, name}] } — so the dialog can never name a workspace or
+     a casualty list this board made up. */
+  syncClose: null,
   pending: new Set(),     // `${agentId}:${action}`
   feedback: new Map(),    // agentId -> { ok, action, message }
   triage: new Map(),      // issueId -> recommendation

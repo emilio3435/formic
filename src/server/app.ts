@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import type { AgentSnapshot, HubSnapshot, ProgramSnapshot, TriageQueueItem } from "../shared/types";
+import { alertFingerprintFor, MemoryAckStore, type AckStore } from "./ack";
 import { ARCHIVE_RETENTION_MS, MAX_ARCHIVE_RECORDS } from "./archive";
 import { handleBroadcastRequest } from "./broadcast";
 import { handleUsageRequest } from "./burnbar";
@@ -9,10 +10,13 @@ import { CleanupProposeError, type CleanupProposer } from "./cleanup-propose";
 import { CLEANER_NAME, CleanupLaunchError, type CleanupLaunch, type CleanupLauncher } from "./cleanup-launch";
 import {
   defaultAttentionStore,
+  DEFAULT_CMUX_EXECUTABLE,
   MemoryAttentionStore,
+  cmuxCommand,
   type AttentionAction,
   type AttentionStore,
 } from "./cmux";
+import { closeSurface, closeWorkspace, configureCmuxActions, dismissNotification, markNotificationRead, renameWorkspace } from "./cmux-actions";
 import { identityDebugResponse, transcriptResponse } from "./debug-identity";
 import { sessionCallsResponse } from "./session-calls";
 import { readPublishState, type PublishState } from "./publish-state";
@@ -20,7 +24,26 @@ import { canWriteToTarget } from "./targets";
 import { modelConfigLoadError } from "./model-config";
 import { handleControlRequest } from "./http";
 import { handleProgramAliasRequest, type ProgramAliasStore } from "./program-aliases";
-import { DEFAULT_SCAN_WINDOW_HOURS, handleSettingsRequest, type JsonSettingsStore } from "./settings";
+import {
+  DEFAULT_SCAN_WINDOW_HOURS,
+  handleSettingsRequest,
+  type JsonSettingsStore,
+  /* TINT-F */
+  handleRepoColorsRequest,
+  JsonRepoColorsStore,
+  memorySettingsFiles,
+  repoColorDiscovery,
+  type RepoColorDiscovery,
+} from "./settings";
+/* TINT-F */
+import { setWorkspaceColor, setGroupColor, lastWrittenHex } from "./cmux-color";
+/* TINT integration wiring (master) */
+import {
+  registerRepoGroupInputs,
+  JsonRepoGroupProvenanceStore,
+  MemoryRepoGroupProvenanceStore,
+} from "./cmux-groups";
+import { repoKeyForCwd, sameHex } from "../shared/repo-color";
 import { snapshotFingerprint } from "./snapshot";
 import { handleTriageRequest, MemoryTriageQueueStore, type TriageInvestigationRunner, type TriageQueueStore } from "./triage";
 import type { ArchiveStore, CmuxSurface, CommandRunner } from "./types";
@@ -325,10 +348,16 @@ export interface MountainAppDependencies {
   archiveStore: ArchiveStore;
   actionLogStore?: ActionLogStore;
   attentionStore?: AttentionStore;
+  ackStore?: AckStore;
   triageStore?: TriageQueueStore;
   triageRunner?: TriageInvestigationRunner;
   programAliasStore?: ProgramAliasStore;
   settingsStore?: JsonSettingsStore;
+  /* TINT-F — repo colour assignments. Defaults to the shipped JSON file when
+     the web root is the shipped one, and to memory everywhere else. */
+  repoColorsStore?: JsonRepoColorsStore;
+  /** TINT-F test seam: skip the cmux fan-out so route tests write nothing. */
+  repoColorFanOut?: (writes: readonly { workspaceId: string; hex: string }[]) => void | Promise<void>;
   cleanupProposer?: CleanupProposer;
   cleanupLauncher?: CleanupLauncher;
   /** Delay between Cleaner publication checks; zero keeps route tests deterministic. */
@@ -372,6 +401,67 @@ function limitFrom(url: URL, fallback: number, maximum: number): number | Respon
     return responseError(400, "INVALID_LIMIT", `limit must be an integer between 1 and ${maximum}.`);
   }
   return Number(raw);
+}
+
+/* TINT-F — repo colours: discovery, the default store, and the fan-out.
+
+   Kept beside the route it serves for the same reason defaultActionLogStore is:
+   a store that only makes sense for one endpoint. The git call behind
+   repoKeyForCwd is memoized by worktree path — the endpoint runs on every board
+   poll and the fleet routinely carries forty agents across a dozen checkouts,
+   which would be forty `git rev-parse` spawns a poll. A worktree's repository
+   does not change under it; a restart re-reads them all. */
+const repoKeyByWorktree = new Map<string, string | null>();
+
+function cachedRepoKey(worktreePath: string): string | null {
+  let key = repoKeyByWorktree.get(worktreePath);
+  if (key === undefined) {
+    key = repoKeyForCwd(worktreePath);
+    repoKeyByWorktree.set(worktreePath, key);
+  }
+  return key;
+}
+
+export function resetRepoKeyCache(): void {
+  repoKeyByWorktree.clear();
+}
+
+/* Workspaces come from the collector's own resolved bindings — an agent's
+   `target.workspaceId` — and from nowhere else. That is what keeps GROUP ANCHOR
+   workspaces out of the fan-out once mirrorGroups is on: `workspace.group.create`
+   also mints an anchor row carrying the group's cwd, which looks repo-mapped
+   from `workspace.list` but holds no session, so no agent ever points at it and
+   it never reaches this walk. TINT-S filters anchors at the collector; anything
+   here that started enumerating workspaces directly would have to filter them
+   again, and writing a colour to an anchor is a defect the sync then fights. */
+function discoverRepoColors(snapshot: HubSnapshot): RepoColorDiscovery {
+  return repoColorDiscovery(snapshot.programs.flatMap((program) =>
+    program.agents.flatMap((agent) => {
+      const worktreePath = agent.repo?.worktreePath;
+      if (!worktreePath) return [];
+      return [{
+        repoKey: cachedRepoKey(worktreePath),
+        repoName: agent.repo?.repoName,
+        workspaceId: agent.target?.workspaceId,
+      }];
+    })));
+}
+
+function defaultRepoColorsStore(webRoot: string): Promise<JsonRepoColorsStore> {
+  const productionWebRoot = resolve(import.meta.dir, "../web");
+  return resolve(webRoot) === productionWebRoot
+    ? JsonRepoColorsStore.open(resolve(productionWebRoot, "../../data/repo-colors.json"))
+    : JsonRepoColorsStore.open("repo-colors.json", memorySettingsFiles());
+}
+
+async function fanOutRepoColors(writes: readonly { workspaceId: string; hex: string }[]): Promise<void> {
+  /* Only what has changed since this process last wrote it. Re-asserting an
+     already-correct colour on every poll would be dozens of cmux round trips a
+     minute, and every one of them a chance for TINT-S to read an echo. */
+  for (const { workspaceId, hex } of writes) {
+    if (sameHex(lastWrittenHex(workspaceId), hex)) continue;
+    await setWorkspaceColor(workspaceId, hex, "board assignment");
+  }
 }
 
 function defaultActionLogStore(webRoot: string): Promise<ActionLogStore> {
@@ -475,6 +565,10 @@ async function recordBroadcastAction(
 }
 
 export function createMountainFetch(dependencies: MountainAppDependencies): MountainFetch {
+  configureCmuxActions({
+    runner: dependencies.runner,
+    ...(dependencies.cmuxExecutable ? { executable: dependencies.cmuxExecutable } : {}),
+  });
   const triageStore = dependencies.triageStore ?? new MemoryTriageQueueStore();
   const actionLogStore = dependencies.actionLogStore
     ? Promise.resolve(dependencies.actionLogStore)
@@ -484,6 +578,37 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
     : resolve(dependencies.webRoot) === resolve(import.meta.dir, "../web")
       ? defaultAttentionStore()
       : Promise.resolve(new MemoryAttentionStore());
+  /* TINT-F */
+  const repoColorsStore = dependencies.repoColorsStore
+    ? Promise.resolve(dependencies.repoColorsStore)
+    : defaultRepoColorsStore(dependencies.webRoot);
+  /* TINT integration wiring (master): the one call TINT-G left to the
+     integrator. The provider feeds the sidebar mirror from the same discovery
+     walk and store the /api/repo-colors endpoint uses, so the mirror and the
+     endpoint can never disagree about a repository's colour. Sync by contract:
+     store.get() is the cached settings and discovery reads the last snapshot —
+     the tick rides the collector poll, so both are at most one poll old. The
+     provider returns null until the store resolves; the tick treats null as
+     "not wired yet" and stays inert, so startup order cannot race. */
+  let repoColorsForGroups: JsonRepoColorsStore | undefined;
+  void repoColorsStore.then((store) => { repoColorsForGroups = store; });
+  const groupProvenance = resolve(dependencies.webRoot) === resolve(import.meta.dir, "../web")
+    ? JsonRepoGroupProvenanceStore.open(resolve(import.meta.dir, "../../data/repo-group-provenance.json"))
+    : Promise.resolve(new MemoryRepoGroupProvenanceStore());
+  void groupProvenance.then((provenance) => {
+    registerRepoGroupInputs(() => {
+      const store = repoColorsForGroups;
+      if (!store) return null;
+      const settings = store.get();
+      const discovery = discoverRepoColors(dependencies.state.get());
+      const targets = Object.entries(discovery.workspaces).flatMap(([workspaceId, repoKey]) => {
+        const assignment = settings.assignments[repoKey];
+        return assignment ? [{ workspaceId, repoKey, hex: assignment.hex }] : [];
+      });
+      return { mirrorGroups: settings.mirrorGroups, targets, setGroupColor };
+    }, provenance);
+  });
+  const ackStore = dependencies.ackStore ?? new MemoryAckStore(dependencies.now);
   const cleanupObserveIntervalMs = dependencies.cleanupObserveIntervalMs ?? CLEANER_OBSERVE_INTERVAL_MS;
   let recollectInFlight: Promise<HubSnapshot> | undefined;
   const recollect = (): Promise<HubSnapshot> => {
@@ -1136,6 +1261,18 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
         },
       });
     }
+    /* TINT-F routes — repo-identity colour. GET is the board's read (and the
+       pass that assigns a colour to any repository it has not seen yet); PUT
+       and DELETE are the operator's own colour for one repository. Both
+       mutating verbs are same-origin loopback, like every other mutating route
+       here, and the handler enforces it a second time. */
+    if (url.pathname === "/api/repo-colors" || url.pathname.startsWith("/api/repo-colors/")) {
+      return handleRepoColorsRequest(request, await repoColorsStore, {
+        discover: () => discoverRepoColors(dependencies.state.get()),
+        fanOut: dependencies.repoColorFanOut ?? fanOutRepoColors,
+      });
+    }
+    /* end TINT-F routes */
     if (url.pathname.startsWith("/api/usage/")) {
       return handleUsageRequest(request);
     }
@@ -1164,6 +1301,345 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
       }
       return response;
     }
+    /* SYNC routes — docs/superpowers/plans/2026-08-13-sync, shapes frozen in
+       00-MASTER-PLAN.md §Contract. Every route here is same-origin-loopback
+       gated like its siblings above, and every cmux mutation behind them goes
+       through src/server/cmux-actions.ts (the funnel), never a direct shell.
+         SYNC-CB: POST /api/sync/close
+         SYNC-NB: POST /api/sync/notifications · PUT/DELETE /api/sync/ack/:agentId
+         SYNC-RB: POST /api/sync/rename */
+    if (url.pathname === "/api/sync/rename") {
+      if (request.method !== "POST") {
+        return responseError(405, "METHOD_NOT_ALLOWED", "Use POST for workspace rename.");
+      }
+      if (!sameOriginLoopback(request)) {
+        return responseError(
+          403,
+          "ORIGIN_REJECTED",
+          "Workspace rename requires an exact same-origin loopback Origin header.",
+        );
+      }
+      const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+      if (contentType !== "application/json") {
+        return responseError(415, "CONTENT_TYPE_REJECTED", "Workspace rename requires application/json.");
+      }
+      const body = await jsonRecord(request);
+      if (
+        !body
+        || Object.keys(body).some((key) => key !== "workspaceId" && key !== "title")
+        || typeof body.workspaceId !== "string"
+        || !body.workspaceId.trim()
+        || body.workspaceId.length > 300
+        || typeof body.title !== "string"
+      ) {
+        return responseError(
+          400,
+          "INVALID_RENAME_REQUEST",
+          "Body must contain only a non-empty workspaceId and a string title.",
+        );
+      }
+
+      const workspaceId = body.workspaceId.trim();
+      const title = body.title.trim();
+      const currentTitle = dependencies.state.get().programs
+        .flatMap((program) => program.agents)
+        .find((agent) => agent.target.workspaceId === workspaceId)
+        ?.target.workspaceTitle
+        ?? dependencies.state.surfaces?.()
+          .find((surface) => surface.workspaceId === workspaceId)
+          ?.workspaceTitle;
+      const result = title && currentTitle?.trim() === title
+        ? { ok: true }
+        : await renameWorkspace(workspaceId, body.title, "board rename");
+      const status = result.ok
+        ? 200
+        : result.code === "not_found"
+          ? 404
+          : result.code === "invalid_title" || result.code === "invalid_workspace"
+            ? 400
+            : result.code === "unavailable" || result.code === "timeout"
+              ? 503
+              : result.code === "cmux_error" || result.code === "invalid_response"
+                ? 502
+                : 409;
+      return Response.json(result, {
+        status,
+        headers: { ...SECURITY_HEADERS, "cache-control": "no-store" },
+      });
+    }
+    if (url.pathname === "/api/sync/notifications") {
+      if (request.method !== "POST") {
+        return responseError(405, "METHOD_NOT_ALLOWED", "Use POST for cmux notification changes.");
+      }
+      if (!sameOriginLoopback(request)) {
+        return responseError(403, "ORIGIN_REJECTED", "Notification changes require an exact same-origin loopback Origin header.");
+      }
+      if (request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+        return responseError(415, "CONTENT_TYPE_REJECTED", "Notification changes require application/json.");
+      }
+      const body = await jsonRecord(request);
+      const keys = body ? Object.keys(body) : [];
+      const action = body?.action;
+      const id = body?.id;
+      if (
+        keys.length !== 2
+        || !keys.includes("action")
+        || !keys.includes("id")
+        || (action !== "mark_read" && action !== "dismiss")
+        || typeof id !== "string"
+        || !id.trim()
+        || id.length > 300
+      ) {
+        return responseError(
+          400,
+          "INVALID_NOTIFICATION_REQUEST",
+          "Body must contain exactly action (mark_read or dismiss) and a non-empty notification id.",
+        );
+      }
+      const result = action === "mark_read"
+        ? await markNotificationRead(id)
+        : await dismissNotification(id);
+      return Response.json(result, {
+        status: result.ok ? 200 : result.code === "invalid_state" ? 409 : 502,
+        headers: { ...SECURITY_HEADERS, "cache-control": "no-store" },
+      });
+    }
+    if (url.pathname.startsWith("/api/sync/ack/")) {
+      if (request.method !== "PUT" && request.method !== "DELETE") {
+        return responseError(405, "METHOD_NOT_ALLOWED", "Use PUT to Ack or DELETE to unack an agent alert.");
+      }
+      if (!sameOriginLoopback(request)) {
+        return responseError(403, "ORIGIN_REJECTED", "Ack changes require an exact same-origin loopback Origin header.");
+      }
+      const encodedAgentId = url.pathname.slice("/api/sync/ack/".length);
+      let agentId: string;
+      try {
+        agentId = decodeURIComponent(encodedAgentId);
+      } catch {
+        return responseError(400, "INVALID_AGENT_ID", "The Ack route contains an invalid encoded agent id.");
+      }
+      if (!agentId || agentId.length > 300 || agentId.includes("/")) {
+        return responseError(400, "INVALID_AGENT_ID", "Ack requires one non-empty agent id no longer than 300 characters.");
+      }
+      try {
+        if (request.method === "PUT") {
+          const agent = dependencies.state.get().programs
+            .flatMap((program) => program.agents)
+            .find((candidate) => candidate.id === agentId);
+          if (!agent) return responseError(404, "AGENT_NOT_FOUND", "The agent is not present in the current snapshot.");
+          const alertFingerprint = alertFingerprintFor(agent);
+          if (!alertFingerprint) {
+            return responseError(409, "AGENT_NOT_ALERTING", "Only an agent with a current alert can be acknowledged.");
+          }
+          const ack = await ackStore.put(agentId, alertFingerprint);
+          try {
+            await dependencies.state.refresh();
+          } catch (error) {
+            return responseError(
+              500,
+              "ACK_REFRESH_FAILED",
+              `Ack was persisted, but the snapshot refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+          return Response.json(
+            { ok: true, ack },
+            { headers: { ...SECURITY_HEADERS, "cache-control": "no-store" } },
+          );
+        }
+        await ackStore.delete(agentId);
+        try {
+          await dependencies.state.refresh();
+        } catch (error) {
+          return responseError(
+            500,
+            "ACK_REFRESH_FAILED",
+            `Ack was removed, but the snapshot refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+        return Response.json(
+          { ok: true, agentId },
+          { headers: { ...SECURITY_HEADERS, "cache-control": "no-store" } },
+        );
+      } catch (error) {
+        return responseError(
+          500,
+          "ACK_WRITE_FAILED",
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    }
+    if (url.pathname === "/api/sync/close") {
+      if (request.method !== "POST") {
+        return responseError(405, "METHOD_NOT_ALLOWED", "Use POST for sync close requests.");
+      }
+      if (!sameOriginLoopback(request)) {
+        return responseError(403, "ORIGIN_REJECTED", "Sync close requests require an exact same-origin loopback Origin header.");
+      }
+      if (request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+        return responseError(415, "CONTENT_TYPE_REJECTED", "Sync close requests require application/json.");
+      }
+      const body = await jsonRecord(request);
+      const keys = body ? Object.keys(body) : [];
+      if (
+        !body ||
+        (body.target !== "surface" && body.target !== "workspace") ||
+        typeof body.id !== "string" ||
+        !body.id.trim() ||
+        body.id.length > 300 ||
+        (body.confirm !== undefined && typeof body.confirm !== "boolean") ||
+        keys.some((key) => !["target", "id", "confirm"].includes(key))
+      ) {
+        return responseError(
+          400,
+          "INVALID_SYNC_CLOSE_REQUEST",
+          "Body must contain target surface or workspace and a non-empty id; confirm is the only optional field.",
+        );
+      }
+
+      const target = body.target as "surface" | "workspace";
+      const id = body.id;
+      const agents = dependencies.state.get().programs.flatMap((program) => program.agents);
+      const liveAgents = agents.filter((agent) =>
+        agent.activity !== "ended" && agent.lifecycle !== "finished" && agent.status !== "archived"
+      );
+      const nameOf = (agent: AgentSnapshot): string => agent.identity?.name ?? agent.displayName;
+      const escalation = (
+        workspaceId: string,
+        excludeSurfaceId?: string,
+      ): { workspaceId: string; siblingAgents: { id: string; name: string }[] } => ({
+        workspaceId,
+        siblingAgents: liveAgents.flatMap((agent) =>
+          agent.target.resolution === "exact" &&
+          agent.target.workspaceId === workspaceId &&
+          agent.target.surfaceId !== excludeSurfaceId
+            ? [{ id: agent.id, name: nameOf(agent) }]
+            : []
+        ),
+      });
+      const syncResponse = (value: object, status = 200): Response => Response.json(
+        value,
+        { status, headers: { ...SECURITY_HEADERS, "cache-control": "no-store" } },
+      );
+
+      configureCmuxActions({
+        runner: dependencies.runner,
+        executable: dependencies.cmuxExecutable ?? DEFAULT_CMUX_EXECUTABLE,
+      });
+
+      if (target === "surface") {
+        const agent = liveAgents.find((candidate) =>
+          candidate.target.resolution === "exact" && candidate.target.surfaceId === id
+        );
+        const workspaceId = agent?.target.workspaceId;
+        if (!workspaceId) {
+          return syncResponse({
+            ok: false,
+            code: "target_not_found",
+            detail: "No live agent has an exact snapshot binding to this surface.",
+          }, 409);
+        }
+        const result = await closeSurface(id, "board close");
+        if (!result.ok && result.code === "invalid_state") {
+          return syncResponse({
+            ...result,
+            escalation: escalation(workspaceId, id),
+          }, 409);
+        }
+        return syncResponse(result, result.ok ? 200 : 502);
+      }
+
+      /* Group anchors are materialized as workspaces, so an arbitrary id from
+         curl can name one even though no agent row ever binds to it. Group
+         lists are window-scoped: enumerate every window and pass window_id,
+         then refuse before the mutation funnel if any group owns this id. */
+      const executable = dependencies.cmuxExecutable ?? DEFAULT_CMUX_EXECUTABLE;
+      const readList = async (
+        method: "window.list" | "workspace.group.list",
+        params: Record<string, unknown>,
+        collection: "windows" | "groups",
+      ): Promise<{ values?: Record<string, unknown>[]; failure?: string }> => {
+        const result = await dependencies.runner.run(
+          cmuxCommand(executable, ["rpc", method, JSON.stringify(params)]),
+          10_000,
+        );
+        if (result.timedOut) return { failure: `${method} timed out` };
+        if (result.exitCode !== 0 || result.stderr.trim()) {
+          return {
+            failure: `${method} exited ${result.exitCode}: ${result.stderr.trim() || result.stdout.trim() || "no detail"}`,
+          };
+        }
+        try {
+          const parsed = JSON.parse(result.stdout) as unknown;
+          const root = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+            ? parsed as Record<string, unknown>
+            : undefined;
+          const nested = root?.result && typeof root.result === "object" && !Array.isArray(root.result)
+            ? root.result as Record<string, unknown>
+            : root;
+          const values = nested?.[collection];
+          return Array.isArray(values)
+            ? { values: values.filter(
+                (value): value is Record<string, unknown> =>
+                  value !== null && typeof value === "object" && !Array.isArray(value),
+              ) }
+            : { failure: `${method} response did not contain ${collection}` };
+        } catch (error) {
+          return { failure: `${method} returned invalid JSON: ${error instanceof Error ? error.message : String(error)}` };
+        }
+      };
+
+      const windows = await readList("window.list", {}, "windows");
+      if (windows.failure) {
+        return syncResponse({ ok: false, code: "anchor_check_failed", detail: windows.failure }, 503);
+      }
+      const anchorWorkspaceIds = new Set<string>();
+      for (const window of windows.values ?? []) {
+        const windowId = [window.id, window.window_id].find(
+          (value): value is string => typeof value === "string" && value.length > 0,
+        );
+        if (!windowId) continue;
+        const groups = await readList(
+          "workspace.group.list",
+          { window_id: windowId },
+          "groups",
+        );
+        if (groups.failure) {
+          return syncResponse({ ok: false, code: "anchor_check_failed", detail: groups.failure }, 503);
+        }
+        for (const group of groups.values ?? []) {
+          const anchor = group.anchor_workspace_id ?? group.anchorWorkspaceId;
+          if (typeof anchor === "string" && anchor.length > 0) anchorWorkspaceIds.add(anchor);
+        }
+      }
+      if (anchorWorkspaceIds.has(id)) {
+        return syncResponse({
+          ok: false,
+          code: "anchor",
+          detail: "Group-anchor workspaces cannot be closed by sync.",
+        }, 409);
+      }
+
+      const workspaceAgents = liveAgents.filter((agent) =>
+        agent.target.resolution === "exact" && agent.target.workspaceId === id
+      );
+      if (workspaceAgents.length === 0) {
+        return syncResponse({
+          ok: false,
+          code: "target_not_found",
+          detail: "No live agent has an exact snapshot binding to this workspace.",
+        }, 409);
+      }
+      const workspaceEscalation = escalation(id);
+      if (body.confirm !== true) {
+        return syncResponse({
+          ok: false,
+          code: "confirm_required",
+          escalation: workspaceEscalation,
+        }, 409);
+      }
+      const result = await closeWorkspace(id, "confirmed board close");
+      return syncResponse(result, result.ok ? 200 : 502);
+    }
     if (url.pathname.startsWith("/api/")) {
       return new Response("Not found", { status: 404, headers: SECURITY_HEADERS });
     }
@@ -1176,6 +1652,9 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
   fetch.dispose = (): void => {
     if (disposed) return;
     disposed = true;
+    /* TINT integration wiring: drop the group-mirror provider with the app, so
+       a disposed test server cannot keep feeding the module-level tick. */
+    registerRepoGroupInputs(undefined);
     unsubscribe();
     unsubscribeTriage?.();
     for (const client of [...clients]) {
