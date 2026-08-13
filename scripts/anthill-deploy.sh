@@ -60,8 +60,51 @@ ANTHILL_REPO="$ROOT" bash "$ROOT/scripts/anthill-deploy-target.sh"
 echo "-> typecheck"
 bunx tsc --noEmit || { echo "tsc FAILED - not deploying." >&2; exit 1; }
 
-echo "-> tests"
-bun test || { echo "tests FAILED - not deploying." >&2; exit 1; }
+# The hermetic suite. Everything that can be decided from the code alone, and
+# the reason "broken code never reaches :4701" is still true below.
+echo "-> tests (hermetic)"
+bun run test:ci || { echo "tests FAILED - not deploying." >&2; exit 1; }
+
+# The four files that assert against THIS machine's live evidence — the running
+# board, real burn history, local lane branches. scripts/ci-tests.sh owns the
+# list and explains why they fail rather than skip on thin evidence.
+#
+# They are a separate phase because their red has two different meanings, and
+# the old single `bun test` could not tell them apart: the board's token
+# accounting genuinely disagreeing with BurnBar is a reason not to deploy, and
+# a quiet fleet with too few joined sessions to compare is not. Running the
+# whole suite meant a quiet morning blocked production entirely (2026-08-13:
+# the same two failures reproduced on the pre-merge commit, so nothing was wrong
+# with the candidate).
+#
+# So: still red by default, still blocking, and now escapable only by naming the
+# reason. The flag does not reach the hermetic phase above — a code regression
+# is not overridable, and the test suite pins that.
+echo "-> local-evidence gates"
+LOCAL_ONLY=()
+while IFS= read -r path; do LOCAL_ONLY+=("$path"); done < <(bash "$ROOT/scripts/ci-tests.sh" --local-only)
+if bun test "${LOCAL_ONLY[@]}"; then
+  echo "   local-evidence gates green"
+elif [ "${ANTHILL_DEPLOY_QUIET_FLEET:-0}" = "1" ]; then
+  echo "   local-evidence gates RED, OVERRIDDEN by ANTHILL_DEPLOY_QUIET_FLEET=1." >&2
+  echo "   Deploying with these UNVERIFIED on this machine:" >&2
+  printf '     - %s\n' "${LOCAL_ONLY[@]}" >&2
+else
+  {
+    echo "local-evidence gates FAILED - not deploying."
+    printf '  - %s\n' "${LOCAL_ONLY[@]}"
+    echo "These read live evidence (the board on :$PROD_PORT, real burn history,"
+    echo "local branches) and fail rather than skip when it is missing."
+    echo
+    echo "If they are red because a REGRESSION reached them, fix it — that is"
+    echo "what they are for. If they are red because the fleet is quiet and there"
+    echo "is not enough recorded usage to compare, deploy with:"
+    echo "  ANTHILL_DEPLOY_QUIET_FLEET=1 bash scripts/anthill-deploy.sh"
+    echo "Check which it is by running one directly, e.g."
+    echo "  bun test ${LOCAL_ONLY[0]:-tests/cross-source-token-agreement.test.ts}"
+  } >&2
+  exit 1
+fi
 
 echo "-> restart $LABEL"
 launchctl kickstart -k "gui/$(id -u)/$LABEL"

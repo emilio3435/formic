@@ -513,9 +513,15 @@ describe("DEPLOY.md is a rulebook the scripts actually enforce", () => {
     expect(deployScript).toContain("git status --porcelain --untracked-files=all");
     expect(deployScript).toContain("git fetch origin main:refs/remotes/origin/main");
     expect(deployScript).toContain("git rev-parse origin/main");
-    expect(deploy).toContain("Red `tsc` or `bun test` aborts the deploy");
+    expect(deploy).toContain("Red `tsc` or a red hermetic suite (`bun run test:ci`) aborts the deploy");
     expect(deployScript).toContain("bunx tsc --noEmit ||");
-    expect(deployScript).toContain("bun test ||");
+    expect(deployScript).toContain("bun run test:ci ||");
+    /* The local-evidence phase and its escape hatch are part of the promise now:
+       a doc describing only the old single gate would send an operator hunting
+       for a flag the script does not have, or hide one that it does. */
+    expect(deploy).toContain("ANTHILL_DEPLOY_QUIET_FLEET=1");
+    expect(deployScript).toContain("ANTHILL_DEPLOY_QUIET_FLEET");
+    expect(deploy).toContain("no flag overrides that");
     expect(deploy).toContain("then health-check");
     expect(deployScript).toContain("/api/health");
     expect(deploy).toContain("revert-through-main recovery");
@@ -711,14 +717,21 @@ describe("the executable scripts do what DEPLOY.md says they do", () => {
     /* The `||` form matters: under `set -e` a bare failure would also stop, but
        the explicit exit is what makes the abort loud instead of silent. */
     expect(deployScript).toMatch(/bunx tsc --noEmit \|\| \{[^}]*exit 1/);
-    expect(deployScript).toMatch(/bun test \|\| \{[^}]*exit 1/);
+    expect(deployScript).toMatch(/bun run test:ci \|\| \{[^}]*exit 1/);
     // Order: both gates precede the restart.
     const tscAt = deployScript.indexOf("bunx tsc --noEmit");
-    const testAt = deployScript.indexOf("bun test ||");
+    const testAt = deployScript.indexOf("bun run test:ci ||");
     const restartAt = deployScript.indexOf("launchctl kickstart");
     expect(tscAt).toBeGreaterThan(-1);
     expect(testAt).toBeGreaterThan(tscAt);
     expect(restartAt, "the restart no longer comes after both gates").toBeGreaterThan(testAt);
+    /* The quiet-fleet override forgives the local-evidence phase and nothing
+       else. If it ever moved above the hermetic gate it would become a way to
+       ship a red build, so its position is pinned here as well as exercised in
+       tests/anthill-deploy.test.ts. */
+    const overrideAt = deployScript.indexOf("ANTHILL_DEPLOY_QUIET_FLEET");
+    expect(overrideAt, "the quiet-fleet override left the script").toBeGreaterThan(-1);
+    expect(overrideAt, "the override now sits where it could skip the hermetic suite").toBeGreaterThan(testAt);
   });
 
   test("the preview script cannot land on the production port", () => {

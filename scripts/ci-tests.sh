@@ -31,6 +31,17 @@ LOCAL_ONLY=(
   tests/reference-docs.test.ts
 )
 
+# Print the list and stop. scripts/anthill-deploy.sh runs these four as its own
+# phase, and reading them from here keeps one copy of the list: a second copy in
+# the deploy script would drift the first time this one changed, and the drift
+# would be invisible until a deploy either skipped a gate or demanded a file
+# that no longer exists. Answers before the existence check below so the query
+# works from a checkout that has no tests/ at all.
+if [[ "${1:-}" == "--local-only" ]]; then
+  printf '%s\n' "${LOCAL_ONLY[@]}"
+  exit 0
+fi
+
 for path in "${LOCAL_ONLY[@]}"; do
   if [[ ! -f "$path" ]]; then
     echo "ci-tests: '$path' is excluded but does not exist — the list has rotted." >&2
