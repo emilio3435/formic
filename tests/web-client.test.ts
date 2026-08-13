@@ -4082,9 +4082,15 @@ describe("the command dock is grouped by what each control is for", () => {
     { action: "interrupt", enabled: true },
     { action: "archive", enabled: true },
   ];
+  /* SYNC-CF: `overrides` exists so a case can ask for a session with no close
+     affordance. Close is not a ControlCapability — it is gated on the target
+     resolution and on the board still watching the session — so a live agent
+     with an exact target now carries a cluster tile no `controls` list mentions,
+     and the cases below that are ABOUT the capability list say so explicitly. */
+  const ENDED = { lifecycle: "finished", status: "archived" };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const dockFor = (controls: unknown[], control = "linked"): any =>
-    withDom(() => M.renderCommandDock(agent({ controls }), control, null, []));
+  const dockFor = (controls: unknown[], control = "linked", overrides: Record<string, unknown> = {}): any =>
+    withDom(() => M.renderCommandDock(agent({ controls, ...overrides }), control, null, []));
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const groups = (dock: any) => allByClass(dock, "dock-group");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -4109,7 +4115,9 @@ describe("the command dock is grouped by what each control is for", () => {
     expect(labelsOf(dock)).toEqual(["Communicate"]);
     expect(fkeysOf(groupNamed(dock, "Communicate"))).toEqual(["draft:codex:a1", "act:codex:a1:instruct"]);
     expect(fkeysOf(clusterOf(dock))).toEqual([
-      "act:codex:a1:focus", "act:codex:a1:interrupt", "act:codex:a1:archive", "act:codex:a1:unarchive",
+      // SYNC-CF's close tile sits after Archive: the furthest-reaching verb last.
+      "act:codex:a1:focus", "act:codex:a1:interrupt", "act:codex:a1:archive",
+      "sync-close:codex:a1", "act:codex:a1:unarchive",
     ]);
     const toolbar = byClass(dock, "command-dock-secondary");
     expect(toolbar?.attributes.role).toBe("group");
@@ -4147,23 +4155,29 @@ describe("the command dock is grouped by what each control is for", () => {
       "act:codex:a1:focus",
       "act:codex:a1:interrupt",
       "act:codex:a1:archive",
+      // SYNC-CF. The clustering claim above is unchanged — regrouping still adds
+      // no control — and this key is a NEW capability arriving with its own
+      // route, not a rename of one of the four the server advertises.
+      "sync-close:codex:a1",
       "act:codex:a1:unarchive",
     ]);
-    // Focus, Interrupt, Archive, Un-archive, Send — the labels are labels.
-    expect(buttonsOf(dock).length).toBe(5);
+    // Focus, Interrupt, Archive, Close terminal, Un-archive, Send — the labels are labels.
+    expect(buttonsOf(dock).length).toBe(6);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect(allByClass(dock, "dock-group-label").some((n: any) => n.dataset.fkey)).toBe(false);
   });
 
   test("an empty secondary row renders no cluster; an empty dock stays the hidden span", () => {
-    expect(labelsOf(dockFor([{ action: "instruct", enabled: true }]))).toEqual(["Communicate"]);
-    expect(clusterOf(dockFor([{ action: "instruct", enabled: true }]))).toBeNull();
+    // ENDED throughout: a finished session has no live terminal to close, so
+    // these cases still measure the CAPABILITY list and nothing else.
+    expect(labelsOf(dockFor([{ action: "instruct", enabled: true }], "linked", ENDED))).toEqual(["Communicate"]);
+    expect(clusterOf(dockFor([{ action: "instruct", enabled: true }], "linked", ENDED))).toBeNull();
     // Focus alone: a cluster, no Communicate group.
-    const focusOnly = dockFor([{ action: "focus", enabled: true }]);
+    const focusOnly = dockFor([{ action: "focus", enabled: true }], "linked", ENDED);
     expect(labelsOf(focusOnly)).toEqual([]);
     expect(fkeysOf(clusterOf(focusOnly))).toEqual(["act:codex:a1:focus"]);
     // An un-archive the server refuses is not rendered anywhere.
-    expect(fkeysOf(clusterOf(dockFor([{ action: "focus", enabled: true }, { action: "unarchive", enabled: false }]))))
+    expect(fkeysOf(clusterOf(dockFor([{ action: "focus", enabled: true }, { action: "unarchive", enabled: false }], "linked", ENDED))))
       .toEqual(["act:codex:a1:focus"]);
     // And an agent the server offers nothing for is still the hidden span.
     const none = dockFor([]);
@@ -4639,8 +4653,11 @@ describe("RHSP command header consolidation", () => {
     const cluster = byClass(drawer, "command-dock-cluster");
     const directTools = (cluster?.children || []).filter((child: any) =>
       String(child.className || "").split(/\s+/).includes("dock-tool"));
-    expect(directTools.map((tool: any) => textOf(tool))).toEqual(["", "", ""]);
-    expect(directTools.map((tool: any) => tool.attributes?.["aria-label"])).toEqual(["Focus", "Interrupt", "Archive"]);
+    // SYNC-CF's close tile joins them on the same terms: icon-only, and named
+    // by aria-label rather than by a glyph nobody can hear.
+    expect(directTools.map((tool: any) => textOf(tool))).toEqual(["", "", "", ""]);
+    expect(directTools.map((tool: any) => tool.attributes?.["aria-label"]))
+      .toEqual(["Focus", "Interrupt", "Archive", "Close terminal"]);
     expect(byClass(cluster, "command-dock-more")).toBeNull();
     const archive = byFkey(cluster, "act:codex:a1:archive");
     expect(archive?.attributes?.["aria-label"]).toBe("Archive");

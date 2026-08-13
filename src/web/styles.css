@@ -3403,6 +3403,58 @@ body.feed-frozen .programs { opacity: 0.62; }
 .command-confirm { flex: 1 1 100%; }
 .btn.sm { min-height: 32px; padding: 0.28rem 0.65rem; font-size: 12px; }
 
+/* SYNC-CF — close the terminal, and the escalation it can raise.
+   The tile borrows dock-tool-warn's hue rather than adding a colour: it is the
+   same class of act as Archive, one step further on. */
+.sync-close-tool { color: var(--muted); }
+.sync-close-tool:hover:not(:disabled) { color: var(--bad); border-color: var(--bad); }
+.sync-close-tool:disabled { color: var(--faint-strong); }
+/* It is a CHILD of the drawer it is about — the escalation names that session's
+   siblings — but it is laid out as a modal over the viewport: the drawer is a
+   scroll container, and a dialog that scrolls away with the transcript behind it
+   is a dialog an operator can lose. `fixed` keeps the settings modal's grammar
+   and stays under it (z-index 60) if both are somehow open. */
+.sync-close-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: color-mix(in srgb, var(--ink) 38%, transparent);
+}
+.sync-close-inner {
+  width: min(30rem, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  display: grid;
+  gap: 0.6rem;
+  padding: 1rem 1.15rem 1.15rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  /* A signal rail, not a filled panel: severity reads as an edge the eye can
+     scan past, and the copy keeps the page's own contrast. */
+  border-left: 3px solid var(--bad);
+  border-radius: var(--radius-md);
+  box-shadow: 0 18px 48px color-mix(in srgb, var(--ink) 28%, transparent);
+}
+.sync-close-title { margin: 0; font-size: 15px; line-height: 1.3; color: var(--ink); }
+.sync-close-lede { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--muted); }
+.sync-close-siblings { display: grid; gap: 0.3rem; }
+.sync-close-siblings-lead { margin: 0; font-size: 12px; color: var(--muted); }
+.sync-close-siblings-empty { margin: 0; font-size: 12px; color: var(--faint-strong); }
+.sync-close-sibling-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.2rem; }
+.sync-close-sibling {
+  font: 500 12px/1.4 var(--font-mono);
+  color: var(--ink);
+  padding-left: 0.55rem;
+  border-left: 2px solid var(--line);
+}
+.sync-close-warning { margin: 0; font-size: 12px; font-weight: 600; color: var(--bad); }
+.sync-close-actions { display: flex; justify-content: flex-end; gap: 0.5rem; padding-top: 0.15rem; }
+.sync-close-confirm { border-color: var(--bad); color: var(--bad); }
+.sync-close-confirm:hover:not(:disabled) { background: var(--ember-soft); }
+
 .inspector-panel { display: flex; flex-direction: column; gap: var(--space-3); }
 .names-disclosure {
   border: 1px solid var(--line);

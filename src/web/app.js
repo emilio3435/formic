@@ -1537,6 +1537,11 @@ globalThis.TheAntHill = {
   snapshotFreshness, connLabelText, connVerdictFor, reconnectPlan, fallbackPollDue, eventSnapshot,
   feedAlarm, clocksFrozen, feedFrozen, elapsedTickText, staleControlNote, feedAlarmNode, tickClocks,
   renderCommandDock, renderDockTool, composerCanSend, resizeComposer,
+  /* SYNC-CF. The gate, the envelope reader and the two renderers: the request
+     functions are driven for real against a fake fetch, and the pure halves let
+     the gating and the envelope rules be asserted without a DOM. */
+  syncCloseView, syncCloseReason, syncCloseEscalation, syncCloseVerdict,
+  renderSyncCloseTool, renderSyncCloseDialog, cancelSyncClose,
   // The TRANSCRIPT_* limits stay out for the same TDZ reason as CONN_LABELS:
   // they are `const`s declared below this block. Assert the behavior instead.
   transcriptUrl, clampTranscriptLimit, nextTranscriptLimit, normalizeTranscript,
@@ -9482,6 +9487,11 @@ function inspectorPaintSig(sel, view, ui) {
     agent ? [...ui.pending].filter((key) => key.startsWith(agent.id + ":")).sort().join(",") : "",
     agent && feedback ? (feedback.ok ? "ok" : "err") + ":" + feedback.action + ":" + feedback.message : "",
     ui.confirming || "",
+    /* SYNC-CF: the escalation dialog is a child of this drawer, so the drawer
+       has to repaint when it opens, closes, or changes what it would kill. */
+    ui.syncClose && agent && ui.syncClose.agentId === agent.id
+      ? ui.syncClose.code + ":" + ui.syncClose.workspaceId + ":" + (ui.syncClose.siblingAgents || []).map((s) => s.id + "/" + s.name).join(",")
+      : "",
     ui.renaming || "",
     ui.renamePending ? "1" : "0",
     ui.renameError || "",
@@ -10520,6 +10530,12 @@ function renderAgentDrawer(pane, view) {
   grid = el("div", { class: "drawer-grid" + (evidenceExpanded ? " is-evidence" : "") }, modeSwitch, doc, desk);
   pane.append(grid);
 
+  /* SYNC-CF. Last child of the drawer so it overlays the pane it is about: the
+     escalation names THIS agent's siblings, and a modal about one session
+     hoisted to the page would have to re-state which session that was. */
+  const closeDialog = renderSyncCloseDialog(agent);
+  if (closeDialog) pane.append(closeDialog);
+
   if (typeof chatScroll.scrollHeight === "number") {
     const plan = chatScrollPlan(agent.id, _chatKey, _chatScrollMemo, _chatScrollSaved);
     chatScroll.scrollTop = plan.mode === "bottom" ? chatScroll.scrollHeight : plan.top;
@@ -10859,8 +10875,13 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
      quiet toolbar below the composer. Same tools, fkeys, capability gates and
      destructive-isolation disclosure; only the visual hierarchy changes. */
   const unarchivable = Boolean(unarchiveCap && unarchiveCap.enabled);
+  /* SYNC-CF. Not a ControlCapability: closing is a cmux write on its own route
+     with its own resolution rule, so it is built here rather than pulled out of
+     `agent.controls`. It sits after Archive because it is the furthest-reaching
+     verb in the group — filing a record, then destroying the terminal. */
+  const closeTool = renderSyncCloseTool(agent, { held });
   let cluster = null;
-  if (focusCap || interruptCap || archiveCap || unarchivable) {
+  if (focusCap || interruptCap || archiveCap || unarchivable || closeTool) {
     cluster = el("div", { class: "command-dock-cluster", role: "group", "aria-label": "Session actions" });
     if (focusCap) cluster.append(renderDockTool(agent, focusCap, "focus", { held, iconOnly: true }));
     if (interruptCap) cluster.append(renderDockTool(agent, interruptCap, "interrupt", { held, iconOnly: true }));
@@ -10868,6 +10889,7 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
        <details> made a one-action menu that stole the click. Confirm still
        isolates the destructive step. */
     if (archiveCap) cluster.append(renderDockTool(agent, archiveCap, "archive", { held, iconOnly: true }));
+    if (closeTool) cluster.append(closeTool);
     // The undo is not destructive and does not hide behind the lock.
     if (unarchivable) cluster.append(renderDockTool(agent, unarchiveCap, "unarchive", { held, iconOnly: true }));
   }
@@ -11064,6 +11086,255 @@ function renderDockTool(agent, cap, action, opts = {}) {
     opts.iconOnly
       ? null
       : accessibleName);
+}
+
+/* ---------- sync: closing the terminal ----------
+
+   The board's half of `POST /api/sync/close`. cmux owns every rule about what
+   may close; this renders what the route answers and decides nothing itself.
+   There is one URL, no retry, and exactly two request shapes — the frozen
+   surface envelope and the frozen workspace envelope. */
+
+/* Why close is gated harder than the rest of the dock.
+
+   Focus and Send accept `unique-cwd`: the board calls such a row `linked`,
+   because looking at a pane and typing into one are recoverable if the folder
+   match picked the wrong terminal. Closing is not recoverable, so it takes the
+   strictest resolution the identity tiers can mint and nothing weaker. A gate
+   written as "linked" would put a destructive button on a folder-strength
+   guess.
+
+   `isTerminal` is the other half: a finished session and a session that has
+   left the scan window are both records rather than live terminals, and there
+   is nothing behind them to close. Returns null for those (no control at all),
+   a disabled view with a reason for everything short of exact. */
+function syncCloseView(agent) {
+  if (!agent || isTerminal(agent)) return null;
+  const target = (agent && agent.target) || { resolution: "missing" };
+  const surfaceId = target.surfaceId || "";
+  if (target.resolution === "exact" && surfaceId) return { enabled: true, surfaceId, reason: "" };
+  return { enabled: false, surfaceId, reason: syncCloseReason(surfaceId ? target.resolution : "missing") };
+}
+
+/* Operator language, deliberately NOT the resolver's `reason` string, for the
+   same cause renderControlBanner states at length: served reasons carry raw
+   cmux evidence ("surface a1b2 is claimed by two sessions"), and this sentence
+   is read by a person deciding whether to destroy a terminal. */
+function syncCloseReason(resolution) {
+  if (resolution === "unique-cwd") return "This session is matched by folder only — closing needs an exact terminal match.";
+  if (resolution === "ambiguous") return "More than one terminal claims this session, so closing could close the wrong one.";
+  return "No cmux terminal is linked to this session.";
+}
+
+/* The dock's most destructive tile. Same shape, classes and held-behaviour as
+   renderDockTool, but deliberately NOT routed through it: that function is the
+   one gate over the server's ControlCapability list, and close is not on it —
+   it is a cmux write with its own route and its own resolution rule. */
+function renderSyncCloseTool(agent, opts = {}) {
+  const view = syncCloseView(agent);
+  if (!view) return null;
+  const key = agent.id + ":sync-close";
+  const busy = state.pending.has(key);
+  const held = opts.held === undefined ? feedFrozen() : Boolean(opts.held);
+  const blocked = !view.enabled || held || busy;
+  const label = "Close terminal";
+  return el("button", {
+    type: "button",
+    class: "dock-tool dock-tool-warn sync-close-tool" + (held ? " is-held" : ""),
+    disabled: blocked ? "" : null,
+    "aria-busy": busy ? "true" : null,
+    title: held ? "Held — the board is not current" : view.enabled ? label : view.reason,
+    /* Icon-only tile, so the reason has to travel with the accessible NAME: a
+       title on an element with no text content is a description plenty of
+       operators never hear, and "why is this off" is the whole point of
+       rendering a disabled control instead of hiding it. */
+    "aria-label": busy ? label + "…" : view.enabled ? label : label + " — unavailable: " + view.reason,
+    dataset: { fkey: "sync-close:" + agent.id },
+    onclick: () => {
+      if (blocked) return;
+      sendSyncClose(agent, { target: "surface", id: view.surfaceId });
+    },
+  }, icon("close"));
+}
+
+/* The escalation envelope, read strictly or not at all.
+
+   `invalid_state` on the last surface in a workspace is the one refusal that
+   turns into a question for a person, and the question is "these agents die
+   too — still?". Answering it requires the workspace this is about and the
+   full casualty list, so a payload missing either is not downgraded into a
+   quieter dialog: it produces none.
+
+   The `length` check is the important line. Dropping entries the client cannot
+   name would render "No other agents share this workspace" over a list that
+   holds two of them — a fixture-shaped reply buying a confident sentence about
+   something nobody read. Partial understanding of the envelope is treated as
+   no understanding. */
+function syncCloseEscalation(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const workspaceId = typeof raw.workspaceId === "string" ? raw.workspaceId.trim() : "";
+  if (!workspaceId || !Array.isArray(raw.siblingAgents)) return null;
+  const siblingAgents = raw.siblingAgents
+    .map((entry) => {
+      if (!entry || typeof entry !== "object") return null;
+      const id = typeof entry.id === "string" ? entry.id.trim() : "";
+      const name = (typeof entry.name === "string" ? entry.name.trim() : "") || id;
+      return name ? { id, name } : null;
+    })
+    .filter(Boolean);
+  if (siblingAgents.length !== raw.siblingAgents.length) return null;
+  return { workspaceId, siblingAgents };
+}
+
+/* What a reply MEANS, separated from what is done about it so the classification
+   is testable without a DOM and cannot drift between the two call sites. HTTP
+   completion is never a close: only `ok === true` is. */
+function syncCloseVerdict(reply) {
+  const body = reply && reply.body && typeof reply.body === "object" ? reply.body : null;
+  if (body && body.ok === true) return { kind: "ok", message: "Terminal closed." };
+  if (body && body.ok === false) {
+    const code = typeof body.code === "string" ? body.code : "";
+    if (code === "invalid_state" || code === "confirm_required") {
+      const escalation = syncCloseEscalation(body.escalation);
+      if (escalation) return { kind: "escalate", code, escalation };
+      return { kind: "failed", message: "Close refused (" + code + ") without naming the workspace it would take. Nothing was closed." };
+    }
+    const detail = typeof body.detail === "string" && body.detail ? ": " + body.detail : "";
+    return { kind: "failed", message: "Close refused" + (code ? " (" + code + ")" : "") + detail };
+  }
+  return { kind: "failed", message: "Close failed: the server answered HTTP " + (reply && reply.status) + " with an unexpected response." };
+}
+
+/* The one writer. Both envelopes go through here, so the pending key, the
+   feedback record and the escalation branch cannot disagree between the tile
+   and the dialog's confirm. */
+async function sendSyncClose(agent, body) {
+  const key = agent.id + ":sync-close";
+  if (state.pending.has(key)) return;
+  state.pending.add(key);
+  state.feedback.delete(agent.id);
+  render();
+
+  let verdict;
+  try {
+    const res = await apiFetch("/api/sync/close", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }, API_WRITE_TIMEOUT_MS);
+    let payload = null;
+    try { payload = await res.json(); } catch { /* non-JSON body */ }
+    verdict = syncCloseVerdict({ status: res.status, body: payload });
+  } catch (err) {
+    verdict = { kind: "failed", message: err && err.message ? err.message : "Close failed" };
+  }
+
+  state.pending.delete(key);
+  if (verdict.kind === "escalate") {
+    /* Not an error, and never retried: cmux refusing to strand a workspace is
+       the signal that a bigger decision is due. No toast either — a failure
+       affordance beside a dialog asking for a decision reads as "something went
+       wrong", and nothing has. */
+    state.syncClose = { agentId: agent.id, code: verdict.code, ...verdict.escalation };
+    render();
+    focusSyncCloseCancel(agent);
+    return;
+  }
+  state.syncClose = null;
+  state.feedback.set(agent.id, { ok: verdict.kind === "ok", action: "sync-close", message: verdict.message });
+  render();
+  toast(verdict.message.split("\n")[0], verdict.kind === "ok" ? "ok" : "err");
+}
+
+/* After the repaint, never before: the node this handler was built on is
+   detached by then, and focusing a detached element is a silent no-op that
+   lands the operator on <body>. */
+function focusSyncCloseCancel(agent) {
+  if (typeof document === "undefined" || !document.querySelector) return;
+  const node = document.querySelector(`[data-fkey="sync-close-cancel:${CSS.escape(agent.id)}"]`);
+  if (node && node.focus) node.focus();
+}
+
+function cancelSyncClose() {
+  state.syncClose = null;
+  render();
+}
+
+const SYNC_CLOSE_LEDE = {
+  invalid_state: "This is the last terminal in its workspace, so cmux will not close it on its own. Closing the workspace closes everything in it.",
+  confirm_required: "Closing a workspace closes every terminal in it.",
+};
+
+/* The escalation dialog. It exists to state a cost before it is paid, so every
+   sentence in it is either the route's own data or a fact about what the
+   confirm button does — no reassurance, no summary of what was attempted.
+
+   Modal in the ARIA sense (role + aria-modal) and in the keyboard sense: Tab is
+   trapped between the two buttons and Escape cancels. Escape stops here rather
+   than bubbling, because the board's own Escape chain would otherwise carry on
+   past a cancelled dialog and close the drawer behind it. */
+function renderSyncCloseDialog(agent) {
+  const record = state.syncClose;
+  if (!agent || !record || record.agentId !== agent.id) return null;
+  const siblings = record.siblingAgents || [];
+  const busy = state.pending.has(agent.id + ":sync-close");
+  const titleId = "sync-close-title-" + agent.id;
+
+  const cancel = el("button", {
+    type: "button",
+    class: "btn sync-close-cancel",
+    dataset: { fkey: "sync-close-cancel:" + agent.id },
+    onclick: () => cancelSyncClose(),
+  }, "Cancel");
+  const confirm = el("button", {
+    type: "button",
+    class: "btn sync-close-confirm",
+    disabled: busy ? "" : null,
+    "aria-busy": busy ? "true" : null,
+    dataset: { fkey: "sync-close-confirm:" + agent.id },
+    onclick: () => sendSyncClose(agent, { target: "workspace", id: record.workspaceId, confirm: true }),
+  }, busy ? "Closing…" : "Close workspace");
+  const stops = [cancel, confirm];
+
+  const roster = siblings.length
+    ? el("div", { class: "sync-close-siblings" },
+      el("p", { class: "sync-close-siblings-lead", text: siblings.length === 1
+        ? "One other agent is working in this workspace and closes with it:"
+        : siblings.length + " other agents are working in this workspace and close with it:" }),
+      el("ul", { class: "sync-close-sibling-list" },
+        ...siblings.map((sibling) => el("li", { class: "sync-close-sibling", text: sibling.name }))))
+    : el("p", { class: "sync-close-siblings-empty", text: "No other agents share this workspace." });
+
+  return el("div", {
+    class: "sync-close-dialog",
+    role: "dialog",
+    "aria-modal": "true",
+    "aria-labelledby": titleId,
+    onkeydown: (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        cancelSyncClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      event.preventDefault();
+      /* The stops are the dialog's own nodes rather than a selector query: the
+         trap must hold on the elements this paint built, and a query would also
+         reach whatever the board left behind it. */
+      const at = stops.indexOf(typeof document !== "undefined" ? document.activeElement : null);
+      const next = event.shiftKey
+        ? stops[(at <= 0 ? stops.length : at) - 1]
+        : stops[(at + 1) % stops.length];
+      if (next && next.focus) next.focus();
+    },
+  },
+    el("div", { class: "sync-close-inner" },
+      el("h2", { id: titleId, class: "sync-close-title", text: "Close " + agentName(agent) + "’s workspace?" }),
+      el("p", { class: "sync-close-lede", text: SYNC_CLOSE_LEDE[record.code] || SYNC_CLOSE_LEDE.confirm_required }),
+      roster,
+      el("p", { class: "sync-close-warning", text: "Closing a workspace cannot be undone." }),
+      el("div", { class: "sync-close-actions" }, cancel, confirm)));
 }
 
 function sourceWorkspaceLabel(target) {
@@ -13036,7 +13307,7 @@ Object.assign(globalThis.TheAntHill, {
   // is no way to assert the behaviour without both ends.
   state,
   // Request/confirmation logic. Each one is driven in tests with a fake fetch.
-  apiFetch, sendControl, recollectSnapshot, fetchSnapshot,
+  apiFetch, sendControl, sendSyncClose, recollectSnapshot, fetchSnapshot,
   applySnapshot, applySnapshotDelta, handleEventPayload, handleDeltaPayload, tickFreshnessSurfaces,
   syncInspectorViewportHeight,
   triageIssue, removeTriageItem, fetchTriageQueue,
