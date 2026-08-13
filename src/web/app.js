@@ -4523,7 +4523,7 @@ function renderHealthTldrLane() {
   if (!lane) return;
   if (state.tldrView == null) state.tldrView = "ALL";
   lane.textContent = "";
-  lane.classList.remove("is-needs-you", "is-stale");
+  lane.classList.remove("is-needs-you", "is-stale", "is-break", "is-repo-scoped");
 
   const agent = heartbeatTldrAgent(state.snap);
   if (!agent || !agent.transcriptTail) {
@@ -4614,7 +4614,7 @@ function renderTldrAllLane(lane, parsed, time, attentionCount) {
     class: "chev",
     "aria-label": first ? `Filter board to ${first.repo}` : "Next repo view",
     text: "›",
-    onclick: () => { if (first) filterBoardToTldrRepo(first.repo); },
+    onclick: () => { if (first) setTldrView(first.repo); },
   });
   if (!first) next.setAttribute("disabled", "");
 
@@ -4628,7 +4628,7 @@ function renderTldrAllLane(lane, parsed, time, attentionCount) {
     el("span", { class: "heartbeat-tldr-time", text: time }),
     el("span", {
       class: "tldr-lane-meta",
-      title: "Luna summarizes agents active in the last hour; the board tree still uses the 36h lookback. Chevrons filter the tree.",
+      title: "Luna summarizes agents active in the last hour; the board tree still uses the 36h lookback. Chevrons page the TL;DR and filter the tree.",
       text: `${repoCount} repos · ${live} live · 1h`,
     }),
     el("div", { class: "lane-pager" }, prev, el("span", { class: "lane-pos", "aria-live": "polite", text: "ALL" }), next),
@@ -5791,8 +5791,8 @@ function passesLens(agent, values, matches) {
 
 /* Set from the program drawer ("Only this program"), cleared from the Filters
    bar, or driven by the TL;DR proof rows/chips (board scope only — the fleet
-   story stays). Chevrons on a repo lane still call setTldrView to page the
-   dossier. Programs are unbounded, so there is no always-on chip list for them
+   story stays). Chevrons call setTldrView so they page the masthead and the
+   board together. Programs are unbounded, so there is no always-on chip list for them
    — the bar carries one clear-chip while the lens is active, which is the whole
    disclosure obligation: a narrowing is always one visible control from off. */
 function setFacetProgram(programId) {

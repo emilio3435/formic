@@ -6,6 +6,20 @@ import {
   twoRepoSnapFixture, v4Envelope,
 } from "./helpers/fake-dom";
 
+function findChev(doc: any, ariaNeedle: string): any {
+  const walk = (node: any): any => {
+    if (!node) return null;
+    const aria = String(node.attributes?.["aria-label"] || "");
+    if (node.classList?.contains?.("chev") && aria.includes(ariaNeedle)) return node;
+    for (const kid of node.children || []) {
+      const hit = walk(kid);
+      if (hit) return hit;
+    }
+    return null;
+  };
+  return walk(doc.byId("health-tldr-lane"));
+}
+
 /* Calm fleet with sentinel burn numbers, so a constant-copy compact face can
    never pass the parity oracle: 1234 tok/min and $4.12 exist only here. */
 function calmSnapFixture(burnOver: Record<string, unknown> = {}) {
@@ -146,6 +160,32 @@ describe("health rail v2 DOM contract", () => {
     // Bullet body strips restated repo subject
     expect(M.stripTldrRepoPrefix("Home: Home has an active handoff", "Home")).toBe("has an active handoff");
     expect(M.stripTldrRepoPrefix("cooper-scheduler: cooper-scheduler has Draft Sheet waiting", "cooper-scheduler")).toBe("has Draft Sheet waiting");
+  });
+
+  test("ALL-lane next chevron pages TL;DR, scopes the facet, and ‹ returns to ALL", async () => {
+    const { doc, M } = await setupRailDom();
+    M.state.snap = twoRepoSnapFixture();
+    M.state.facetProgram = "";
+    M.state.uiReady = false;
+    M.renderHealthTldrLane();
+    expect(M.state.tldrView).toBe("ALL");
+    const next = findChev(doc, "Filter board to repoA");
+    expect(next).toBeTruthy();
+    fireClick(next);
+    expect(M.state.tldrView).toBe("repoA");
+    expect(M.state.facetProgram).toBe("p-a");
+    const lane = doc.byId("health-tldr-lane");
+    expect(lane.classList.contains("is-repo-scoped")).toBe(true);
+    expect(lane.attributes["aria-label"] || "").toMatch(/repoA/);
+    const back = findChev(doc, "Back to ALL");
+    expect(back).toBeTruthy();
+    fireClick(back);
+    expect(M.state.tldrView).toBe("ALL");
+    expect(M.state.facetProgram).toBe("");
+    const after = doc.byId("health-tldr-lane");
+    expect(after.attributes["aria-label"] || "").toMatch(/all repos/i);
+    expect(String(after.className)).not.toContain("is-repo-scoped");
+    expect(String(after.className)).not.toContain("is-break");
   });
 
   test("setTldrView syncs facetProgram so repo-lane chevrons still page the dossier", async () => {

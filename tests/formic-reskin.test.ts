@@ -455,8 +455,8 @@ describe("Formic reskin RED contracts", () => {
       "FORMIC-INTERACTION-RED: ALL-lane proof rows/chips must filter the board, not page the fleet TL;DR",
     ).toBe(true);
     expect(
-      allLane.includes("setTldrView"),
-      "FORMIC-INTERACTION-RED: ALL-lane must not page the dossier from proof rows, chips, or the next chevron",
-    ).toBe(false);
+      allLane.includes("setTldrView(first.repo)"),
+      "FORMIC-INTERACTION-RED: ALL-lane next chevron must page TL;DR via setTldrView",
+    ).toBe(true);
   });
 });
