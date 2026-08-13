@@ -23,6 +23,9 @@ Implement repo-identity colour on the board side, end to end:
 Three commits: `c047ef5` foundation (deliberately first, so S and G integrate
 early), `8932bee` board, `be4cd41` the group-write fix below.
 
+**Round 2** (02:00–02:35): the Grok verifier returned BLOCK. Report at
+`.lane-evidence/VERIFY-tint-f.md`. All five findings fixed in `ccef942`; see §2a.
+
 ## 2. Which claims went red first (named)
 
 1. **`withAssignments` stored the palette's own spelling.** `REPO_PALETTE` is
@@ -52,6 +55,69 @@ early), `8932bee` board, `be4cd41` the group-write fix below.
    independently a few minutes later. Fixed in `be4cd41`: correct parameter,
    plus a read-back of the response's own `custom_color` compared by value —
    because for this RPC the exit code is not evidence.
+
+## 2a. Round 2 — what the verifier found, and what it says about my testing
+
+The headline is worth stating plainly: **the board never tinted, and I shipped
+it with 64 green tests.** `setRepoColors(body.repoNames)` fed a
+name→repoKey table into a function whose values must be `#rrggbb`, so every
+entry failed `normalizeRepoHex`, the map stayed empty, and Whisper, Signal and
+the pills all read `""`. The Settings region still looked right because it reads
+`assignments` directly, which is exactly the kind of partial correctness that
+makes a defect survive a demo.
+
+The reason 64 tests missed it is the lesson. **Every one of them set the colour
+state by hand**, so they all agreed with each other about a shape no server ever
+sends — and nothing in the suite ever loaded `fetchRepoColors`. A fixture I
+author and a payload the server emits are two different things, and only the
+second one is a fact.
+
+It is worse than a coincidence that `name === key` in all my fixtures: on this
+very checkout they differ. Origin is `…/the-ant-hill.git`, so
+`RepoIdentity.repoName` — what the band prints — is `the-ant-hill`, while
+`repoKeyForCwd` reads the git common dir and answers `the-mountain`. The join
+table exists *precisely* for that split. I built the table, then wrote every
+test as though the split did not exist.
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 (BLOCK) | Two-hop join collapsed to one; board never tints | `setRepoColors(repoNames, settings)` does name → key → hex. Three new tests: a real GET envelope through `fetchRepoColors` with a stubbed `fetch`; the same through `putRepoColor`; and one asserting the collapsed form paints **nothing**, so the suite cannot be satisfied by `name === key`. |
+| 2 (HIGH) | `names[name] = key` last-writer-wins, order-dependent | Per the master's ruling an ambiguous printed name **drops out of the join entirely**. Both insertion orders give the identical absent join. Both repos still get colours — the cmux fan-out keys on `repoKey`, which is never ambiguous. |
+| 3 (HIGH) | Signal applied to nothing; rule-5 hole | The tick now comes from `agentRowPlan` for unbanded (interleaved) rows. Rule-5 hole closed by **withholding** identity in the strip — see below. |
+| 4 (MED) | `fakeGit` never inspected argv | It now throws on `--show-toplevel` and on a missing `--git-common-dir`, so the four fake tests finally pin the worktree trap instead of passing against either flag. |
+| 5 (MED) | `DELETE` did not fan out | `PUT` and `DELETE` share one `fanOutFor`, so a verb cannot quietly skip it again. |
+
+**One order I did not follow, and why.** The master's fix for the rule-5 hole
+was to set `alerting: true` in `stripRowOpts` so the row takes an ember class.
+I implemented it, and it went red on
+`tests/web-client.test.ts:9846` — *"Pane mode: the strip is the signal; its rows
+do not double-mark."* That is a deliberate, tested decision from an earlier
+lane, and overruling it is not mine to do. Withholding the tick achieves the
+same guarantee: a hook-needsInput agent is alerting with a healthy outcome and
+carries none of the `is-…` classes the identity selectors exclude, so an
+*offered* tick would paint on it — but an identity treatment that is never
+offered cannot be diluted. Hole closed, decision left standing, master flagged.
+
+**Mutation-checked, per the verifier's own standard.** Eleven mutations in a
+throwaway copy, each reverting one fix, plus the two join call sites separately.
+**All CAUGHT, none hollow** — including the one that mattered:
+
+```
+BASELINE (3 live-git tests need the real worktree)  673 pass / 4 fail
+1 client join collapsed (both sites)                671 pass / 6 fail   CAUGHT
+1c setRepoColors ignores the hex table              664 pass / 13 fail  CAUGHT
+2 ambiguous name back to last-writer-wins           672 pass / 5 fail   CAUGHT
+3a interleaved rows lose the tick                   672 pass / 5 fail   CAUGHT
+3b banded rows wrongly GET the tick                 672 pass / 5 fail   CAUGHT
+3c strip re-offers a repo tick (rule-5 hole)        672 pass / 5 fail   CAUGHT
+4 impl switches to --show-toplevel                  670 pass / 7 fail   CAUGHT
+5 DELETE stops fanning out                          672 pass / 5 fail   CAUGHT
+```
+
+The first sweep reported mutation 1 as HOLLOW. That was my harness patching only
+the first of two call sites — and chasing it found a real gap: nothing tested
+`putRepoColor`. Fixing the harness *and* adding the second test is why 1a and 1b
+are both caught above.
 
 ## 3. What shipped, file-and-fence
 
@@ -89,15 +155,17 @@ one write under test.
 
 ## 4. Floor results — pasted, not paraphrased
 
+Round 2, after the verifier's five fixes (`ccef942`):
+
 ```
 $ bunx tsc --noEmit
 tsc exit: 0
 
 $ bun test
-(fail) what this board counted is what a separate application recorded > the comparison actually ran against both sources [0.17ms]
- 3365 pass
+(fail) what this board counted is what a separate application recorded > the comparison actually ran against both sources [0.14ms]
+ 3372 pass
  1 fail
-Ran 3366 tests across 180 files. [95.69s]
+Ran 3373 tests across 180 files. [84.13s]
 ```
 
 The one red is **`tests/cross-source-token-agreement.test.ts`**, and it is not
@@ -117,13 +185,13 @@ fleet state, no code in its path from this lane. The master independently
 confirmed it is red on other TINT lanes tonight and excluded from CI gates.
 `docs/a11y-geometry-gate` passed in this run.
 
-New tests, all green:
+New tests, all green (and `web-client` alongside them, since round 2 touched a
+surface it owns assertions about):
 
 ```
-$ bun test tests/repo-color.test.ts tests/repo-tint-render.test.ts
- 64 pass
+$ bun test tests/repo-color.test.ts tests/repo-tint-render.test.ts tests/web-client.test.ts
+ 690 pass
  0 fail
- 206 expect() calls
 ```
 
 Live probe of the funnel against the real binary (`.lane-evidence/funnel-probe.ts`,
@@ -177,8 +245,18 @@ is reported as failure and nothing is remembered.
    keeps the old key until restart. Deliberate — it saves one `git` spawn per
    agent per poll — but it is a staleness window, not an absence of one.
 
+8. **New in round 2 — the strip's rule-5 fix diverges from the master's stated
+   mechanism.** Identity is withheld rather than the row being marked, because
+   marking it contradicts a tested pane-mode decision (§2a). Same guarantee,
+   different lever; the master should confirm they are content with it.
+9. **New in round 2 — an ambiguous printed name now shows NO tint.** Two
+   repositories whose origin basenames collide leave both bands uncoloured on
+   the board, while both still get colours in cmux (the fan-out keys on
+   `repoKey`). That asymmetry is deliberate per the ruling, and it is the kind
+   of thing that reads as a bug at a glance during the eyes-on check.
+
 ---
 
-**Status: done.** Floor green (one proven pre-existing red), three commits
-local on `feat/tint-f`, nothing pushed. Ready for the master to merge F first
-per the F → S → G → P order.
+**Status: done, round 2.** Floor green (one proven pre-existing red), five
+commits local on `feat/tint-f`, nothing pushed. Ready for delta-verification
+and for the master to merge F first per the F → S → G → P order.
