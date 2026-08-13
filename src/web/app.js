@@ -2061,6 +2061,22 @@ async function loadIdentityEvidence(agentId) {
   render();
 }
 
+/* Close the Route card's terminal evidence.
+
+   It clears the whole slot rather than setting an "open" flag, and that is the
+   load-bearing detail: inspectorPaintSig signs identity as loading/error/data
+   scoped to `identity.agentId === agent.id`, so a separate flag would leave
+   that signature identical, paintUnchanged would short-circuit, and the drawer
+   would never repaint — the exact symptom this fixes, wearing a different hat.
+   Clearing agentId flips the whole fragment to "" and the repaint fires.
+
+   The cost is that re-opening re-fetches. That is what switching agents already
+   does, and the endpoint is a local read-only GET. */
+function clearIdentityEvidence() {
+  state.identity = { agentId: null, loading: false, error: "", data: null };
+  render();
+}
+
 let refetchTimer = null;
 function scheduleRefetch() {
   if (refetchTimer) return;
@@ -12947,10 +12963,25 @@ function renderIdentityBlock(agent, ui = state) {
     class: "identity-load identity-expand",
     "aria-expanded": expanded ? "true" : "false",
     "aria-busy": shown && identity.loading ? "true" : null,
-    "aria-label": shown && identity.loading ? "Reading terminals…" : "Show which terminals claim this session",
-    title: "Show which terminals claim this session",
+    /* The label names what the NEXT activation does, like every other toggle in
+       this drawer. It used to read "Show…" while the panel was open, which was
+       the one-way loader underneath telling on itself. */
+    "aria-label": shown && identity.loading
+      ? "Reading terminals…"
+      : expanded
+        ? "Hide which terminals claim this session"
+        : "Show which terminals claim this session",
+    title: expanded
+      ? "Hide which terminals claim this session"
+      : "Show which terminals claim this session",
     dataset: { fkey: "identity-load:" + agent.id },
-    onclick: () => void loadIdentityEvidence(agent.id),
+    onclick: () => {
+      /* A toggle, not a loader. Clicking an open card used to re-enter the
+         fetch, which flickered through loading and landed open again, so the
+         evidence could be opened and never closed. */
+      if (expanded) return void clearIdentityEvidence();
+      void loadIdentityEvidence(agent.id);
+    },
   }, icon("arrow-up-right"));
 
   const { wrap, body } = exhibitShell({

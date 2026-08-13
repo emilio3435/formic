@@ -263,6 +263,49 @@ describe("Evidence column exhibits", () => {
     expect(textOf(evidence)).toContain("hint: lsof -p 41211");
   });
 
+  /* The Route expander wears every mark of a two-way control — aria-expanded,
+     an arrow the stylesheet rotates 90deg when open — but it was wired to a
+     one-way loader: onclick always called loadIdentityEvidence, and nothing in
+     the client ever set state.identity.agentId back to null. So the first click
+     opened the terminal evidence and no click, ever, closed it again; the panel
+     even reopened expanded when the same agent was re-selected.
+
+     Asserted through the REAL handler rather than by reading the source, and
+     twice over: the label has to say what the next activation does (every other
+     toggle in this drawer does — evidence shelf, repo fold, program fold), and
+     the surfaces have to be GONE from the next paint. Reading only
+     aria-expanded would pass on a control that flips its own attribute while
+     the evidence stays on screen. */
+  test("the Route expander collapses again — a toggle, not a one-way load", async () => {
+    const bare = agent({
+      controlState: "quarantined",
+      target: { resolution: "ambiguous", surfaceId: "SURFACE-82" },
+    });
+    const loaded = {
+      agentId: "codex:a1",
+      loading: false,
+      error: "",
+      data: { ok: true, agent: { trace: TRACE } },
+    };
+    await withState({ identity: loaded }, () => withRequests([], () => withDomAsync(async () => {
+      const open = M.renderEvidence(bare, M.state);
+      const expand = byClass(open, "identity-expand");
+      expect(expand.attributes["aria-expanded"]).toBe("true");
+      expect(byClass(open, "identity-surfaces")).not.toBeNull();
+      /* It is open, so the control's job now is to CLOSE. A label frozen at
+         "Show…" is the bug telling on itself. */
+      expect(String(expand.attributes["aria-label"])).toMatch(/hide|collapse/i);
+
+      await fire(expand);
+
+      expect(M.state.identity.agentId).toBeNull();
+      const shut = M.renderEvidence(bare, M.state);
+      expect(byClass(shut, "identity-surfaces")).toBeNull();
+      expect(byClass(shut, "identity-expand").attributes["aria-expanded"]).toBe("false");
+      expect(String(byClass(shut, "identity-expand").attributes["aria-label"])).toMatch(/show/i);
+    })));
+  });
+
   test("Exact sessions omit skipped Working folder rows", () => {
     const exact = agent({
       target: { resolution: "exact" },
@@ -544,6 +587,10 @@ function fakeDocument() {
       if (!domById.has(id)) domById.set(id, makeNode("div"));
       return domById.get(id) as FakeNode;
     },
+    /* A real document has one, and renderInspector reaches for its classList.
+       Without it any test that drives a handler through the full render() dies
+       on plumbing rather than on the behaviour it is asking about. */
+    body: makeNode("body"),
     querySelectorAll: () => [] as unknown[],
     querySelector: () => null,
   };
@@ -552,6 +599,17 @@ function fakeDocument() {
 function withDom<T>(fn: () => T): T {
   (globalThis as unknown as { document: unknown }).document = fakeDocument();
   try { return fn(); } finally {
+    delete (globalThis as unknown as { document?: unknown }).document;
+  }
+}
+
+/* withDom's sibling for handlers that must be AWAITED. The sync version deletes
+   the document in its finally, which runs the moment fn returns a promise —
+   long before an async click handler gets to call render(). Any test that fires
+   a real handler and then inspects the repaint needs this one. */
+async function withDomAsync<T>(fn: () => Promise<T> | T): Promise<T> {
+  (globalThis as unknown as { document: unknown }).document = fakeDocument();
+  try { return await fn(); } finally {
     delete (globalThis as unknown as { document?: unknown }).document;
   }
 }
