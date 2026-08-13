@@ -37,8 +37,8 @@
 | Lane | Goal doc | Branch / worktree | Workspace | Model · vehicle | Status | Report seen | Floor (my run) |
 |---|---|---|---|---|---|---|---|
 | TINT-F | GOAL-F-foundation.md | `feat/tint-f` · `../the-mountain.worktrees/tint-f` | workspace:26 `TINT · f-orch · opus · 08-13` | Opus 5 high · claude (pid 70978, verified) | REOPENED 01:52 — verifier VERDICT: BLOCK (5 findings, fix order sent) | yes | verify: BLOCK @ 01:49 |
-| TINT-S | GOAL-S-sync.md | `feat/tint-s` · `../the-mountain.worktrees/tint-s` | workspace:27 `TINT · s-orch · opus · 08-13` | Opus 5 high · claude (pid 71016, verified) | DONE 01:41 — addendum 2f22c83 (anchor filter, live-probed), green | yes | verify: PASS |
-| TINT-G | GOAL-G-groups.md | `feat/tint-g` · `../the-mountain.worktrees/tint-g` | workspace:28 `TINT · g-orch · opus · 08-13` | Opus 5 high · claude (pid 71062, verified) | REPORTED DONE 01:28 (2 commits) | yes — findings relayed | verify: PASS (incl. 2 mutation spot-checks) |
+| TINT-S | GOAL-S-sync.md | `feat/tint-s` · `../the-mountain.worktrees/tint-s` | workspace:27 `TINT · s-orch · opus · 08-13` | Opus 5 high · claude (pid 71016, verified) | DONE — 2f22c83 | yes | verify: PASS · MASTER FLOOR 02:07: tsc 0, 3343/3344, sole red = ledgered cross-source canary (named) |
+| TINT-G | GOAL-G-groups.md | `feat/tint-g` · `../the-mountain.worktrees/tint-g` | workspace:28 `TINT · g-orch · opus · 08-13` | Opus 5 high · claude (pid 71062, verified) | DONE — d414cfe | yes — findings relayed | verify: PASS · MASTER FLOOR 02:09: tsc 0, 3318/3319, sole red = ledgered cross-source canary (named) |
 | TINT-P | GOAL-P-prompt.md | `feat/tint-p` · `../the-mountain.worktrees/tint-p` | workspace:29 `TINT · p-orch · opus · 08-13` | Opus 5 high · claude (pid 71208, verified) | CLOSED 01:56 — final: dotfiles feat/tint-repo-chip @ 265df88 (3 commits, unpushed, no remote), repo worktree untouched, rulings recorded in report | yes | verify: PASS, hole closed |
 
 Sub-orch worker lanes appear in each sub-orch's own ledger section of its `LANE-REPORT`; master tracks sub-orchs only, but sweeps everything under the `TINT · ` prefix.
