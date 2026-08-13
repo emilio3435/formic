@@ -4065,8 +4065,7 @@ describe("single lock narrative in the agent drawer", () => {
     expect(dock).toContain("command-dock--linked");
     // Control feedback lives inside the dock, above the composer.
     expect(dock).toContain("control-feedback");
-    // Archive is demoted under More when Send/Focus are locked.
-    expect(dock).toContain("command-dock-more");
+    expect(dock).not.toContain("command-dock-more");
     expect(styles).toContain(".command-dock--linked");
   });
 });
@@ -4172,10 +4171,10 @@ describe("the command dock is grouped by what each control is for", () => {
     expect(groups(none).length).toBe(0);
   });
 
-  test("Archive stays behind the disclosure whether session controls are linked or locked", () => {
-    /* Destructive session management is secondary to the two direct controls.
-       Its capability and confirm gate are unchanged; only its presentation is
-       consistently behind the overflow disclosure. */
+  test("Archive is a peer tile of Focus and Interrupt, linked or locked", () => {
+    /* A one-item overflow menu is not a hierarchy — it is a click trap.
+       Archive stays a 44px tile; the confirm strip still isolates the
+       destructive step. */
     const dock = dockFor([
       { action: "focus", enabled: false },
       { action: "instruct", enabled: false },
@@ -4185,26 +4184,20 @@ describe("the command dock is grouped by what each control is for", () => {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const cluster: any = clusterOf(dock);
-    const more = byClass(cluster, "command-dock-more");
-    expect(more).not.toBeNull();
-    expect(byFkey(more, "act:codex:a1:archive")?.attributes?.["aria-label"]).toBe("Archive");
+    expect(byClass(cluster, "command-dock-more")).toBeNull();
+    expect(byFkey(cluster, "act:codex:a1:archive")?.attributes?.["aria-label"]).toBe("Archive");
 
-    // Exactly one Archive in the dock, and it is behind the disclosure — never
-    // a peer of the Focus the server has already refused.
     const archiveKey = "act:codex:a1:archive";
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const isArchive = (n: any) => n.dataset && n.dataset.fkey === archiveKey;
     expect(findAll(dock, isArchive).length).toBe(1);
-    expect(findAll(more, isArchive).length).toBe(1);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const focus: any = byFkey(cluster, "act:codex:a1:focus");
     expect(focus.hasAttribute("disabled")).toBe(true);
 
-    // Unlocked: the same capability remains behind the same disclosure.
     const open = dockFor([...CAPS]);
-    const openMore = byClass(clusterOf(open), "command-dock-more");
-    expect(openMore).not.toBeNull();
-    expect(byFkey(openMore, archiveKey)).not.toBeNull();
+    expect(byClass(clusterOf(open), "command-dock-more")).toBeNull();
+    expect(byFkey(clusterOf(open), archiveKey)).not.toBeNull();
   });
 
   test("Interrupt still arms its confirm strip, inside the cluster", async () => {
@@ -4244,7 +4237,7 @@ describe("the command dock is grouped by what each control is for", () => {
     expect(styles).toMatch(/\.command-composer\s*\{[^}]*border-radius:\s*var\(--radius-md\)/);
     expect(styles).toMatch(/\.command-send\s*\{[^}]*width:\s*44px/);
     expect(styles).toMatch(/\.command-dock-cluster \.dock-tool\s*\{[^}]*min-height:\s*44px/);
-    expect(styles).toMatch(/\.command-dock-more > summary\s*\{[^}]*width:\s*44px[^}]*min-height:\s*44px/);
+    expect(styles).not.toContain(".command-dock-more");
     expect(styles).toMatch(/\.drawer-chat > \.drawer-controls-strip\s*\{[^}]*env\(safe-area-inset-bottom\)/);
     expect(styles).not.toContain(".command-dock-hint");
     expect(styles).not.toContain(".command-dock-ready");
@@ -4630,7 +4623,7 @@ describe("RHSP command header consolidation", () => {
     expect(pathCopies[0].attributes["aria-label"]).toContain("Copy Workspace path");
   });
 
-  test("Close is icon-only and Archive lives behind the existing overflow disclosure", () => {
+  test("Close is icon-only and Archive sits as a peer tile in the dock", () => {
     const drawer = renderDrawer({
       controls: [
         { action: "focus", enabled: true },
@@ -4646,10 +4639,9 @@ describe("RHSP command header consolidation", () => {
     const cluster = byClass(drawer, "command-dock-cluster");
     const directTools = (cluster?.children || []).filter((child: any) =>
       String(child.className || "").split(/\s+/).includes("dock-tool"));
-    expect(directTools.map((tool: any) => textOf(tool))).toEqual(["", ""]);
-    expect(directTools.map((tool: any) => tool.attributes?.["aria-label"])).toEqual(["Focus", "Interrupt"]);
-    const more = byClass(cluster, "command-dock-more");
-    expect(more).not.toBeNull();
+    expect(directTools.map((tool: any) => textOf(tool))).toEqual(["", "", ""]);
+    expect(directTools.map((tool: any) => tool.attributes?.["aria-label"])).toEqual(["Focus", "Interrupt", "Archive"]);
+    expect(byClass(cluster, "command-dock-more")).toBeNull();
     const archive = byFkey(cluster, "act:codex:a1:archive");
     expect(archive?.attributes?.["aria-label"]).toBe("Archive");
     expect(textOf(archive)).toBe("");
@@ -12224,6 +12216,8 @@ describe("FE-C: an agent that starts waiting reaches the operator outside the ta
        orphan-CSS guard reads this file as text. */
     expect(source).toContain('class: "notify-badge " + BADGE_TONE_CLASS[view.tone]');
     expect(source).toContain('text: String(view.count)');
+    expect(source).toContain('icon("bell")');
+    expect(source).not.toContain('btn.textContent = "Notifications"');
     for (const cls of ["is-blocked", "is-noticed", "is-clear"]) expect(source, cls).toContain(`"${cls}"`);
     // The disclosure's accessible name, not the delivery switch's.
     expect(source).toMatch(/btn\.setAttribute\("aria-label", view\.disclosureLabel\)/);
@@ -15503,8 +15497,8 @@ describe("header collapse — static masthead and fence contracts", () => {
     expect(tag).toContain('id="header-summary-toggle"');
     expect(tag).toContain('aria-controls="health-rail compact-summary"');
     expect(tag).toContain('aria-expanded="true"');
-    const label = html.slice(close + 1, html.indexOf("<", close + 1));
-    expect(label.trim()).toBe("Collapse header");
+    expect(tag).toContain('aria-label="Collapse header"');
+    expect(tag).toContain("masthead-icon");
     /* Inside .masthead-signals, so panel anchoring and focus behavior are the
        row's own. */
     const signalsAt = html.indexOf('class="masthead-signals"');
@@ -15517,8 +15511,11 @@ describe("header collapse — static masthead and fence contracts", () => {
     for (const id of ["notify-toggle", "notifications-panel", "settings-toggle", "conn-badge", "server-health", "feed-alarm", "cleanup-status"]) {
       expect(html.match(new RegExp(`id="${id}"`, "g"))?.length, id).toBe(1);
     }
-    /* Attention/trust order is load-bearing: the alarm sits between the
-       masthead and the rail so a frozen feed cannot be hidden by collapsing. */
+    /* LIVE sits in the Board/History/Usage rail, not the masthead icon row. */
+    const viewsAt = html.indexOf('id="views"');
+    const connAt = html.indexOf('id="conn-badge"');
+    expect(connAt).toBeGreaterThan(viewsAt);
+    expect(connAt).toBeLessThan(html.indexOf("</nav>", viewsAt));
     expect(html.indexOf('id="feed-alarm"')).toBeGreaterThan(html.indexOf("</header>"));
     expect(html.indexOf('id="feed-alarm"')).toBeLessThan(html.indexOf('id="health-rail"'));
     /* The static live region stays outside the collapsible rail so cleanup

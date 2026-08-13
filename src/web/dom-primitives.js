@@ -62,11 +62,6 @@ const ICON_PATHS = {
   intervention: [["line", { x1: 12, y1: 4.5, x2: 12, y2: 13.5, "stroke-width": 2.6 }], ["rect", { x: 10.7, y: 16.6, width: 2.6, height: 2.6, fill: "currentColor", stroke: "none" }]],
   // advisory: caution diamond (no clinical triangle) with peak stem + LED
   warning: [["path", { d: "M12 2.8 21.2 12 12 21.2 2.8 12z", "stroke-linejoin": "miter" }], ["line", { x1: 12, y1: 7.6, x2: 12, y2: 12.8, "stroke-width": 2 }], ["rect", { x: 11, y: 15, width: 2, height: 2, fill: "currentColor", stroke: "none" }]],
-  // cog for the Evidence disclosure — a settings-flavored "more machinery" mark
-  gear: [
-    ["circle", { cx: 12, cy: 12, r: 3 }],
-    ["path", { d: "M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.1 5.1l1.6 1.6M17.3 17.3l1.6 1.6M5.1 18.9l1.6-1.6M17.3 6.7l1.6-1.6" }],
-  ],
   // resolved: crisp confirm tick
   check: [["polyline", { points: "4.5 12.5 9.5 17.5 19.5 6.5", "stroke-linejoin": "miter" }]],
   // rename: nib + trim edge
@@ -77,6 +72,18 @@ const ICON_PATHS = {
   more: [["circle", { cx: 5, cy: 12, r: 1.4, fill: "currentColor", stroke: "none" }], ["circle", { cx: 12, cy: 12, r: 1.4, fill: "currentColor", stroke: "none" }], ["circle", { cx: 19, cy: 12, r: 1.4, fill: "currentColor", stroke: "none" }]],
   copy: [["rect", { x: 8, y: 8, width: 11, height: 11, rx: 1.5 }], ["path", { d: "M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" }]],
   caret: [["polyline", { points: "9 6 15 12 9 18" }]],
+  "chevron-up": [["polyline", { points: "8 14 12 10 16 14" }]],
+  "chevron-down": [["polyline", { points: "8 10 12 14 16 10" }]],
+  // masthead: interruption channel — open outline, narrow waist
+  bell: [
+    ["path", { d: "M7 8.2a5 5 0 0 1 10 0c0 5.8 1.8 7.4 2.1 7.8H4.9C5.2 15.6 7 14 7 8.2" }],
+    ["path", { d: "M10.4 20.2a1.6 1.6 0 0 0 3.2 0" }],
+  ],
+  // cog: toothed wheel, not a sunburst
+  gear: [
+    ["circle", { cx: 12, cy: 12, r: 3 }],
+    ["path", { d: "M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" }],
+  ],
   // offline: dark node, severed rail
   offline: [["circle", { cx: 12, cy: 12, r: 9 }], ["line", { x1: 8, y1: 12, x2: 16, y2: 12 }]],
   // focus: magnifying glass — locate the pane, don't decorate the control
@@ -86,7 +93,7 @@ const ICON_PATHS = {
   // interrupt: pause bars
   interrupt: [["rect", { x: 7, y: 5.5, width: 3.4, height: 13, rx: 0.6 }], ["rect", { x: 13.6, y: 5.5, width: 3.4, height: 13, rx: 0.6 }]],
   // archive: tray
-  archive: [["path", { d: "M4 7h16v11.5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7z", "stroke-linejoin": "miter" }], ["line", { x1: 2.5, y1: 7, x2: 21.5, y2: 7 }], ["line", { x1: 9, y: 12, x2: 15, y2: 12 }]],
+  archive: [["path", { d: "M4 7h16v11.5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7z", "stroke-linejoin": "miter" }], ["line", { x1: 2.5, y1: 7, x2: 21.5, y2: 7 }], ["line", { x1: 9, y1: 12, x2: 15, y2: 12 }]],
   // drawer evidence — per-row 14px icons (stroke 1.6, rounded)
   folder: [["path", { d: "M4 8.5a2 2 0 0 1 2-2h3.2l2 2H18a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-8z" }]],
   "folder-open": [["path", { d: "M4 8.5a2 2 0 0 1 2-2h3l2 2h7a2 2 0 0 1 2 2v1.5H4v-3.5z" }], ["path", { d: "M4 12.5v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4" }]],

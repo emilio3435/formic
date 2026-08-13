@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>Formic — operator console</title>
-  <link rel="icon" href="favicon.svg?v=ah-t27">
-  <link rel="stylesheet" href="formic-tokens.css?v=ah-t27">
-  <link rel="stylesheet" href="styles.css?v=ah-t27">
+  <link rel="icon" href="favicon.svg?v=ah-t30">
+  <link rel="stylesheet" href="formic-tokens.css?v=ah-t30">
+  <link rel="stylesheet" href="styles.css?v=ah-t30">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to agent list</a>
@@ -33,14 +33,12 @@
            collapsed row reads identity → readings → controls. -->
       <div id="compact-summary" class="compact-summary" role="group" aria-label="Fleet summary, compact" hidden></div>
       <div class="masthead-signals">
-        <!-- The summary disclosure starts first so expanded mode keeps every
-             shipped control rectangle. Collapse moves this SAME focused node
-             to the end, keeping DOM/tab order aligned with the compact row's
-             visual order; expanding restores it here. -->
-        <button type="button" class="btn header-summary-toggle" id="header-summary-toggle" data-fkey="header-summary-toggle" aria-expanded="true" aria-controls="health-rail compact-summary">Collapse header</button>
+        <!-- Disclosure stays here, first, in both modes. Moving it on collapse
+             made the chevron jump across the ribbon. -->
+        <button type="button" class="btn masthead-icon header-summary-toggle" id="header-summary-toggle" data-fkey="header-summary-toggle" aria-expanded="true" aria-controls="health-rail compact-summary" aria-label="Collapse header" title="Collapse header"></button>
         <!-- Opt-in out-of-page alerts. Permission is requested from this click
              and nowhere else — never on load. -->
-        <button type="button" class="btn notify-toggle" id="notify-toggle" aria-expanded="false" aria-controls="notifications-panel">Notifications</button>
+        <button type="button" class="btn masthead-icon notify-toggle" id="notify-toggle" aria-expanded="false" aria-controls="notifications-panel" aria-label="Notifications" title="What needs a person right now."></button>
         <!-- Attention lives here. The header above the board is confidence and
              never links; this is the one place a discrete thing that needs a
              person is named, with its evidence and a route to it. Anchored to
@@ -62,16 +60,7 @@
              it is called. They were compiled-in constants; an operator running
              overnight swarms had no way to say "45 minutes of silence is normal
              here" except to edit source. -->
-        <button type="button" class="btn settings-toggle" id="settings-toggle" aria-expanded="false" aria-controls="settings-panel">Settings</button>
-        <p id="conn-badge" class="conn conn-connecting">
-          <span class="conn-dot" aria-hidden="true"></span>
-          <span id="conn-label">Connecting</span>
-        </p>
-        <!-- The server's OWN health verdict from /api/health, distinct from the
-             connection badge beside it (which reports this browser's SSE view).
-             Silent while the two agree; only speaks when the server disowns its
-             own snapshot or stops answering. -->
-        <span id="server-health" class="server-health" hidden></span>
+        <button type="button" class="btn masthead-icon settings-toggle" id="settings-toggle" aria-expanded="false" aria-controls="settings-panel" aria-label="Settings" title="Settings"></button>
       </div>
     </div>
   </header>
@@ -128,6 +117,15 @@
             <button type="button" class="view-tab is-current" data-view="board" aria-pressed="true">Board<span class="count" id="count-board"></span></button>
             <button type="button" class="view-tab" data-view="history" aria-pressed="false">History<span class="count" id="count-history"></span></button>
             <button type="button" class="view-tab" data-view="usage" aria-pressed="false">Usage</button>
+            <p id="conn-badge" class="conn conn-connecting">
+              <span class="conn-dot" aria-hidden="true"></span>
+              <span id="conn-label">Connecting</span>
+            </p>
+            <!-- The server's OWN health verdict from /api/health, distinct from
+                 the connection badge beside it (which reports this browser's
+                 SSE view). Silent while the two agree; only speaks when the
+                 server disowns its own snapshot or stops answering. -->
+            <span id="server-health" class="server-health" hidden></span>
           </nav>
           <!-- FE-4 D4: the reconciling sentence lives IN the filter bar row, after
                the lenses and before the right-aligned working-set control — lenses
@@ -200,6 +198,6 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-  <script type="module" src="app.js?v=ah-t27"></script>
+  <script type="module" src="app.js?v=ah-t30"></script>
 </body>
 </html>

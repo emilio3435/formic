@@ -1910,25 +1910,13 @@ function syncHeaderDisclosure() {
     document.body.classList.toggle("header-summary-collapsed", collapsed);
   }
   if (toggle) {
-    toggle.textContent = collapsed ? "Expand header" : "Collapse header";
+    const label = collapsed ? "Expand header" : "Collapse header";
+    toggle.textContent = "";
+    toggle.classList.add("masthead-icon");
+    toggle.append(icon(collapsed ? "chevron-down" : "chevron-up"));
+    toggle.setAttribute("aria-label", label);
+    toggle.setAttribute("title", label);
     toggle.setAttribute("aria-expanded", String(!collapsed));
-    /* Keep DOM, visual and keyboard order in agreement. Collapsed puts Expand
-       after the persistent controls; expanded restores the shipped first-control
-       geometry. Skip the move when the node is already there: Chromium still
-       detaches on insertBefore(node, node-or-same-slot), and this sync runs on
-       every rail paint — including snapshot ticks that do not change mode. */
-    const signals = toggle.parentElement || toggle.parent;
-    if (signals && typeof signals.insertBefore === "function") {
-      const kids = signals.children || [];
-      const first = signals.firstElementChild || kids[0] || null;
-      const last = signals.lastElementChild || kids[kids.length - 1] || null;
-      const alreadyPlaced = collapsed ? last === toggle : first === toggle;
-      if (!alreadyPlaced) {
-        const heldFocus = document.activeElement === toggle;
-        signals.insertBefore(toggle, collapsed ? null : first);
-        if (heldFocus && typeof toggle.focus === "function") toggle.focus({ preventScroll: true });
-      }
-    }
   }
 }
 
@@ -3709,12 +3697,24 @@ function renderNotifyDeliverySwitch() {
     el("span", { class: "notify-foot-state", text: view.label }));
 }
 
+function paintSettingsToggle() {
+  const toggle = $("settings-toggle");
+  if (!toggle) return;
+  toggle.textContent = "";
+  toggle.classList.add("masthead-icon");
+  toggle.append(icon("gear"));
+  toggle.setAttribute("aria-label", "Settings");
+  toggle.setAttribute("title", "Settings");
+  toggle.classList.toggle("is-open", Boolean(state.settingsPanelOpen));
+}
+
 function renderSettingsPanel() {
   const panel = $("settings-panel");
   const toggle = $("settings-toggle");
   if (!panel || !toggle) return;
   panel.hidden = !state.settingsPanelOpen;
   toggle.setAttribute("aria-expanded", String(state.settingsPanelOpen));
+  paintSettingsToggle();
   // A dialog, so assistive tech treats the board behind it as inert rather than
   // as a region the reader can wander into while a modal is up.
   panel.setAttribute("role", "dialog");
@@ -10864,14 +10864,10 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
     cluster = el("div", { class: "command-dock-cluster", role: "group", "aria-label": "Session actions" });
     if (focusCap) cluster.append(renderDockTool(agent, focusCap, "focus", { held, iconOnly: true }));
     if (interruptCap) cluster.append(renderDockTool(agent, interruptCap, "interrupt", { held, iconOnly: true }));
-    // When Send/Focus are locked, Archive is the wrong lever — tuck it behind
-    // the disclosure so the dock does not offer a destructive peer next to
-    // dead controls. The summary names the one thing behind it.
-    if (archiveCap) {
-      cluster.append(el("details", { class: "command-dock-more" },
-        el("summary", { title: "More session actions", "aria-label": "More session actions" }, icon("more")),
-        renderDockTool(agent, archiveCap, "archive", { held, iconOnly: true })));
-    }
+    /* Archive is a peer tile. Hiding the only overflow item behind a three-dot
+       <details> made a one-action menu that stole the click. Confirm still
+       isolates the destructive step. */
+    if (archiveCap) cluster.append(renderDockTool(agent, archiveCap, "archive", { held, iconOnly: true }));
     // The undo is not destructive and does not hide behind the lock.
     if (unarchivable) cluster.append(renderDockTool(agent, unarchiveCap, "unarchive", { held, iconOnly: true }));
   }
@@ -12901,6 +12897,7 @@ function boot() {
      before the header stops spending its 156px. */
   $("header-summary-toggle").addEventListener("click", toggleHeaderCollapsed);
   syncHeaderDisclosure();
+  paintSettingsToggle();
 
   $("widget-reset").addEventListener("click", () => {
     state.widgetIds = defaultWidgetIds();
