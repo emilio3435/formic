@@ -91,6 +91,22 @@ describe("snapshot context utilization", () => {
     })).toBe(100);
   });
 
+  /* The only test where the two derivations disagree, and therefore the only
+     one that pins their ORDER. Every other occupancy case omits `total`, so
+     moving the occupancy branch below the total/window division keeps them all
+     green while silently changing which number the board shows. The harness's
+     own meter is the measurement; total/contextWindow is our arithmetic over a
+     window we guessed from the model name, so the meter wins. */
+  test("a harness-published occupancy outranks the total/window division", () => {
+    expect(contextPctFor({
+      contextWindow: 200_000,
+      total: 125_000,
+      occupancyPct: 42,
+      scope: "latest-turn",
+      provenance: "observed",
+    })).toBe(42);
+  });
+
   test("ignores occupancy that is not observed", () => {
     expect(contextPctFor({
       occupancyPct: 95,

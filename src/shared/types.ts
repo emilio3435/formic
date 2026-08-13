@@ -200,7 +200,9 @@ export interface TokenUsage {
      Everything else verifies internal consistency. */
   sessionProcessed?: number;
   /* Observed context fill 0–100, read verbatim from the harness's own meter
-     (Cursor: ItemTable composer.composerHeaders). A SIZE percentage, not billed
+     (Cursor: the `composerHeaders` table in state.vscdb, with the legacy
+     ItemTable `composer.composerHeaders` blob as a fallback for installs whose
+     migration gate has not flipped). A SIZE percentage, not billed
      spend: it must never be multiplied into `total` or `sessionTotal` — that
      product would be an invented token count against a constant window. */
   occupancyPct?: number;

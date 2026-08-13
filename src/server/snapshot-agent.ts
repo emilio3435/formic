@@ -323,6 +323,10 @@ export function effortFor(agent: CollectedAgent): string | undefined {
   return undefined;
 }
 
+/* Two roads to the same percentage: a harness that publishes its own meter
+   (occupancyPct, already divided) and a harness that publishes counts we divide
+   ourselves (total / contextWindow). Both are "occupancy" — the first branch is
+   just the case where the division already happened upstream. */
 export function contextPctFor(agent: CollectedAgent): number | undefined {
   const { contextWindow, occupancyPct, provenance, scope, total } = agent.tokens;
   /* Cursor publishes occupancy directly as a percent; there is no token
