@@ -794,6 +794,33 @@ function composerModelForSession(value: string | Uint8Array | undefined, session
   };
 }
 
+// ItemTable composer.composerHeaders carries Cursor's own context meter per
+// composer. The key has already moved once (composerData → composerHeaders):
+// a missing key or missing allComposers is Cursor changing shape and means
+// "no occupancy this scan", never an error. Invalid JSON throws so the caller
+// names the failure instead of reading it as absence.
+export function parseComposerHeaders(
+  value: string | Uint8Array | undefined | null,
+): Map<string, number> {
+  const map = new Map<string, number>();
+  if (value === undefined || value === null) return map;
+  const json = typeof value === "string" ? value : Buffer.from(value).toString("utf8");
+  const parsed: unknown = JSON.parse(json);
+  const composers = asRecord(parsed)?.allComposers;
+  if (!Array.isArray(composers)) return map;
+  for (const entry of composers) {
+    const record = asRecord(entry);
+    const id = record?.composerId;
+    const pct = record?.contextUsagePercent;
+    if (typeof id !== "string" || !UUID_PATTERN.test(id)) continue;
+    // [0, 100.5]: drop garbage rather than clamp it; 100.x floats round-trip
+    // from Cursor and are capped at 100 only at render time.
+    if (typeof pct !== "number" || !Number.isFinite(pct) || pct < 0 || pct > 100.5) continue;
+    map.set(id, pct);
+  }
+  return map;
+}
+
 function cachedComposerModel(
   state: NonNullable<typeof cursorStateCache> | undefined,
   sessionId: string,

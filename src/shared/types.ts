@@ -199,6 +199,11 @@ export interface TokenUsage {
      figure on this board that can be checked against a source outside it.
      Everything else verifies internal consistency. */
   sessionProcessed?: number;
+  /* Observed context fill 0–100, read verbatim from the harness's own meter
+     (Cursor: ItemTable composer.composerHeaders). A SIZE percentage, not billed
+     spend: it must never be multiplied into `total` or `sessionTotal` — that
+     product would be an invented token count against a constant window. */
+  occupancyPct?: number;
   contextWindow?: number;
   scope?: "latest-turn" | "session" | "unknown";
   provenance: "observed" | "estimated" | "unknown";

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   collectCursorSessions,
+  parseComposerHeaders,
   parseCursorChildSession,
   parseCursorSession,
   readCursorStoreEvidence,
@@ -1183,5 +1184,42 @@ describe("Cursor Agent live pane identity", () => {
       resolution: "missing",
       reason: "Cursor GUI agents require exact cmux identity; cwd fallback is disabled.",
     });
+  });
+});
+
+describe("Cursor composer headers occupancy", () => {
+  const COMPOSER_ID = "7f3a2b10-9c4d-4e5f-8a6b-1c2d3e4f5a6b";
+
+  test("parses a valid header row into a composerId → percent map", () => {
+    const map = parseComposerHeaders(JSON.stringify({
+      allComposers: [{ composerId: COMPOSER_ID, contextUsagePercent: 95.47466666666666 }],
+    }));
+    expect(map.get(COMPOSER_ID)).toBe(95.47466666666666);
+    expect(map.size).toBe(1);
+  });
+
+  test("absent value and missing allComposers are empty, not errors", () => {
+    expect(parseComposerHeaders(undefined).size).toBe(0);
+    expect(parseComposerHeaders(null).size).toBe(0);
+    expect(parseComposerHeaders(JSON.stringify({ somethingElse: [] })).size).toBe(0);
+  });
+
+  test("drops non-uuid ids and out-of-range or non-finite percents without clamping", () => {
+    const map = parseComposerHeaders(JSON.stringify({
+      allComposers: [
+        { composerId: "not-a-uuid", contextUsagePercent: 50 },
+        { composerId: COMPOSER_ID, contextUsagePercent: 250 },
+        { composerId: "8f3a2b10-9c4d-4e5f-8a6b-1c2d3e4f5a6b", contextUsagePercent: Number.NaN },
+        { composerId: "9f3a2b10-9c4d-4e5f-8a6b-1c2d3e4f5a6b", contextUsagePercent: -1 },
+        { composerId: "af3a2b10-9c4d-4e5f-8a6b-1c2d3e4f5a6b", contextUsagePercent: 100.3 },
+      ],
+    }));
+    // Only the 100.3 row survives: within [0, 100.5], capped later at render.
+    expect(map.size).toBe(1);
+    expect(map.get("af3a2b10-9c4d-4e5f-8a6b-1c2d3e4f5a6b")).toBe(100.3);
+  });
+
+  test("invalid JSON throws so the caller can record a named error", () => {
+    expect(() => parseComposerHeaders("{ this is not json")).toThrow();
   });
 });
