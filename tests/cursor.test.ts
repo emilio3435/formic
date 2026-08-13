@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   collectCursorSessions,
+  fillCursorOccupancy,
   parseComposerHeaders,
   parseCursorChildSession,
   parseCursorSession,
@@ -128,6 +129,9 @@ async function setupGuiComposerHome(options: {
   /** Creates the composerHeaders TABLE with columns this reader does not know,
       to model Cursor migrating the payload again under the same table name. */
   tableWrongColumns?: boolean;
+  /** Creates the live-schema composerHeaders TABLE with no rows at all, to model
+      a gated install whose table holds nothing this scan can use. */
+  emptyTable?: boolean;
   trackingModel?: string;
 }): Promise<string> {
   const home = await mkdtemp(join(tmpdir(), "mountain-cursor-composer-"));
@@ -184,7 +188,7 @@ async function setupGuiComposerHome(options: {
       GUI_SESSION_ID,
       JSON.stringify({ contextUsagePercent: 85.837109375 }),
     ]);
-  } else if (options.tableUsagePercent !== undefined || options.corruptTableRow) {
+  } else if (options.tableUsagePercent !== undefined || options.corruptTableRow || options.emptyTable) {
     /* The live schema on this machine, column names and order transcribed from
        `sqlite_master` (928 rows). SQLite's declared types are case-insensitive
        and `value` is TEXT in production; the readings below are bound as text,
@@ -1662,11 +1666,12 @@ describe("Cursor composer headers occupancy", () => {
     expect(agent?.tokens.occupancyPct).toBe(85.837109375);
   });
 
-  /* Installs whose gate has not flipped still keep the meter in the blob, so
-     the blob stays a fallback rather than becoming dead code: here the table
-     exists and answers for a DIFFERENT composer, which is exactly the shape
-     that would strand the session at unknown if a non-empty table suppressed
-     the blob wholesale. */
+  /* This branch only ever runs on a GATED install — an install without the
+     table takes the blob-only path above, never this merge. What it covers is
+     a table that answers, but not for this composer: the blob may fill the gap
+     it leaves, because filling a gap is not the same as replacing a live
+     answer with a frozen one. Without it a non-empty table would suppress the
+     blob wholesale and strand the session at unknown. */
   test("the blob still fills composers the table has no row for", async () => {
     const home = await setupGuiComposerHome({
       tableUsagePercent: 77.323828125,
@@ -1702,16 +1707,54 @@ describe("Cursor composer headers occupancy", () => {
      classified as an unreadable state.vscdb and the whole scan reports the
      database as broken. Cursor has moved this payload twice already and
      versions it in flight, so the next migration is a question of when. A
-     schema change must cost occupancy and nothing else. */
+     schema change must cost occupancy and nothing else.
+
+     The blob here is deliberate and is what makes the test able to fail. On a
+     gated install the blob froze the day the gate flipped, so falling back to
+     it when the TABLE breaks would republish a stale reading as this scan's
+     answer — and it would do so silently, because an unreadable table used to
+     be indistinguishable from an empty one. The 12.5 below is that frozen
+     reading: it must not reach the agent, and the failure must be named. */
   test("a composerHeaders table with unknown columns costs occupancy, never the sessions", async () => {
-    const home = await setupGuiComposerHome({ tableWrongColumns: true, trackingModel: "grok-4.5" });
+    const home = await setupGuiComposerHome({
+      tableWrongColumns: true,
+      contextUsagePercent: 12.5,
+      trackingModel: "grok-4.5",
+    });
     const result = await collectCursorSessions(home, 1784692000000);
-    expect(result.errors).toEqual([]);
-    const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
     // The session survives in full — model, cwd and identity all intact.
+    const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
     expect(agent).toBeDefined();
     expect(agent?.model).toBe("grok-4.5");
-    // Occupancy alone is absent, and absent honestly: unknown, not zero.
+    // Occupancy alone is absent, and absent honestly: unknown, not the frozen 12.5.
+    expect(agent?.tokens.occupancyPct).toBeUndefined();
+    expect(agent?.tokens.provenance).toBe("unknown");
+    /* A read that could not happen is a collection error, per
+       docs/FOREIGN-SQLITE-READS.md — it names the fault and what could not be
+       enumerated, rather than passing an unreadable source off as an empty one. */
+    expect(result.errors.length).toBe(1);
+    expect(result.errors[0]).toContain("the composerHeaders table could not be read");
+    expect(result.errors[0]).toContain("context occupancy is missing for this scan");
+  });
+
+  /* Same rule from the other side, with nothing broken at all. A gated table
+     that legitimately holds no usable row is a complete answer: "Cursor has no
+     current meter for this composer". Reaching past it to the blob would turn
+     that into "Cursor says 12.5%", dated the day the gate flipped, and no error
+     would mark the substitution. An empty table and a blob are not two sources
+     to merge — on a gated install the blob is the one that stopped moving. */
+  test("a gated but empty composerHeaders table does not fall back to the frozen blob", async () => {
+    const home = await setupGuiComposerHome({
+      emptyTable: true,
+      contextUsagePercent: 12.5,
+      trackingModel: "grok-4.5",
+    });
+    const result = await collectCursorSessions(home, 1784692000000);
+    // Nothing failed, so nothing is reported: an empty table is a real answer.
+    expect(result.errors).toEqual([]);
+    const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
+    expect(agent).toBeDefined();
+    expect(agent?.model).toBe("grok-4.5");
     expect(agent?.tokens.occupancyPct).toBeUndefined();
     expect(agent?.tokens.provenance).toBe("unknown");
   });
@@ -1734,5 +1777,64 @@ describe("Cursor composer headers occupancy", () => {
     expect(result.errors[0]).not.toContain("context occupancy will be missing");
     const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
     expect(agent?.tokens.occupancyPct).toBe(85.837109375);
+  });
+
+  /* Filling occupancy also stamps provenance "observed", so the row it lands on
+     must have no token total left for that stamp to describe. An ESTIMATED
+     total that survived the fill would be republished as observed and lose the
+     `≈` the token cell prints to say "this is a guess" — laundering an estimate
+     into a measurement, which is the one thing this board must never do. The
+     collector cannot build that row today (it emits observed-with-a-total or
+     unknown-with-none), so the rule is pinned directly on the function. */
+  test("any token total blocks the occupancy fill, whatever provenance it claims", () => {
+    const cursorRow = (id: string, tokens: CollectedAgent["tokens"]): CollectedAgent => ({
+      id: `cursor:${id}`,
+      provider: "cursor",
+      sourceSessionId: id,
+      displayName: "Cursor session",
+      cwd: "/Users/me/project",
+      status: "running",
+      statusReason: "Fixture activity is recent.",
+      updatedAt: new Date(1784691250000).toISOString(),
+      tokens,
+      artifacts: [],
+      gates: [],
+    });
+    const estimated = cursorRow("estimated-total", {
+      total: 4321,
+      scope: "latest-turn",
+      provenance: "estimated",
+    });
+    const zeroTotal = cursorRow("zero-total", { total: 0, scope: "latest-turn", provenance: "observed" });
+    const unreported = cursorRow("unreported", { scope: "unknown", provenance: "unknown" });
+
+    fillCursorOccupancy(
+      {
+        path: "/fixture/state.vscdb",
+        fingerprint: "fixture",
+        sessionCwds: new Map(),
+        hasComposerData: false,
+        composerData: new Map(),
+        occupancyPct: new Map([
+          ["estimated-total", 61.5],
+          ["zero-total", 61.5],
+          ["unreported", 61.5],
+        ]),
+        composers: new Map(),
+      },
+      [estimated, zeroTotal, unreported],
+    );
+
+    // An estimate keeps its total AND its provenance: untouched, not upgraded.
+    expect(estimated.tokens.occupancyPct).toBeUndefined();
+    expect(estimated.tokens.total).toBe(4321);
+    expect(estimated.tokens.provenance).toBe("estimated");
+    /* A total of exactly 0 still blocks the fill — `total !== undefined` is the
+       predicate, as it was before, so this ruling did not move. */
+    expect(zeroTotal.tokens.occupancyPct).toBeUndefined();
+    // The shape the feature exists for is still filled.
+    expect(unreported.tokens.occupancyPct).toBe(61.5);
+    expect(unreported.tokens.provenance).toBe("observed");
+    expect(unreported.tokens.total).toBeUndefined();
   });
 });
