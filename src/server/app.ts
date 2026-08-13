@@ -415,6 +415,14 @@ export function resetRepoKeyCache(): void {
   repoKeyByWorktree.clear();
 }
 
+/* Workspaces come from the collector's own resolved bindings — an agent's
+   `target.workspaceId` — and from nowhere else. That is what keeps GROUP ANCHOR
+   workspaces out of the fan-out once mirrorGroups is on: `workspace.group.create`
+   also mints an anchor row carrying the group's cwd, which looks repo-mapped
+   from `workspace.list` but holds no session, so no agent ever points at it and
+   it never reaches this walk. TINT-S filters anchors at the collector; anything
+   here that started enumerating workspaces directly would have to filter them
+   again, and writing a colour to an anchor is a defect the sync then fights. */
 function discoverRepoColors(snapshot: HubSnapshot): RepoColorDiscovery {
   return repoColorDiscovery(snapshot.programs.flatMap((program) =>
     program.agents.flatMap((agent) => {

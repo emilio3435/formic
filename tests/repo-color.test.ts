@@ -25,6 +25,7 @@ import {
   normalizeRepoColors,
   repoColorDiscovery,
 } from "../src/server/settings";
+import { createMountainFetch, emptySnapshot } from "../src/server/app";
 import type { CommandResult, CommandRunner } from "../src/server/types";
 
 const ORIGIN = "http://127.0.0.1:4701";
@@ -285,17 +286,48 @@ describe("cmux colour funnel", () => {
     expect(calls).toEqual([]);
   });
 
-  test("a group write goes through the same door, as an rpc with group_id", async () => {
-    const { runner, calls } = recordingRunner(() => clean);
+  /* The group RPC echoes the colour it now holds; a no-op echoes null. */
+  const groupEcho = (hex: string | null): CommandResult =>
+    ({ ...clean, stdout: JSON.stringify({ id: "GROUP-1", custom_color: hex }) });
+
+  test("a group write names its parameters EXACTLY group_id and hex", async () => {
+    /* Not a spelling preference. `color` and `custom_color` are both accepted
+       by this RPC, both exit 0 with no stderr, and both change nothing while
+       returning custom_color: null — verified live against the binary
+       2026-08-13. A funnel written against the obvious name reports success and
+       colours nothing, forever. */
+    const { runner, calls } = recordingRunner(() => groupEcho("#B05F3A"));
     configureCmuxColor({ runner });
     expect(await setGroupColor("GROUP-1", "#B05F3A", "mirror")).toBe(true);
     expect(calls[0]).toEqual([
       "/fake/cmux", "rpc", "workspace.group.set_color",
-      JSON.stringify({ group_id: "GROUP-1", color: "#b05f3a" }),
+      JSON.stringify({ group_id: "GROUP-1", hex: "#b05f3a" }),
     ]);
+    const params = JSON.parse(calls[0]![3]!) as Record<string, unknown>;
+    expect(Object.keys(params).sort()).toEqual(["group_id", "hex"]);
     /* Groups are mirrored FROM the board every pass and never read back as an
        operator's intent, so there is no loop for a memory to break. */
     expect(lastWrittenHex("GROUP-1")).toBeNull();
+  });
+
+  test("a clean exit that echoes no colour is the silent no-op, and reads as failure", async () => {
+    const nulled = recordingRunner(() => groupEcho(null));
+    configureCmuxColor({ runner: nulled.runner });
+    expect(await setGroupColor("GROUP-1", "#b05f3a", "mirror")).toBe(false);
+
+    const silent = recordingRunner(() => clean); // exit 0, no stdout at all
+    configureCmuxColor({ runner: silent.runner });
+    expect(await setGroupColor("GROUP-1", "#b05f3a", "mirror")).toBe(false);
+
+    const wrong = recordingRunner(() => groupEcho("#123456"));
+    configureCmuxColor({ runner: wrong.runner });
+    expect(await setGroupColor("GROUP-1", "#b05f3a", "mirror")).toBe(false);
+  });
+
+  test("the echoed colour is compared by value, not by spelling", async () => {
+    const { runner } = recordingRunner(() => groupEcho("#B05F3A"));
+    configureCmuxColor({ runner });
+    expect(await setGroupColor("GROUP-1", "#b05f3a", "mirror")).toBe(true);
   });
 });
 
@@ -489,5 +521,83 @@ describe("/api/repo-colors", () => {
       method: "DELETE", headers,
     }))).json() as any;
     expect(body.settings.assignments.formic.source).toBe("auto");
+  });
+});
+
+/* ---------------------------------------------------------------------------
+   The route as it is actually registered.
+
+   Everything above drives handleRepoColorsRequest directly, which proves the
+   handler and proves nothing about whether the board can reach it: the path
+   match, the default store and the snapshot→discovery walk all live in app.ts
+   and none of them are exercised by calling the handler by hand.
+   ------------------------------------------------------------------------ */
+
+describe("createMountainFetch wiring", () => {
+  function board(agents: readonly Record<string, unknown>[]) {
+    const snapshot = { ...emptySnapshot(), programs: [{ id: "p1", name: "p", agents: agents as never }] };
+    const writes: { workspaceId: string; hex: string }[] = [];
+    const fetch = createMountainFetch({
+      state: { get: () => snapshot, subscribe: () => () => {}, refresh: async () => snapshot },
+      runner: { run: async () => clean },
+      archiveStore: { has: () => false, archive: async () => {} },
+      /* The fan-out is stubbed for one reason: the real one writes colours to
+         this machine's live cmux workspaces, and a test suite must not repaint
+         somebody's sidebar. */
+      repoColorFanOut: (batch) => { writes.push(...batch); },
+      webRoot: import.meta.dir,
+    });
+    return { fetch, writes };
+  }
+
+  /* This worktree IS a linked worktree of the-mountain, so the real
+     repoKeyForCwd behind the route has to collapse it to the repository — the
+     exact trap the fake-git tests above are written against. */
+  const here = import.meta.dir;
+
+  test("GET /api/repo-colors reaches the handler and colours the live fleet", async () => {
+    const { fetch, writes } = board([{
+      id: "a1",
+      repo: { repoKey: "hash", repoName: "the-mountain", worktreePath: here, ephemeral: false },
+      target: { resolution: "exact", workspaceId: "WS-LIVE" },
+    }]);
+    const body = await (await fetch(new Request(`${ORIGIN}/api/repo-colors`))).json() as any;
+    expect(body.ok).toBe(true);
+    expect(Object.keys(body.settings.assignments)).toEqual(["the-mountain"]);
+    expect(body.repoNames).toEqual({ "the-mountain": "the-mountain" });
+    expect(body.workspaces["WS-LIVE"].repoKey).toBe("the-mountain");
+    expect(writes).toEqual([{ workspaceId: "WS-LIVE", hex: body.settings.assignments["the-mountain"].hex }]);
+    fetch.dispose();
+  });
+
+  test("an agent with no repository, and one with no workspace, are both left alone", async () => {
+    const { fetch, writes } = board([
+      { id: "a1", target: { resolution: "none" } },
+      { id: "a2", repo: { repoKey: "h", repoName: "the-mountain", worktreePath: here, ephemeral: false }, target: { resolution: "none" } },
+    ]);
+    const body = await (await fetch(new Request(`${ORIGIN}/api/repo-colors`))).json() as any;
+    expect(Object.keys(body.settings.assignments)).toEqual(["the-mountain"]);
+    /* Authority rule 2 at the route: no workspace was resolved, so nothing in
+       cmux is written to. */
+    expect(body.workspaces).toEqual({});
+    expect(writes).toEqual([]);
+    fetch.dispose();
+  });
+
+  test("PUT reaches the handler through the same registration", async () => {
+    const { fetch } = board([{
+      id: "a1",
+      repo: { repoKey: "h", repoName: "the-mountain", worktreePath: here, ephemeral: false },
+      target: { resolution: "exact", workspaceId: "WS-LIVE" },
+    }]);
+    const response = await fetch(new Request(`${ORIGIN}/api/repo-colors/the-mountain`, {
+      method: "PUT",
+      headers: { origin: ORIGIN, "content-type": "application/json" },
+      body: JSON.stringify({ hex: "#0E9494" }),
+    }));
+    const body = await response.json() as any;
+    expect(response.status).toBe(200);
+    expect(body.settings.assignments["the-mountain"]).toMatchObject({ hex: "#0e9494", source: "user" });
+    fetch.dispose();
   });
 });
