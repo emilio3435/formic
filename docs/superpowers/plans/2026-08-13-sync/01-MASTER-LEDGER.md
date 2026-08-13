@@ -20,7 +20,7 @@
 | SYNC-E done + Grok verify PASS + master floor | DONE | BLOCK 04:14 (nested resume ack) -> fix red-first -> VERDICT-2 PASS 04:29; my floor tsc 0 · 3311/3312 canary-only |
 | E merged; six phase lanes spawned (ps-verified per lane) | DONE | merge 656f2a9, integration floor green; ws:55-60; codex pids 4629/4630/4661 = gpt-5.6-sol xhigh; claude pids 7122/7144/7414 = --model opus --effort high --permission-mode auto |
 | CB merged (verify PASS + my floor) | DONE | verify-cb PASS; master-committed 9f4dc5f; merged; floor tsc 0 · 3322/3323 canary-only |
-| CF merged | PENDING | — |
+| CF merged | DONE | verify-cf PASS; merged; floor tsc 0 · 3346/3347 canary-only |
 | NB merged | PENDING | — |
 | NF merged | PENDING | — |
 | RB merged | PENDING | — |
