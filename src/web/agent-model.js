@@ -551,7 +551,10 @@ export function tokenSummary(tokens) {
       label,
       text: "not reported",
       known: false,
-      title: "This source does not report token usage locally (provenance: " + provenance + ")",
+      /* "token usage" was too broad once a source could report occupancy without
+         counts: the sentence denied any usage reading while announcing an
+         observed provenance in the same breath. What is missing is the COUNT. */
+      title: "This source does not report token counts locally (provenance: " + provenance + ")",
     };
   }
   const marks = { observed: "", estimated: "≈", unknown: "" };
@@ -594,6 +597,15 @@ export function tokenSummary(tokens) {
 }
 
 export function contextUsage(tokens) {
+  if (tokens && tokens.scope === "latest-turn" && tokens.provenance === "observed" &&
+      !Number.isFinite(tokens.total) &&
+      Number.isFinite(tokens.occupancyPct) && tokens.occupancyPct >= 0) {
+    /* Cursor reports a bare percent. Rendering it as "X of Y tokens" would
+       require multiplying it back into the window constant — an invented
+       measurement — so the ring shows the percent and nothing else. */
+    const pct = Math.min(100, Math.round(tokens.occupancyPct));
+    return { pct, text: pct + "%" };
+  }
   if (!tokens || tokens.scope !== "latest-turn" || tokens.provenance !== "observed" ||
       !Number.isFinite(tokens.total) || !Number.isFinite(tokens.contextWindow) || !(tokens.contextWindow > 0)) return null;
   const rawPct = Math.max(0, Math.round((tokens.total / tokens.contextWindow) * 100));
