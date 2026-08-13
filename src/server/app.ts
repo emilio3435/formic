@@ -32,7 +32,13 @@ import {
   type RepoColorDiscovery,
 } from "./settings";
 /* TINT-F */
-import { setWorkspaceColor, lastWrittenHex } from "./cmux-color";
+import { setWorkspaceColor, setGroupColor, lastWrittenHex } from "./cmux-color";
+/* TINT integration wiring (master) */
+import {
+  registerRepoGroupInputs,
+  JsonRepoGroupProvenanceStore,
+  MemoryRepoGroupProvenanceStore,
+} from "./cmux-groups";
 import { repoKeyForCwd, sameHex } from "../shared/repo-color";
 import { snapshotFingerprint } from "./snapshot";
 import { handleTriageRequest, MemoryTriageQueueStore, type TriageInvestigationRunner, type TriageQueueStore } from "./triage";
@@ -567,6 +573,32 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
   const repoColorsStore = dependencies.repoColorsStore
     ? Promise.resolve(dependencies.repoColorsStore)
     : defaultRepoColorsStore(dependencies.webRoot);
+  /* TINT integration wiring (master): the one call TINT-G left to the
+     integrator. The provider feeds the sidebar mirror from the same discovery
+     walk and store the /api/repo-colors endpoint uses, so the mirror and the
+     endpoint can never disagree about a repository's colour. Sync by contract:
+     store.get() is the cached settings and discovery reads the last snapshot —
+     the tick rides the collector poll, so both are at most one poll old. The
+     provider returns null until the store resolves; the tick treats null as
+     "not wired yet" and stays inert, so startup order cannot race. */
+  let repoColorsForGroups: JsonRepoColorsStore | undefined;
+  void repoColorsStore.then((store) => { repoColorsForGroups = store; });
+  const groupProvenance = resolve(dependencies.webRoot) === resolve(import.meta.dir, "../web")
+    ? JsonRepoGroupProvenanceStore.open(resolve(import.meta.dir, "../../data/repo-group-provenance.json"))
+    : Promise.resolve(new MemoryRepoGroupProvenanceStore());
+  void groupProvenance.then((provenance) => {
+    registerRepoGroupInputs(() => {
+      const store = repoColorsForGroups;
+      if (!store) return null;
+      const settings = store.get();
+      const discovery = discoverRepoColors(dependencies.state.get());
+      const targets = Object.entries(discovery.workspaces).flatMap(([workspaceId, repoKey]) => {
+        const assignment = settings.assignments[repoKey];
+        return assignment ? [{ workspaceId, repoKey, hex: assignment.hex }] : [];
+      });
+      return { mirrorGroups: settings.mirrorGroups, targets, setGroupColor };
+    }, provenance);
+  });
   const cleanupObserveIntervalMs = dependencies.cleanupObserveIntervalMs ?? CLEANER_OBSERVE_INTERVAL_MS;
   let recollectInFlight: Promise<HubSnapshot> | undefined;
   const recollect = (): Promise<HubSnapshot> => {
@@ -1271,6 +1303,9 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
   fetch.dispose = (): void => {
     if (disposed) return;
     disposed = true;
+    /* TINT integration wiring: drop the group-mirror provider with the app, so
+       a disposed test server cannot keep feeding the module-level tick. */
+    registerRepoGroupInputs(undefined);
     unsubscribe();
     unsubscribeTriage?.();
     for (const client of [...clients]) {
