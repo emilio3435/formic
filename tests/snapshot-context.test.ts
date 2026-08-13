@@ -61,4 +61,41 @@ describe("snapshot context utilization", () => {
   ])("leaves contextPct unknown without a usable latest-turn token total", (tokens) => {
     expect(contextPctFor(tokens)).toBeUndefined();
   });
+
+  test("derives contextPct from an observed occupancy percent without any token total", () => {
+    expect(contextPctFor({
+      contextWindow: 500_000,
+      occupancyPct: 95.47466666666666,
+      scope: "latest-turn",
+      provenance: "observed",
+    })).toBe(95);
+  });
+
+  test("caps an over-100 occupancy reading at 100 and works without a window", () => {
+    expect(contextPctFor({
+      occupancyPct: 100.3,
+      scope: "latest-turn",
+      provenance: "observed",
+    })).toBe(100);
+  });
+
+  /* 100.5 is the exact reading the cap exists for: it is the top of the range
+     ingest admits, and Math.round(100.5) is 101 — a percentage the board must
+     never show. The 100.3 case above rounds to 100 with or without the cap, so
+     it pins the branch but not the cap. */
+  test("caps the highest reading ingest admits, which would otherwise round to 101", () => {
+    expect(contextPctFor({
+      occupancyPct: 100.5,
+      scope: "latest-turn",
+      provenance: "observed",
+    })).toBe(100);
+  });
+
+  test("ignores occupancy that is not observed", () => {
+    expect(contextPctFor({
+      occupancyPct: 95,
+      scope: "latest-turn",
+      provenance: "unknown",
+    })).toBeUndefined();
+  });
 });
