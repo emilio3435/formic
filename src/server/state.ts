@@ -9,6 +9,7 @@ import {
   collectCmuxWorkspaceEnvs,
   DEFAULT_CMUX_EXECUTABLE,
 } from "./cmux";
+/* TINT-S */ import { syncCmuxColors } from "./cmux-color-sync";
 import {
   CmuxEventsSupervisor,
   cmuxEventsCommand,
@@ -860,6 +861,7 @@ export class HubState {
       if (runManifestsResult) {
         this.#runManifests = runManifestsResult;
       }
+      /* TINT-S */ if (this.#cmuxReachable) void syncCmuxColors({ runner: this.runner, executable: this.cmuxExecutable, surfaces: this.#surfaces, settings });
       this.#cmuxErrors = [...new Set([
         ...cmux.errors,
         ...(sidebar?.errors ?? []),
