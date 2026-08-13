@@ -1171,6 +1171,97 @@ describe("Cursor Agent persisted session truth", () => {
     // Burn coverage counts the Cursor session as "unknown", never "eligible".
     expect(report.burn.coverage.eligible).toBe(1);
     expect(report.burn.coverage.unknown).toBe(1);
+
+    /* Occupancy changes which ring lights, and nothing else. A percent is a
+       fill reading, not a measurement of tokens — so the same session that
+       raises context coverage must leave the token sum, the reporting
+       numerator, the median and burn coverage exactly where they were. */
+    const occupiedCursor: CollectedAgent = {
+      ...cursorAgent,
+      id: "cursor:occupied",
+      sourceSessionId: "occupied",
+      tokens: { scope: "latest-turn", provenance: "observed", occupancyPct: 95.47, contextWindow: 500_000 },
+    };
+    const occupiedSnapshot = buildSnapshot({
+      agents: [occupiedCursor, claudeAgent],
+      surfaces: [],
+      archiveStore,
+      now: new Date(nowMs),
+    });
+    // Occupancy lights the context ring…
+    expect(occupiedSnapshot.programs.flatMap((program) => program.agents)
+      .find((agent) => agent.id === "cursor:occupied")?.contextPct).toBe(95);
+    // `contextReporting` is published on the snapshot root, not under totals
+    // (snapshot.ts:826) — the coverage numerator for contextPeak.
+    expect(occupiedSnapshot.contextReporting).toBe(1);
+    expect(occupiedSnapshot.contextPeak).toBe(95);
+    // …and moves nothing in the token economy.
+    expect(occupiedSnapshot.totals.tokens).toBe(1000);
+    expect(occupiedSnapshot.totals.tokenReporting).toBe(1);
+    expect(occupiedSnapshot.totals.tokenMedian).toBe(1000);
+    const occupiedPulse = new PulseTracker(undefined, nowMs);
+    occupiedPulse.observe(occupiedSnapshot, nowMs);
+    const occupiedReport = occupiedPulse.report(nowMs);
+    expect(occupiedReport.burn.coverage.eligible).toBe(1);
+    expect(occupiedReport.burn.coverage.unknown).toBe(1);
+  });
+
+  /* The block above builds its occupancy agent by hand, so it pins the SNAPSHOT
+     boundary: a percent reaching buildSnapshot must not become tokens. This one
+     drives the real collector, so the same pin also covers the COLLECTOR: if
+     fillCursorOccupancy ever multiplied the percent back into the window, the
+     invented number would land in the fleet token sum here. Both halves of the
+     honesty claim are measured on wire-shaped data, not on a fixture. */
+  test("a live-collected occupancy session raises context coverage without entering the token rollups", async () => {
+    /* A CLI session mid-turn, so it lands in `working` — the population the
+       token sum, the reporting numerator and the median are all computed over.
+       A finished GUI turn reads `waiting`, which is live enough for the context
+       ring but sits outside every token rollup, so it could not witness an
+       invented total arriving. */
+    const nowMs = 1784691250000;
+    const home = await setupCliOccupancyHome(41.2);
+    const collected = await collectCursorSessions(home, nowMs);
+    expect(collected.errors).toEqual([]);
+    const occupied = collected.value.find(({ id }) => id === `cursor:${CLI_OCCUPANCY_SESSION_ID}`);
+    expect(occupied?.tokens.occupancyPct).toBe(41.2);
+
+    const claudeAgent: CollectedAgent = {
+      id: "claude:token-session",
+      provider: "claude",
+      sourceSessionId: "token-session",
+      displayName: "Claude worker",
+      cwd: "/Users/me/other-project",
+      status: "running",
+      statusReason: "Fixture activity is recent.",
+      updatedAt: new Date(nowMs).toISOString(),
+      tokens: { total: 1000, sessionTotal: 1000, scope: "session", provenance: "observed" },
+      artifacts: [],
+      gates: [],
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    const snapshot = buildSnapshot({
+      agents: [occupied!, claudeAgent],
+      surfaces: [],
+      archiveStore,
+      now: new Date(nowMs),
+    });
+
+    const published = snapshot.programs.flatMap((program) => program.agents)
+      .find((agent) => agent.id === `cursor:${CLI_OCCUPANCY_SESSION_ID}`);
+    expect(published?.contextPct).toBe(41);
+    // Inside the token rollups' population, so the assertions below can witness
+    // an invented total rather than miss it on a technicality.
+    expect(published?.activity).toBe("working");
+    expect(snapshot.contextReporting).toBe(1);
+    expect(snapshot.totals.working).toBe(2);
+    // The fleet token sum is the Claude session alone. 41.2% of a 500k window
+    // is 206,000 tokens; if that number were ever invented it would land here.
+    expect(snapshot.totals.tokens).toBe(1000);
+    expect(snapshot.totals.tokenReporting).toBe(1);
+    expect(snapshot.totals.tokenMedian).toBe(1000);
+    const pulse = new PulseTracker(undefined, nowMs);
+    pulse.observe(snapshot, nowMs);
+    expect(pulse.report(nowMs).burn.coverage.eligible).toBe(1);
   });
 });
 
