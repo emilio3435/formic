@@ -35,12 +35,12 @@
 | Lane | Kickoff | Branch/worktree | Workspace | Model · vehicle | Status | Verify | My floor |
 |---|---|---|---|---|---|---|---|
 | SYNC-E | KICKOFF-E.md | `feat/sync-e` | `SYNC · events-foundation · sol · 08-13` (ws:53) | Sol xhigh · codex (pid 88775 ps-verified) | DONE as dirt + complete report (sandbox can't commit, expected) | verify-e ws:54, `cursor-grok-4.6-xhigh-fast` pid 82726 ps-verified — the `-fast` variant EXISTS and is what ran (plan honesty note) | tsc 0 · 3310/3311, only red = tolerated canary (lane's 9 extra sandbox fails vanish unsandboxed) |
-| SYNC-CB | KICKOFF-CB.md | `feat/sync-cb` | `SYNC · close-be · sol · 08-13` | Sol xhigh · codex | SPAWNED ws:55 ps-verified | — | — |
+| SYNC-CB | KICKOFF-CB.md | `feat/sync-cb` | `SYNC · close-be · sol · 08-13` | Sol xhigh · codex | DONE staged + report | verify-cb ws:62 running | tsc 0 · 3322/3323 canary-only |
 | SYNC-CF | KICKOFF-CF.md | `feat/sync-cf` | `SYNC · close-fe · opus · 08-13` | Opus 5 high · claude | SPAWNED ws:58 ps-verified | — | — |
-| SYNC-NB | KICKOFF-NB.md | `feat/sync-nb` | `SYNC · notify-be · sol · 08-13` | Sol xhigh · codex | SPAWNED ws:56 ps-verified | — | — |
+| SYNC-NB | KICKOFF-NB.md | `feat/sync-nb` | `SYNC · notify-be · sol · 08-13` | Sol xhigh · codex | DONE as dirt + report | verify-nb ws:63 running | tsc 0 · 3320/3321 canary-only |
 | SYNC-NF | KICKOFF-NF.md | `feat/sync-nf` | `SYNC · notify-fe · opus · 08-13` | Opus 5 high · claude | SPAWNED ws:59 ps-verified | — | — |
-| SYNC-RB | KICKOFF-RB.md | `feat/sync-rb` | `SYNC · rename-be · sol · 08-13` | Sol xhigh · codex | SPAWNED ws:57 ps-verified | — | — |
-| SYNC-RF | KICKOFF-RF.md | `feat/sync-rf` | `SYNC · rename-fe · opus · 08-13` | Opus 5 high · claude | SPAWNED ws:60 ps-verified | — | — |
+| SYNC-RB | KICKOFF-RB.md | `feat/sync-rb` | `SYNC · rename-be · sol · 08-13` | Sol xhigh · codex | DONE staged + report; 1 master-ruled cross-fence line in cmux-sync.ts (workspace.renamed own-echo exception, state-only handlers) | verify-rb ws:61 VERDICT: PASS 04:5x | tsc 0 · 3324/3325 canary-only |
+| SYNC-RF | KICKOFF-RF.md | `feat/sync-rf` | `SYNC · rename-fe · opus · 08-13` | Opus 5 high · claude | DONE committed 7225867 (mutation-tested, eyes-on isolated port) | verify-rf ws:64 running | tsc 0 · 3319/3320 canary-only |
 | verify-* | brief files per lane | read-only in lane worktrees | `SYNC · verify-<lane> · grok · 08-13` | Grok 4.6 xhigh · cursor-agent | as needed | — | — |
 
 ## Contract changes / Incidents / Rescues
