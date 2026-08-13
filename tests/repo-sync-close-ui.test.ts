@@ -358,6 +358,19 @@ describe("SYNC-CF task 1 — the close affordance is gated on an exact target", 
     }
   });
 
+  test("the affordance lives in the drawer only — a board row and the strip offer no close", () => {
+    /* The needs-you strip reconciles the same renderAgentRow the program groups
+       build, so one assertion covers both. An alerting row has one job — get the
+       operator to the session — and a destructive verb reachable from a scanning
+       surface is a mis-click waiting for a busy morning. */
+    const target = agent();
+    const row = withDom(() => M.renderAgentRow(target, { id: "p1", name: "P", agents: [target] }));
+    // Not a vacuous absence: this row painted, and it painted THIS session.
+    expect(textOf(row)).toContain("SYNC · ridge");
+    expect(byFkey(row, "sync-close:" + target.id)).toBeNull();
+    expect(findAll(row, (n: Node_) => typeof n.className === "string" && n.className.includes("sync-close"))).toHaveLength(0);
+  });
+
   test("a frozen feed holds the close control shut, like every other dock tool", () => {
     const target = agent();
     const dock = withDom(() => M.renderCommandDock(target, M.deriveControlState(target), { kind: "stale", headline: "Feed is stale", detail: "" }, []));
