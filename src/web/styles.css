@@ -3111,6 +3111,28 @@ body.feed-frozen .programs { opacity: 0.62; }
   vertical-align: baseline;
   display: inline-block;
 }
+/* SYNC-RF — the cmux workspace this session sits in, printed under the name
+   because it is a different object with a different owner: cmux holds the
+   title, the board only shows it. Quiet mono, one line, ellipsised — a fact
+   with an editor, never a second heading. The editor replaces the row in place
+   and drops the band chrome .rename-form wears in the program head, which would
+   otherwise cut a full-width rule across the middle of this header. */
+.drawer-workspace { display: flex; align-items: center; gap: 0.4rem; min-width: 0; font: 500 11.5px/1.35 var(--font-mono); color: var(--muted); }
+.drawer-workspace-label { flex: none; font-size: 9.5px; letter-spacing: 0.075em; text-transform: uppercase; color: var(--faint-strong); }
+.drawer-workspace-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+.drawer-workspace-rename {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 1.6rem; height: 1.6rem;
+  color: var(--faint);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+}
+.drawer-workspace-rename:hover { color: var(--ink); border-color: var(--line-strong); background: var(--raise); }
+.drawer-workspace-rename .ico { width: 0.9rem; height: 0.9rem; }
+.sync-rename-form { padding: 0.5rem 0; border-bottom: 0; background: none; }
+
 .drawer-session-facts {
   grid-column: 1 / -1;
   display: grid;
@@ -3807,6 +3829,9 @@ body.feed-frozen .programs { opacity: 0.62; }
      on the board on a phone. */
   .notify-act, .notify-row-acts .dock-tool, .verdict-cleanup, .filter-chip, .program-details,
   .artifact-copy, .command-dock-cluster .dock-tool,
+  /* SYNC-RF: the drawer's workspace-rename pencil is the same size and the same
+     kind of inline control as .program-rename, so it joins the same sweep. */
+  .drawer-workspace-rename,
   .command-composer textarea, .rename-form input { min-height: 44px; }
   .artifact-copy { width: 44px; }
 }

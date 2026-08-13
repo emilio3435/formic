@@ -131,6 +131,14 @@ export const state = {
   renameDraft: "",
   renamePending: false,
   renameError: "",
+  /* SYNC-RF — the cmux workspace-rename editor. Separate from the presentation
+     label state above because it writes another process through
+     /api/sync/rename and can be refused; `wsRenaming` holds the workspace id
+     being edited, never a presentation-label key. */
+  wsRenaming: null,
+  wsRenameDraft: "",
+  wsRenamePending: false,
+  wsRenameError: "",
   programOverrides: new Map(), // programId -> "open" | "closed"
   /* Which repositories the operator has folded up. Keyed by repoKey — the FNV
      of the git common dir, which is stable across every worktree of the repo
