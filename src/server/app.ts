@@ -16,7 +16,7 @@ import {
   type AttentionAction,
   type AttentionStore,
 } from "./cmux";
-import { closeSurface, closeWorkspace, configureCmuxActions, dismissNotification, markNotificationRead } from "./cmux-actions";
+import { closeSurface, closeWorkspace, configureCmuxActions, dismissNotification, markNotificationRead, renameWorkspace } from "./cmux-actions";
 import { identityDebugResponse, transcriptResponse } from "./debug-identity";
 import { sessionCallsResponse } from "./session-calls";
 import { readPublishState, type PublishState } from "./publish-state";
@@ -480,6 +480,10 @@ async function recordBroadcastAction(
 }
 
 export function createMountainFetch(dependencies: MountainAppDependencies): MountainFetch {
+  configureCmuxActions({
+    runner: dependencies.runner,
+    ...(dependencies.cmuxExecutable ? { executable: dependencies.cmuxExecutable } : {}),
+  });
   const triageStore = dependencies.triageStore ?? new MemoryTriageQueueStore();
   const actionLogStore = dependencies.actionLogStore
     ? Promise.resolve(dependencies.actionLogStore)
@@ -1177,6 +1181,65 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
          SYNC-CB: POST /api/sync/close
          SYNC-NB: POST /api/sync/notifications · PUT/DELETE /api/sync/ack/:agentId
          SYNC-RB: POST /api/sync/rename */
+    if (url.pathname === "/api/sync/rename") {
+      if (request.method !== "POST") {
+        return responseError(405, "METHOD_NOT_ALLOWED", "Use POST for workspace rename.");
+      }
+      if (!sameOriginLoopback(request)) {
+        return responseError(
+          403,
+          "ORIGIN_REJECTED",
+          "Workspace rename requires an exact same-origin loopback Origin header.",
+        );
+      }
+      const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+      if (contentType !== "application/json") {
+        return responseError(415, "CONTENT_TYPE_REJECTED", "Workspace rename requires application/json.");
+      }
+      const body = await jsonRecord(request);
+      if (
+        !body
+        || Object.keys(body).some((key) => key !== "workspaceId" && key !== "title")
+        || typeof body.workspaceId !== "string"
+        || !body.workspaceId.trim()
+        || body.workspaceId.length > 300
+        || typeof body.title !== "string"
+      ) {
+        return responseError(
+          400,
+          "INVALID_RENAME_REQUEST",
+          "Body must contain only a non-empty workspaceId and a string title.",
+        );
+      }
+
+      const workspaceId = body.workspaceId.trim();
+      const title = body.title.trim();
+      const currentTitle = dependencies.state.get().programs
+        .flatMap((program) => program.agents)
+        .find((agent) => agent.target.workspaceId === workspaceId)
+        ?.target.workspaceTitle
+        ?? dependencies.state.surfaces?.()
+          .find((surface) => surface.workspaceId === workspaceId)
+          ?.workspaceTitle;
+      const result = title && currentTitle?.trim() === title
+        ? { ok: true }
+        : await renameWorkspace(workspaceId, body.title, "board rename");
+      const status = result.ok
+        ? 200
+        : result.code === "not_found"
+          ? 404
+          : result.code === "invalid_title" || result.code === "invalid_workspace"
+            ? 400
+            : result.code === "unavailable" || result.code === "timeout"
+              ? 503
+              : result.code === "cmux_error" || result.code === "invalid_response"
+                ? 502
+                : 409;
+      return Response.json(result, {
+        status,
+        headers: { ...SECURITY_HEADERS, "cache-control": "no-store" },
+      });
+    }
     if (url.pathname === "/api/sync/notifications") {
       if (request.method !== "POST") {
         return responseError(405, "METHOD_NOT_ALLOWED", "Use POST for cmux notification changes.");

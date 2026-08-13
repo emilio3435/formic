@@ -9,6 +9,7 @@ import { collectSessions } from "../src/server/collectors";
 import { collectCmuxNotificationSummaries } from "../src/server/cmux";
 import {
   dismissNotification,
+  configureCmuxActions,
   isOwnEcho,
   markNotificationRead,
   resetCmuxActionsMemory,
@@ -241,6 +242,7 @@ describe("SYNC-NB notification verbs", () => {
         return ok({ result: { id: params.id } });
       },
     );
+    configureCmuxActions({ runner: new BunCommandRunner() });
     resetCmuxActionsMemory();
     try {
       await expect(markNotificationRead("NOTICE-READ")).resolves.toEqual({ ok: true });
@@ -284,6 +286,7 @@ describe("SYNC-NB notification verbs", () => {
       { exitCode: 9, stdout: "", stderr: "socket unavailable", timedOut: false },
     ];
     const run = spyOn(BunCommandRunner.prototype, "run").mockImplementation(async () => results.shift()!);
+    configureCmuxActions({ runner: new BunCommandRunner() });
     resetCmuxActionsMemory();
     try {
       await expect(markNotificationRead("NOTICE-REFUSED")).resolves.toEqual({
@@ -340,6 +343,10 @@ describe("POST /api/sync/notifications", () => {
       commands.push([...command]);
       return ok({ result: { id: JSON.parse(command[3] ?? "null").id } });
     });
+    /* createMountainFetch pointed the shared funnel at this app's collection
+       runner (one-substrate); the funnel assertions here watch the spied
+       BunCommandRunner, so repoint it explicitly. */
+    configureCmuxActions({ runner: new BunCommandRunner() });
     const request = (body: unknown, origin = "http://127.0.0.1:4701") => new Request(
       "http://127.0.0.1:4701/api/sync/notifications",
       {

@@ -463,11 +463,16 @@ export class HubState {
       "surface.closed",
       (event) => this.#applyCmuxClosedEvent(event),
     );
+    const unregisterRename = registerSyncHandler(
+      "workspace.renamed",
+      (event) => this.#applyCmuxRenamedEvent(event),
+    );
     const unregisterNotifications = ["notification.created", "notification.read", "notification.removed"]
       .map((name) => registerSyncHandler(name, () => this.#queueNotificationRelist()));
     this.#unregisterCmuxSync = () => {
       unregisterWorkspace();
       unregisterSurface();
+      unregisterRename();
       for (const unregister of unregisterNotifications) unregister();
     };
     const supervisor = new CmuxSyncSupervisor({
@@ -596,6 +601,52 @@ export class HubState {
     const pulseNowMs = Date.now();
     this.#pulse.observe(next, pulseNowMs);
     this.#snapshot = withPulse(next, this.#pulse.report(pulseNowMs));
+    for (const listener of this.#listeners) listener(this.#snapshot);
+  }
+
+  #applyCmuxRenamedEvent(event: CmuxSyncEvent): void {
+    const params = syncEventRecord(event.payload.params);
+    const result = syncEventRecord(event.payload.result);
+    const resultWorkspace = syncEventRecord(result?.workspace);
+    const records = [event.payload, params, result, resultWorkspace];
+    const value = (...keys: string[]): string | undefined => {
+      for (const source of records) {
+        if (!source) continue;
+        for (const key of keys) {
+          const candidate = source[key];
+          if (typeof candidate === "string" && candidate.length > 0) return candidate;
+        }
+      }
+      return undefined;
+    };
+    const workspaceId = value("workspace_id", "workspaceId", "id");
+    const title = value("title", "workspace_title", "workspaceTitle")?.trim();
+    if (!workspaceId || !title) return;
+
+    this.#surfaces = this.#surfaces.map((surface) =>
+      surface.workspaceId === workspaceId && surface.workspaceTitle !== title
+        ? { ...surface, workspaceTitle: title }
+        : surface);
+    let changed = false;
+    const programs = this.#snapshot.programs.map((program) => {
+      const agents = program.agents.map((agent) => {
+        if (
+          agent.target.workspaceId !== workspaceId
+          || agent.target.workspaceTitle === title
+        ) return agent;
+        changed = true;
+        return { ...agent, target: { ...agent.target, workspaceTitle: title } };
+      });
+      return agents.some((agent, index) => agent !== program.agents[index])
+        ? { ...program, agents }
+        : program;
+    });
+    if (!changed) return;
+    this.#snapshot = {
+      ...this.#snapshot,
+      generatedAt: new Date().toISOString(),
+      programs,
+    };
     for (const listener of this.#listeners) listener(this.#snapshot);
   }
 
