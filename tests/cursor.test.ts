@@ -26,6 +26,7 @@ const SESSION_ID = "286ab053-e84f-4538-9292-4aa3fae6fe9b";
 const GUI_SESSION_ID = "a5336a9a-f434-4e7b-b8f0-a3c8509502cb";
 const CHILD_SESSION_ID = "6514e366-df29-434b-979d-52a26168e188";
 const CLI_OCCUPANCY_SESSION_ID = "0d9f6afe-2e34-4bd0-9d10-53146a02a111";
+const DAMAGED_COMPOSER_ID = "bf3a2b10-9c4d-4e5f-8a6b-1c2d3e4f5a6b";
 const fixture = (name: string): Promise<string> =>
   readFile(join(import.meta.dir, "fixtures", name), "utf8");
 const temporaryDirectories: string[] = [];
@@ -116,6 +117,14 @@ async function setupGuiComposerHome(options: {
   contextUsageComposerId?: string;
   /** Writes a composerHeaders row whose value is not JSON, to model a damaged meter. */
   corruptComposerHeaders?: boolean;
+  /** Writes Cursor's live source: a row in the composerHeaders TABLE the blob was
+      migrated into (ItemTable `composer.composerHeaders.tableGateEnabled` = true). */
+  tableUsagePercent?: number;
+  /** Which composer the TABLE row belongs to. Defaults to GUI_SESSION_ID. */
+  tableUsageComposerId?: string;
+  /** Adds a SECOND table row whose value is not JSON, to model one damaged row
+      among good ones. */
+  corruptTableRow?: boolean;
   trackingModel?: string;
 }): Promise<string> {
   const home = await mkdtemp(join(tmpdir(), "mountain-cursor-composer-"));
@@ -163,6 +172,32 @@ async function setupGuiComposerHome(options: {
       "composer.composerHeaders",
       "{ this is not json",
     ]);
+  }
+  if (options.tableUsagePercent !== undefined || options.corruptTableRow) {
+    // The live schema, verbatim from `sqlite_master` on this machine (928 rows).
+    state.run(`create table composerHeaders (
+      composerId text primary key,
+      workspaceId text,
+      createdAt integer,
+      lastUpdatedAt integer,
+      isArchived integer,
+      isSubagent integer,
+      recency integer,
+      checkpointAt integer,
+      value blob
+    )`);
+    if (options.tableUsagePercent !== undefined) {
+      state.run("insert into composerHeaders(composerId, value) values (?, ?)", [
+        options.tableUsageComposerId ?? GUI_SESSION_ID,
+        JSON.stringify({ contextUsagePercent: options.tableUsagePercent }),
+      ]);
+    }
+    if (options.corruptTableRow) {
+      state.run("insert into composerHeaders(composerId, value) values (?, ?)", [
+        DAMAGED_COMPOSER_ID,
+        "{ not json",
+      ]);
+    }
   }
   if (options.composerData) {
     state.run("create table cursorDiskKV (key text primary key, value blob)");
@@ -1576,5 +1611,74 @@ describe("Cursor composer headers occupancy", () => {
     expect(agent?.tokens.total).toBe(120000);
     expect(agent?.tokens.provenance).toBe("observed");
     expect(agent?.tokens.occupancyPct).toBeUndefined();
+  });
+
+  /* Cursor migrated composer headers out of the ItemTable blob into a dedicated
+     table on 2026-07-05. Every test above this point feeds the blob, so all of
+     them would still pass against a source that stopped being written weeks
+     ago. These four read the live one. */
+  test("the composerHeaders table lights occupancy with no blob present at all", async () => {
+    const home = await setupGuiComposerHome({ tableUsagePercent: 85.837109375, trackingModel: "grok-4.5" });
+    const result = await collectCursorSessions(home, 1784692000000);
+    expect(result.errors).toEqual([]);
+    const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
+    expect(agent?.tokens).toMatchObject({
+      scope: "latest-turn",
+      provenance: "observed",
+      occupancyPct: 85.837109375,
+    });
+    expect(agent?.tokens.total).toBeUndefined();
+    expect(agent?.cost).toBeNull();
+  });
+
+  /* The whole point of the task. Both sources carry a reading for the SAME
+     composer; the blob's is the July-5 freeze and the table's is what Cursor
+     wrote last. If a regression ever reinstates blob precedence, this is the
+     only test that notices — the ring would keep lighting, just with a number
+     39 days old. */
+  test("the table's reading beats a stale blob for the same composer", async () => {
+    const home = await setupGuiComposerHome({
+      tableUsagePercent: 85.837109375,
+      contextUsagePercent: 12.5,
+      trackingModel: "grok-4.5",
+    });
+    const result = await collectCursorSessions(home, 1784692000000);
+    expect(result.errors).toEqual([]);
+    const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
+    expect(agent?.tokens.occupancyPct).toBe(85.837109375);
+  });
+
+  /* Installs whose gate has not flipped still keep the meter in the blob, so
+     the blob stays a fallback rather than becoming dead code: here the table
+     exists and answers for a DIFFERENT composer, which is exactly the shape
+     that would strand the session at unknown if a non-empty table suppressed
+     the blob wholesale. */
+  test("the blob still fills composers the table has no row for", async () => {
+    const home = await setupGuiComposerHome({
+      tableUsagePercent: 77.323828125,
+      tableUsageComposerId: COMPOSER_ID,
+      contextUsagePercent: 41.2,
+      trackingModel: "grok-4.5",
+    });
+    const result = await collectCursorSessions(home, 1784692000000);
+    expect(result.errors).toEqual([]);
+    const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
+    expect(agent?.tokens.occupancyPct).toBe(41.2);
+  });
+
+  /* One damaged row is not a damaged source. The blob is all-or-nothing — a
+     single bad parse costs every composer — but the table is 928 independent
+     rows, so a skip costs one and a throw costs 927. `errors` staying empty is
+     the second half: a bad row is not a scan fault to report. */
+  test("a damaged table row is skipped without discarding the good readings", async () => {
+    const home = await setupGuiComposerHome({
+      tableUsagePercent: 17.5890625,
+      corruptTableRow: true,
+      trackingModel: "grok-4.5",
+    });
+    const result = await collectCursorSessions(home, 1784692000000);
+    expect(result.errors).toEqual([]);
+    const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
+    expect(agent?.tokens.occupancyPct).toBe(17.5890625);
   });
 });
