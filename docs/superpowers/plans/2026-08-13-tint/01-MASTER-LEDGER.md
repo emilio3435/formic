@@ -35,8 +35,8 @@
 | Lane | Goal doc | Branch / worktree | Workspace | Model · vehicle | Status | Report seen | Floor (my run) |
 |---|---|---|---|---|---|---|---|
 | TINT-F | GOAL-F-foundation.md | `feat/tint-f` · `../the-mountain.worktrees/tint-f` | workspace:26 `TINT · f-orch · opus · 08-13` | Opus 5 high · claude (pid 70978, verified) | WORKING | — | — |
-| TINT-S | GOAL-S-sync.md | `feat/tint-s` · `../the-mountain.worktrees/tint-s` | workspace:27 `TINT · s-orch · opus · 08-13` | Opus 5 high · claude (pid 71016, verified) | WORKING | — | — |
-| TINT-G | GOAL-G-groups.md | `feat/tint-g` · `../the-mountain.worktrees/tint-g` | workspace:28 `TINT · g-orch · opus · 08-13` | Opus 5 high · claude (pid 71062, verified) | WORKING | — | — |
+| TINT-S | GOAL-S-sync.md | `feat/tint-s` · `../the-mountain.worktrees/tint-s` | workspace:27 `TINT · s-orch · opus · 08-13` | Opus 5 high · claude (pid 71016, verified) | REOPENED 01:3x — anchor-filter addendum (master order) | bff04a4 seen | pending |
+| TINT-G | GOAL-G-groups.md | `feat/tint-g` · `../the-mountain.worktrees/tint-g` | workspace:28 `TINT · g-orch · opus · 08-13` | Opus 5 high · claude (pid 71062, verified) | REPORTED DONE 01:28 (2 commits, cross-session report) | yes — findings relayed | pending (verify-g ws spawned) |
 | TINT-P | GOAL-P-prompt.md | `feat/tint-p` · `../the-mountain.worktrees/tint-p` | workspace:29 `TINT · p-orch · opus · 08-13` | Opus 5 high · claude (pid 71208, verified) | WORKING | — | — |
 
 Sub-orch worker lanes appear in each sub-orch's own ledger section of its `LANE-REPORT`; master tracks sub-orchs only, but sweeps everything under the `TINT · ` prefix.
@@ -45,13 +45,16 @@ Sub-orch worker lanes appear in each sub-orch's own ledger section of its `LANE-
 
 | When | What changed | Why | Lanes notified |
 |---|---|---|---|
-| — | — | — | — |
+| 01:3x | Behavioral addendum, no shape change: group ANCHOR workspaces (workspace.group.list anchor_workspace_id) are excluded from collection, repo-mapping, sync, and color fan-out; never written to, never rendered | G verified live: group.create spawns an anchor that reads as a repo-mapped workspace; group.remove on the anchor destroys the group; group.delete closes members | F, S, G |
 
 ## Incidents / rescues
 
 | When | Lane | What | Resolution |
 |---|---|---|---|
-| — | — | — | — |
+| 01:24 | master | Sentinel done-detection bug (grep -c double-echo; P repo-commit test unsatisfiable) | killed, patched, relaunched |
+| 01:28 | G→F | workspace.group.set_color silently no-ops on {color}/{custom_color} param names; only {group_id, hex} works | relayed to F with order to test exact param names |
+| 01:28 | G | Open question (orphan anchor rows after ungroup) | master locked: leave for operator; no auto-close |
+| 01:3x | S | Reopened for anchor-filter addendum before merge (mirrorGroups ships ON) | S tasked in-fence via cmux.ts collector |
 
 ## Parked (carried from plan §8)
 
