@@ -255,6 +255,51 @@ describe("the wire join: a real GET envelope reaches a rendered row", () => {
     expect(M.repoTintFor("the-ant-hill")).toBe(STORM);
   });
 
+  /* stopBoot() has to mean stopped, including for work boot already started.
+
+     This fetch is fired once from boot(). When it lands it calls render(), and
+     that is a repaint nothing else asked for — which is fine in a browser and
+     wrong for anything that froze the board on purpose. The geometry gate does
+     exactly that: it calls stopBoot(), installs a fixture, and measures. A
+     response arriving in that window repaints over the fixture mid-measurement,
+     and the gate fails on a geometry it never rendered.
+
+     Measured 2026-08-13 by A/B over six interleaved runs each: unchanged, the
+     header-collapse gate failed in half of them; with the late repaint
+     suppressed (network request unchanged), zero. Pre-TINT code, which had no
+     such fetch, was also zero across eight runs. The network call is not the
+     problem — the repaint after the freeze is.
+
+     Same failure class stopBoot's own EventSource line already fixed once: it
+     "kept a live EventSource alive after stopBoot() claimed to have stopped."
+
+     Generation rather than a boolean, matching loadIdentityEvidence's stale
+     guard: a fetch STARTED after a stop is legitimate and still applies (the
+     test above drives exactly that), while one started before and landing after
+     is stale and is dropped. */
+  test("a boot fetch that lands after stopBoot() is dropped, not painted over the frozen board", async () => {
+    M.setRepoColors({}, { assignments: {} });
+    expect(M.repoTintFor("the-ant-hill")).toBe("");
+
+    let release: (() => void) | null = null;
+    const realFetch = (globalThis as { fetch?: unknown }).fetch;
+    (globalThis as unknown as { fetch: unknown }).fetch = () => new Promise((resolve) => {
+      release = () => resolve(new Response(JSON.stringify(envelope), {
+        status: 200, headers: { "content-type": "application/json" },
+      }));
+    });
+    try {
+      const inFlight = M.fetchRepoColors();  // boot fires it
+      M.stopBoot();                          // the board is frozen mid-flight
+      release!();                            // and only now does it land
+      await inFlight;
+    } finally {
+      (globalThis as unknown as { fetch: unknown }).fetch = realFetch;
+    }
+
+    expect(M.repoTintFor("the-ant-hill")).toBe("");
+  });
+
   test("putRepoColor re-joins from ITS response too — the second call site", async () => {
     /* There are two places that turn a response into colours, and a mutation
        run proved only one of them was covered: collapsing the join at the
