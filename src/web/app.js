@@ -9485,6 +9485,11 @@ function inspectorPaintSig(sel, view, ui) {
     ui.renaming || "",
     ui.renamePending ? "1" : "0",
     ui.renameError || "",
+    // SYNC-RF: same three flags for the workspace-rename editor, and the draft
+    // excluded for the same reason renameDraft is.
+    ui.wsRenaming || "",
+    ui.wsRenamePending ? "1" : "0",
+    ui.wsRenameError || "",
     ui.labelsLoading ? "1" : "0",
     ui.labelLoadError || "",
     // Narrow drawers switch the visible in-flow panel from Chat to Evidence.
@@ -10225,6 +10230,188 @@ function drawerSessionTag(agent, ui = state) {
   return visibleSessionTag(agent, boardIndex(ui));
 }
 
+/* ---------- SYNC-RF: inline workspace rename ----------
+
+   The one place on the board that writes a cmux WORKSPACE title. Three things
+   make it different from the presentation-label rename beside it, and each one
+   is why this path is its own machinery rather than a fourth `target.kind`:
+
+     - It mutates another process. `/api/sync/rename` goes through the action
+       funnel and can be REFUSED (an empty title, a group anchor); a board-local
+       alias never can, so the alias path has no refusal vocabulary to reuse.
+     - It renames an object this session SHARES. Sibling panes hang off one
+       workspace, so the editor says which id it is about rather than leaving
+       the operator to infer the scope from the session they opened.
+     - The board is not the author of the result. On success this writes NOTHING
+       locally: the title on screen is the snapshot's, so a rename someone else
+       makes in cmux between our save and the next snapshot simply wins. That is
+       the FE half of the never-re-assert rule — titles have no
+       board-authoritative copy, unlike repo colors.
+
+   Agent and session display names are board derivations and stay out: they are
+   renamed, if at all, through the Names disclosure and `/api/program-aliases`. */
+
+const SYNC_RENAME_ERRORS = {
+  invalid_title: "cmux needs a workspace title with at least one visible character.",
+  anchor: "This workspace anchors a cmux group, so its title is not ours to change.",
+  invalid_state: "cmux refused the rename in this state.",
+};
+
+function syncRenameErrorText(status, body) {
+  if (!status) return "Could not reach the server to rename this workspace.";
+  const code = body && typeof body.code === "string" ? body.code : "";
+  if (SYNC_RENAME_ERRORS[code]) return SYNC_RENAME_ERRORS[code];
+  const detail = body && typeof body.detail === "string" ? body.detail : "";
+  return "Rename failed"
+    + (code ? " [" + code + "]" : "")
+    + (detail ? ": " + detail : " (HTTP " + status + ")");
+}
+
+/* Which workspace this drawer may rename, or null.
+
+   `exact` and `unique-cwd` are the same pair Focus routes on — cmux either
+   attests the session is there, or it is the only pane in that directory. An
+   ambiguous or missing link would put the operator's typing into a workspace
+   the board only guessed at, and a rename lands on every sibling pane at once.
+
+   No title, no affordance: the mission is a rename control WHERE THE TITLE
+   RENDERS, and printing an empty field just to hang a pencil on it is the
+   omit-empty rule broken for chrome. The title is used raw (trimmed only) —
+   spinner-stripping it here would make "save unchanged" a real rename. */
+function renameableWorkspace(agent) {
+  const target = agent && agent.target;
+  if (!target || !target.workspaceId) return null;
+  if (target.resolution !== "exact" && target.resolution !== "unique-cwd") return null;
+  const title = typeof target.workspaceTitle === "string" ? target.workspaceTitle.trim() : "";
+  if (!title) return null;
+  return { workspaceId: target.workspaceId, title };
+}
+
+const syncRenameFkey = (workspaceId) => "ws-rename:" + workspaceId;
+const syncRenameInputFkey = (workspaceId) => "ws-rename-input:" + workspaceId;
+
+/* Focus by fkey, the same handle render() restores through. Used on the way out
+   of the editor: the control the operator opened it from is gone from the DOM
+   by then, so the automatic restore in render() cannot find it and would drop
+   a keyboard operator on the drawer lead. */
+function focusByFkey(fkey, select = false) {
+  if (typeof document === "undefined" || typeof CSS === "undefined") return;
+  const node = document.querySelector(`[data-fkey="${CSS.escape(fkey)}"]`);
+  if (!node) return;
+  node.focus({ preventScroll: true });
+  if (select && node.select) node.select();
+}
+
+function renderWorkspaceRename(agent) {
+  const ws = renameableWorkspace(agent);
+  if (!ws) return null;
+  if (state.wsRenaming === ws.workspaceId) return renderWorkspaceRenameForm(ws);
+  return el("div", { class: "drawer-workspace" },
+    el("span", { class: "drawer-workspace-label", text: "Workspace" }),
+    el("span", { class: "drawer-workspace-title", title: ws.title, text: ws.title }),
+    el("button", {
+      type: "button",
+      class: "drawer-workspace-rename",
+      "aria-label": "Rename workspace " + ws.title,
+      dataset: { fkey: syncRenameFkey(ws.workspaceId) },
+      onclick: () => startWorkspaceRename(ws),
+    }, icon("rename")));
+}
+
+function renderWorkspaceRenameForm(ws) {
+  return el("form", {
+    class: "rename-form sync-rename-form",
+    // Returns the promise: the browser ignores a listener's return value, and a
+    // test that fires this handler can then await the write it started.
+    onsubmit: (e) => { e.preventDefault(); return submitWorkspaceRename(ws); },
+  },
+    el("input", {
+      type: "text",
+      value: state.wsRenameDraft,
+      maxlength: "80",
+      placeholder: "Title for this cmux workspace",
+      "aria-label": "New title for workspace " + ws.title,
+      disabled: state.wsRenamePending ? "" : null,
+      dataset: { fkey: syncRenameInputFkey(ws.workspaceId) },
+      oninput: (e) => { state.wsRenameDraft = e.target.value; },
+      onkeydown: (e) => { if (e.key === "Escape") { e.preventDefault(); cancelWorkspaceRename(ws.workspaceId); } },
+    }),
+    el("button", {
+      type: "submit", class: "btn primary",
+      disabled: state.wsRenamePending ? "" : null,
+      "aria-busy": state.wsRenamePending ? "true" : null,
+      dataset: { fkey: "ws-rename-save:" + ws.workspaceId },
+    }, state.wsRenamePending ? "Saving…" : "Save"),
+    el("button", {
+      type: "button", class: "btn",
+      disabled: state.wsRenamePending ? "" : null,
+      dataset: { fkey: "ws-rename-cancel:" + ws.workspaceId },
+      onclick: () => cancelWorkspaceRename(ws.workspaceId),
+    }, "Cancel"),
+    el("span", {
+      class: "rename-source",
+      text: "cmux workspace " + ws.workspaceId + " · every pane in it shares this title",
+    }),
+    state.wsRenameError ? el("p", { class: "rename-error", role: "alert", text: state.wsRenameError }) : null);
+}
+
+function startWorkspaceRename(ws) {
+  state.wsRenaming = ws.workspaceId;
+  // Seeded from cmux's title, not from the agent's display name: this box edits
+  // the workspace, and the two are different strings on most linked sessions.
+  state.wsRenameDraft = ws.title;
+  state.wsRenameError = "";
+  render();
+  focusByFkey(syncRenameInputFkey(ws.workspaceId), true);
+}
+
+function cancelWorkspaceRename(workspaceId) {
+  state.wsRenaming = null;
+  state.wsRenameError = "";
+  render();
+  focusByFkey(syncRenameFkey(workspaceId));
+}
+
+async function submitWorkspaceRename(ws) {
+  if (state.wsRenamePending) return;
+  const title = state.wsRenameDraft.trim();
+  state.wsRenamePending = true;
+  state.wsRenameError = "";
+  render();
+
+  let status = 0;
+  let body = null;
+  try {
+    const res = await apiFetch("/api/sync/rename", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ workspaceId: ws.workspaceId, title }),
+    }, API_WRITE_TIMEOUT_MS);
+    status = res.status;
+    body = await res.json().catch(() => null);
+    /* An unreachable server leaves status 0, which syncRenameErrorText reads as
+       "could not reach" — the one failure that is not cmux refusing anything. */
+  } catch { /* handled below, by the absent ok */ }
+
+  state.wsRenamePending = false;
+  if (status >= 200 && status < 300 && body && body.ok === true) {
+    state.wsRenaming = null;
+    /* Deliberately no local write of `title`. The field re-reads the snapshot,
+       which SYNC-RB patches from cmux's own `workspace.renamed` event, so a
+       foreign rename that landed while this request was in flight is what the
+       operator sees next — not what they typed. */
+    toast("Renamed workspace to " + title, "ok");
+    render();
+    focusByFkey(syncRenameFkey(ws.workspaceId));
+    return;
+  }
+  state.wsRenameError = syncRenameErrorText(status, body);
+  // The refused draft is not left in the box pretending to be the title.
+  state.wsRenameDraft = ws.title;
+  render();
+  focusByFkey(syncRenameInputFkey(ws.workspaceId));
+}
+
 function renderAgentDrawer(pane, view) {
   const { agent, program } = view;
   const outcome = deriveOutcome(agent);
@@ -10373,7 +10560,10 @@ function renderAgentDrawer(pane, view) {
         /* Same value the subtraction below compares against — one call, so the
            two can never disagree about what the title said. */
         title,
-        tag ? el("span", { class: "inspector-tag mono", text: "#" + tag }) : null)),
+        tag ? el("span", { class: "inspector-tag mono", text: "#" + tag }) : null),
+      /* Under the name, because it is a different object: the cmux workspace
+         this session sits in, and the only renameable thing in this header. */
+      renderWorkspaceRename(agent)),
     el("div", { class: "verdict-side" }, closeButton()),
     hasFacts ? facts : null));
 
@@ -13041,6 +13231,10 @@ Object.assign(globalThis.TheAntHill, {
   syncInspectorViewportHeight,
   triageIssue, removeTriageItem, fetchTriageQueue,
   fetchLabels, submitRename, startRename,
+  // SYNC-RF: the cmux workspace rename path, driven end to end against a fake
+  // fetch — the gate, the editor, the POST, and the refusal vocabulary.
+  renameableWorkspace, renderWorkspaceRename,
+  startWorkspaceRename, cancelWorkspaceRename, submitWorkspaceRename, syncRenameErrorText,
   loadTranscript, loadActions, applyAttention,
   // Surfaces added this wave, plus the const limits FE-C had to leave out.
   // Startup path + the server-health probe, driven for real by tests.

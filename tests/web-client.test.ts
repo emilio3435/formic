@@ -15537,3 +15537,268 @@ describe("header collapse — static masthead and fence contracts", () => {
     expect(source).not.toContain('healthData || summaryWidgetData("health"');
   });
 });
+
+/* ---------------------------------------------------------------------------
+   SYNC-RF — inline workspace rename in the drawer session header.
+
+   The board renames a CMUX WORKSPACE, which is a real object in another
+   process: the affordance therefore hangs off the workspace title (a snapshot
+   fact) and never off the agent's display name (a board derivation, renamed
+   through the presentation-label path that already exists).
+
+   The load-bearing claim is the one about truth. This client must never write
+   the typed title into its own state on success — the board prints what the
+   snapshot says, so a foreign rename landing between the save and the next
+   snapshot wins on screen. Every "did it work" assertion below is written so a
+   local echo would fail it.
+   ------------------------------------------------------------------------- */
+describe("SYNC-RF · inline workspace rename (drawer session header)", () => {
+  const WS_ID = "WORKSPACE-RF";
+  const linkedTarget = (overrides: Record<string, unknown> = {}) => ({
+    resolution: "exact",
+    surfaceId: "SURFACE-RF",
+    workspaceId: WS_ID,
+    workspaceTitle: "SYNC · rf",
+    ...overrides,
+  });
+  const linked = (overrides: Record<string, unknown> = {}) =>
+    agent({ id: "codex:rf", displayName: "Ridge worker", target: linkedTarget(), ...overrides });
+
+  /* Two spellings on purpose: withDom installs a fake document and REMOVES it
+     on the way out, which would tear the one withRequests is standing on. Paint-
+     only tests use drawerOf; anything inside a request harness renders against
+     the ambient document with buildDrawer. */
+  const buildDrawer = (a: Record<string, unknown>) => {
+    const pane = newNode("div");
+    M.renderAgentDrawer(pane, { kind: "agent", agent: a, program: { id: "p", name: "P", agents: [a] } });
+    return pane;
+  };
+  const drawerOf = (a: Record<string, unknown>) => withDom(() => buildDrawer(a));
+  const headerOf = (a: Record<string, unknown>) => byClass(drawerOf(a), "drawer-session-header");
+  const headerHere = (a: Record<string, unknown>) => byClass(buildDrawer(a), "drawer-session-header");
+  const renameState = (patch: Record<string, unknown> = {}) => ({
+    wsRenaming: null, wsRenameDraft: "", wsRenamePending: false, wsRenameError: "", ...patch,
+  });
+
+  test("the resolved workspace title carries a rename control; the session name carries none", async () => {
+    await withState(renameState(), () => {
+      const header = headerOf(linked());
+      expect(header).not.toBeNull();
+
+      const row = byClass(header, "drawer-workspace");
+      expect(row).not.toBeNull();
+      expect(textOf(row)).toContain("SYNC · rf");
+
+      const trigger = byFkey(header, "ws-rename:" + WS_ID);
+      expect(trigger?.tagName).toBe("button");
+      expect(trigger?.attributes.type).toBe("button");
+      // The accessible name says WHICH object moves — sibling panes share a
+      // workspace title, so "Rename" alone would be a promise about the wrong scope.
+      expect(trigger?.attributes["aria-label"]).toBe("Rename workspace SYNC · rf");
+
+      // Exactly one cmux-rename control in the whole drawer, and it is not on
+      // the title: agent display names are board derivations, renamed (if at
+      // all) through the presentation-label disclosure, never through cmux.
+      const triggers = findAll(drawerOf(linked()), (n) => n.dataset?.fkey?.startsWith("ws-rename:"));
+      expect(triggers).toHaveLength(1);
+      expect(buttonsOf(byClass(header, "inspector-title"))).toHaveLength(0);
+    });
+  });
+
+  test("no resolved workspace, no inferred link, and no title means no rename control", async () => {
+    await withState(renameState(), () => {
+      const cases: Array<[string, Record<string, unknown>]> = [
+        ["unlinked", { target: { resolution: "none" } }],
+        ["ambiguous", { target: linkedTarget({ resolution: "ambiguous" }) }],
+        ["no workspace id", { target: linkedTarget({ workspaceId: undefined }) }],
+        ["untitled workspace", { target: linkedTarget({ workspaceTitle: "   " }) }],
+      ];
+      for (const [name, overrides] of cases) {
+        const drawer = drawerOf(linked(overrides));
+        expect(byClass(drawer, "drawer-workspace"), name).toBeNull();
+        expect(findAll(drawer, (n) => n.dataset?.fkey?.startsWith("ws-rename")), name).toEqual([]);
+      }
+    });
+  });
+
+  test("the editor seeds from the snapshot title and offers explicit save / cancel", async () => {
+    await withState(renameState({ wsRenaming: WS_ID, wsRenameDraft: "SYNC · rf" }), () => {
+      const header = headerOf(linked());
+      const form = byClass(header, "sync-rename-form");
+      expect(form?.tagName).toBe("form");
+      // Same visual idiom as the program-alias editor, so one inline-edit
+      // pattern serves both surfaces.
+      expect(form?.className.split(/\s+/)).toContain("rename-form");
+
+      const input = byFkey(form, "ws-rename-input:" + WS_ID);
+      expect(input?.tagName).toBe("input");
+      // el() assigns `value` as a property — a content attribute is inert here.
+      expect(input?.value).toBe("SYNC · rf");
+      expect(input?.attributes["aria-label"]).toBe("New title for workspace SYNC · rf");
+      expect(byFkey(form, "ws-rename-save:" + WS_ID)?.attributes.type).toBe("submit");
+      expect(byFkey(form, "ws-rename-cancel:" + WS_ID)?.attributes.type).toBe("button");
+      // The trigger is replaced by the editor, not doubled beside it.
+      expect(byFkey(header, "ws-rename:" + WS_ID)).toBeNull();
+      // The evidence line names the object and warns about the shared scope.
+      expect(textOf(byClass(form, "rename-source"))).toContain(WS_ID);
+    });
+
+    // Opening seeds the draft from cmux truth rather than from the agent name.
+    await withState(renameState({ snap: snapshot() }), async () => {
+      await withRequests([], async () => {
+        M.startWorkspaceRename({ workspaceId: WS_ID, title: "SYNC · rf" });
+        expect(M.state.wsRenaming).toBe(WS_ID);
+        expect(M.state.wsRenameDraft).toBe("SYNC · rf");
+        expect(M.state.wsRenameError).toBe("");
+      });
+    });
+  });
+
+  test("save POSTs {workspaceId, title} to the frozen route and never echoes the typed title", async () => {
+    await withState(renameState({ snap: snapshot(), wsRenaming: WS_ID, wsRenameDraft: "  SYNC · renamed  " }), async () => {
+      await withRequests([{ status: 200, json: { ok: true } }], async (calls) => {
+        await M.submitWorkspaceRename({ workspaceId: WS_ID, title: "SYNC · rf" });
+        expect(calls).toHaveLength(1);
+        expect(calls[0]!.method).toBe("POST");
+        expect(calls[0]!.url).toBe("/api/sync/rename");
+        expect(calls[0]!.body).toEqual({ workspaceId: WS_ID, title: "SYNC · renamed" });
+        expect(M.state.wsRenaming).toBeNull();
+        expect(M.state.wsRenamePending).toBe(false);
+        expect(M.state.wsRenameError).toBe("");
+      });
+
+      /* The truth test: a FOREIGN rename lands between the save and the next
+         paint. The field must show what the snapshot says, so the typed title
+         is nowhere on screen. A client that echoed its own write fails here. */
+      const foreign = linked({ target: linkedTarget({ workspaceTitle: "renamed in cmux" }) });
+      const row = byClass(headerOf(foreign), "drawer-workspace");
+      expect(textOf(row)).toContain("renamed in cmux");
+      expect(textOf(row)).not.toContain("SYNC · renamed");
+      expect(byFkey(row, "ws-rename:" + WS_ID)?.attributes["aria-label"])
+        .toBe("Rename workspace renamed in cmux");
+    });
+  });
+
+  test("a refusal states cmux's reason, restores the original title, and keeps the editor open", async () => {
+    const refusals: Array<[Record<string, unknown>, string]> = [
+      [{ ok: false, code: "invalid_title" }, "title"],
+      [{ ok: false, code: "anchor" }, "group"],
+    ];
+    for (const [body, expected] of refusals) {
+      await withState(renameState({ snap: snapshot(), wsRenaming: WS_ID, wsRenameDraft: "   " }), async () => {
+        await withRequests([{ status: 200, json: body }], async () => {
+          await M.submitWorkspaceRename({ workspaceId: WS_ID, title: "SYNC · rf" });
+          expect(M.state.wsRenaming).toBe(WS_ID);
+          expect(M.state.wsRenamePending).toBe(false);
+          expect(M.state.wsRenameError).toContain(expected);
+          // The original title is what the operator gets back, never their
+          // rejected draft.
+          expect(M.state.wsRenameDraft).toBe("SYNC · rf");
+        });
+        const form = byClass(headerOf(linked()), "sync-rename-form");
+        expect(textOf(byClass(form, "rename-error"))).toBe(M.state.wsRenameError);
+        expect(byClass(form, "rename-error")?.attributes.role).toBe("alert");
+      });
+    }
+
+    // A refusal the client has no sentence for still names the code rather than
+    // reporting a silent success. Same for an unreachable server.
+    await withState(renameState({ snap: snapshot(), wsRenaming: WS_ID, wsRenameDraft: "x" }), async () => {
+      await withRequests([{ status: 404, json: { ok: false, code: "not_found" } }], async () => {
+        await M.submitWorkspaceRename({ workspaceId: WS_ID, title: "SYNC · rf" });
+        expect(M.state.wsRenameError).toContain("not_found");
+        expect(M.state.wsRenaming).toBe(WS_ID);
+      });
+      await withRequests([new Error("connection refused")], async () => {
+        await M.submitWorkspaceRename({ workspaceId: WS_ID, title: "SYNC · rf" });
+        expect(M.state.wsRenameError).toMatch(/reach|failed/i);
+        expect(M.state.wsRenaming).toBe(WS_ID);
+      });
+    });
+  });
+
+  test("Enter saves, Escape cancels, and focus returns to the trigger either way", async () => {
+    // Enter in a text input submits its form; the form's submit handler is the
+    // save path, so the two cannot drift apart.
+    await withState(renameState({ snap: snapshot(), wsRenaming: WS_ID, wsRenameDraft: "typed by hand" }), async () => {
+      await withRequests([{ status: 200, json: { ok: true } }], async (calls) => {
+        const form = byClass(headerHere(linked()), "sync-rename-form");
+        await fire(form, "submit");
+        expect(calls.map((c) => [c.method, c.url])).toEqual([["POST", "/api/sync/rename"]]);
+        expect(calls[0]!.body.title).toBe("typed by hand");
+      });
+    });
+
+    await withState(renameState({ snap: snapshot(), wsRenaming: WS_ID, wsRenameDraft: "abandoned" }), async () => {
+      await withRequests([], async (calls) => {
+        const focused = trackFocusByFkey();
+        const input = byFkey(byClass(headerHere(linked()), "sync-rename-form"), "ws-rename-input:" + WS_ID);
+        await fire(input, "keydown", { key: "Escape" });
+        expect(M.state.wsRenaming).toBeNull();
+        expect(calls).toEqual([]);          // cancelling writes nothing to cmux
+        expect(focused()).toEqual(["ws-rename:" + WS_ID]);
+      });
+    });
+
+    await withState(renameState({ snap: snapshot(), wsRenaming: WS_ID, wsRenameDraft: "saved" }), async () => {
+      await withRequests([{ status: 200, json: { ok: true } }], async () => {
+        const focused = trackFocusByFkey();
+        await M.submitWorkspaceRename({ workspaceId: WS_ID, title: "SYNC · rf" });
+        expect(focused()).toEqual(["ws-rename:" + WS_ID]);
+      });
+    });
+  });
+
+  test("an in-flight save holds its own controls and repaints the drawer", async () => {
+    await withState(renameState({ wsRenaming: WS_ID, wsRenameDraft: "SYNC · rf", wsRenamePending: true }), () => {
+      const form = byClass(headerOf(linked()), "sync-rename-form");
+      const save = byFkey(form, "ws-rename-save:" + WS_ID);
+      expect(save?.attributes.disabled).toBe("");
+      expect(save?.attributes["aria-busy"]).toBe("true");
+      expect(byFkey(form, "ws-rename-input:" + WS_ID)?.attributes.disabled).toBe("");
+    });
+
+    /* The drawer early-returns on an unchanged paint signature, so every flag
+       the editor reads has to be IN that signature or the form never appears.
+       The draft deliberately is not: tearing down a live text box is the bug
+       that rule exists to stop. */
+    const sel = { kind: "agent", id: "codex:rf" };
+    const view = { kind: "agent", agent: linked(), program: { id: "p", name: "P", agents: [linked()] } };
+    const sig = (patch: Record<string, unknown>) =>
+      M.inspectorPaintSig(sel, view, identityUi({ ...renameState(), ...patch }));
+    expect(sig({ wsRenaming: WS_ID })).not.toBe(sig({}));
+    expect(sig({ wsRenamePending: true })).not.toBe(sig({}));
+    expect(sig({ wsRenameError: "nope" })).not.toBe(sig({}));
+    expect(sig({ wsRenameDraft: "mid-typing" })).toBe(sig({}));
+  });
+
+  test("the rename control clears 44px on touch and every new class has a rule", () => {
+    const after = styles.slice(styles.indexOf("@media (max-width: 1024px)"));
+    const block = after.slice(0, after.indexOf("@media (max-width: 720px)"));
+    const sweep = block.match(/[^{}]*\{\s*min-height:\s*44px;\s*\}/)?.[0] ?? "";
+    expect(sweep).toContain(".drawer-workspace-rename");
+    for (const name of ["drawer-workspace", "drawer-workspace-label", "drawer-workspace-title", "drawer-workspace-rename", "sync-rename-form"]) {
+      expect(styles.includes("." + name), name).toBe(true);
+    }
+    // Strict CSP: the affordance ships no inline style attribute.
+    const drawer = source.match(/function renderWorkspaceRename\(agent\) \{[\s\S]*?\n\}\n/)?.[0] ?? "";
+    expect(drawer).toBeTruthy();
+    expect(drawer).not.toContain("style:");
+  });
+});
+
+/* Records which data-fkey the client asked the document for and focused, so
+   "focus returns to the trigger" is asserted against the real restore call
+   rather than against the source text that makes it. The fake document's
+   querySelector answers nothing by default — this is the only test surface that
+   needs it to answer something. */
+function trackFocusByFkey(): () => string[] {
+  const seen: string[] = [];
+  const doc = G.document as { querySelector: (selector: string) => unknown };
+  doc.querySelector = (selector: string) => {
+    const key = /\[data-fkey="(.*)"\]/.exec(selector)?.[1];
+    if (key == null) return null;
+    return { focus: () => seen.push(key), select: () => {} };
+  };
+  return () => seen;
+}
