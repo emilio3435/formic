@@ -297,8 +297,9 @@ const RESOLUTION_LABELS = { exact: "exact match", "unique-cwd": "matched by fold
    the moment the server ships a token figure in the rollup, this renders that
    instead of summing its own. Until then it sums, and says which quantity it
    summed. */
-function programRollupCells(agents, rollup = null) {
+function programRollupCells(agents, rollup = null, snap = null) {
   const r = deriveRollup(agents);
+  if (snap) r.needsYou = agents.filter((agent) => stripAlerting(agent, snap)).length;
   const cells = [
     /* "230 agents" was 33 live and 197 ended — 5.8x the operational population
        with no ended denominator beside it, which is the needsYou defect in a
@@ -1162,7 +1163,7 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
        number of sessions asking for a person. Shipping and the stall facts
        move to the sub, keeping their window-honest wording. */
     const asking = (snap.programs || []).reduce(
-      (total, program) => total + (program.agents || []).filter((a) => alerting(a)).length, 0);
+      (total, program) => total + (program.agents || []).filter((a) => stripAlerting(a, snap)).length, 0);
     return {
       value: String(asking),
       unit: asking === 1 ? "needs you" : "need you",
@@ -6183,7 +6184,7 @@ function renderTabs() {
        names; this is the mark you can see from another tab.
        (C2's is-alerting modifier: ember ink, never a fill.) */
     if (view === "board") {
-      countNode.classList.toggle("is-alerting", agents.some((a) => alerting(a)));
+      countNode.classList.toggle("is-alerting", agents.some((a) => stripAlerting(a, state.snap)));
     }
   }
   for (const btn of document.querySelectorAll("#views .view-tab")) {
@@ -6974,8 +6975,8 @@ function renderFilterBar(ui = state) {
 function acknowledgedClause(count) {
   return el("span", {
     class: "scope-acked",
-    title: "You acknowledged these alerts. They are out of Needs you; the sessions are unchanged and may still be waiting on a person.",
-    text: count + " acknowledged — hidden from Needs you, still waiting",
+    title: "You acknowledged these requests. Alert treatment stays muted until an agent makes a new request; session state is unchanged.",
+    text: count + " acknowledged — muted until a new request",
   });
 }
 
@@ -7491,7 +7492,7 @@ function repoShellSig(group, ui) {
        token defect on this board came through — and a cell moving must
        repaint this head or it freezes: nothing else in this signature moves
        when a session starts or stops asking. */
-    programRollupCells(bandAgents(group), null).map((c) => c.value + " " + c.label + (c.alert ? "!" : "")).join(","),
+    programRollupCells(bandAgents(group), null, ui.snap).map((c) => c.value + " " + c.label + (c.alert ? "!" : "")).join(","),
   ].join("\u001f");
 }
 
@@ -7541,7 +7542,7 @@ function renderRepoSection(group, ui = state) {
       rel: "noreferrer",
       text: pullRequestLabel(url),
     })),
-    programHeadRollup(bandAgents(group), null, { view: ui.view }));
+    programHeadRollup(bandAgents(group), null, { view: ui.view, snap: ui.snap }));
 
   const section = paintRepoTint(el("section", {
     class: "repo-section" + (open ? " open" : ""),
@@ -7885,7 +7886,7 @@ function programShellSig(program, agents, ui, label = "") {
     programOpen(program, ui) ? "open" : "shut",
     // Header counts the whole program, so the signature must watch the whole
     // program too — otherwise a change outside the active filter never repaints.
-    programRollupCells(program.agents, program.rollup).map((c) => c.key + "=" + c.value + (c.alert ? "!" : "")).join(","),
+    programRollupCells(program.agents, program.rollup, ui.snap).map((c) => c.key + "=" + c.value + (c.alert ? "!" : "")).join(","),
     ui.renaming === key ? "1" : "0",
     ui.renamePending ? "1" : "0",
     ui.renameError || "",
@@ -8582,7 +8583,7 @@ function renderPrograms() {
    (is-alerting → --ember) only when alerts exist; calm earns no color. The
    accessible name carries the data itself, extending the drawer's aria pattern. */
 function programHeadRollup(agents, rollup = null, opts = {}) {
-  let cells = programRollupCells(agents, rollup);
+  let cells = programRollupCells(agents, rollup, opts.snap || state.snap);
   /* Board is the live lens: finished work belongs to the shelf and History,
      and the session-tokens aggregate belongs to Burn and Usage. On the
      measured board "554 ended" was the loudest number on its line, and the
@@ -8798,7 +8799,7 @@ function agentRowPlan(program, agents, ui = state, board = boardIndex(ui), opts 
     if (seen.has(id)) return false;
     seen.add(id);
     for (const child of children.get(id) || []) {
-      if (visibleIds.has(child.id) && !pinnedIds.has(child.id) && alerting(child)) return true;
+      if (visibleIds.has(child.id) && !pinnedIds.has(child.id) && stripAlerting(child, ui.snap)) return true;
       if (hasDrawnAlertingDescendant(child.id, seen)) return true;
     }
     return false;
@@ -8858,7 +8859,7 @@ function agentRowPlan(program, agents, ui = state, board = boardIndex(ui), opts 
            filter-excluded one was excluded explicitly; an ember that promises
            "open me and see" must only fire when opening shows it. */
         swarmAlerting: !open && hasDrawnAlertingDescendant(agent.id),
-        alerting: markAlerting && alerting(agent),
+        alerting: markAlerting && stripAlerting(agent, ui.snap),
         repoTint: rowRepoTint,
       };
       plan.push({
@@ -9237,18 +9238,20 @@ const CONTROL_ICONS = { linked: "linked", quarantined: "quarantine", "observed-o
    not the dominant case. Healthy working rows in Now say nothing. */
 const ACTIVITY_PINNED_VIEWS = new Set(["waiting", "history"]);
 
-function rowStateWords(activity, outcome, view, agent) {
+function rowStateWords(activity, outcome, view, agent, alertMuted = false) {
   const words = [];
   if (!ACTIVITY_PINNED_VIEWS.has(view) && activity !== "working") {
     words.push(ACTIVITY_LABELS[activity] || activity);
   }
-  if (outcome !== "healthy") words.push(OUTCOME_LABELS[outcome] || outcome);
+  if (outcome !== "healthy" && !(alertMuted && outcome === "needs-you")) {
+    words.push(OUTCOME_LABELS[outcome] || outcome);
+  }
   /* An alerting row always says so — even when another word got there first. A
      healthy-outcome session that wantsHuman used to print only "Waiting": the
      group head counted it among "6 alerts" while the row corroborated nothing,
      which teaches the operator the count is decorative. Appended, never
      duplicated — a needs-you outcome already put the word there. */
-  if (outcome === "healthy" && agent && wantsHuman(agent)) words.push(OUTCOME_LABELS["needs-you"]);
+  if (!alertMuted && outcome === "healthy" && agent && wantsHuman(agent)) words.push(OUTCOME_LABELS["needs-you"]);
   return words;
 }
 
@@ -9422,6 +9425,8 @@ function renderRowWorkspace(agent) {
 function renderAgentRow(agent, program, opts = {}) {
   const activity = deriveActivity(agent);
   const outcome = deriveOutcome(agent);
+  const alertMuted = ackedAgent(agent, state.snap);
+  const presentedOutcome = alertMuted && outcome === "needs-you" ? "healthy" : outcome;
   const control = deriveControlState(agent);
   const watchOnly = watchOnlyMark(control, activity, state.snap);
   const role = roleView(agent.role);
@@ -9432,7 +9437,7 @@ function renderAgentRow(agent, program, opts = {}) {
   // Status column shows the activity word colored by state (the color already
   // encodes working/idle/ended, so no separate dot), with any alert suffix on
   // its own red span. Full state stays in the tooltip + row aria-label.
-  const stateText = ACTIVITY_LABELS[activity] + (outcome !== "healthy" ? " · " + OUTCOME_LABELS[outcome] : "");
+  const stateText = ACTIVITY_LABELS[activity] + (presentedOutcome !== "healthy" ? " · " + OUTCOME_LABELS[presentedOutcome] : "");
 
   const nameTarget = preferredRenameTarget(agent);
   const nameKey = presentationLabelKey(nameTarget);
@@ -9637,17 +9642,17 @@ function renderAgentRow(agent, program, opts = {}) {
        the title and the row's aria-label, so nothing is lost to a reader who
        asks — it just stops being printed 275 times. */
     (() => {
-      const words = rowStateWords(activity, outcome, state.view, agent);
+      const words = rowStateWords(activity, outcome, state.view, agent, alertMuted);
       if (!words.length) return null;
       return el("span", {
-        class: "row-state state-" + activity + (outcome !== "healthy" ? " outcome-" + outcome : ""),
+        class: "row-state state-" + activity + (presentedOutcome !== "healthy" ? " outcome-" + presentedOutcome : ""),
         title: stateText,
         "aria-label": "Status: " + stateText,
       }, el("span", {
         // The ink follows the words, not the outcome alone: a hook-shaped alert
         // has a HEALTHY outcome, so "Alert" was printing in the activity's own
         // green — the safe color, on the rows where the word is the only signal.
-        class: outcome !== "healthy" || (agent && wantsHuman(agent)) ? "row-state-alert" : "act-" + activity,
+        class: presentedOutcome !== "healthy" || (!alertMuted && agent && wantsHuman(agent)) ? "row-state-alert" : "act-" + activity,
         text: words.join(" · "),
       }));
     })(),
@@ -9714,7 +9719,7 @@ function renderAgentRow(agent, program, opts = {}) {
     (opts.depth > 0 ? " is-child depth-" + Math.min(opts.depth, 4) : "") +
     (opts.childCount ? " is-parent" : "") +
     (selected ? " is-selected" : "") +
-    (outcome !== "healthy" ? " is-" + outcome : "") +
+    (presentedOutcome !== "healthy" ? " is-" + presentedOutcome : "") +
     /* Needs-you membership, not outcome: inline mode's stand-in for the strip.
        A row can be in the set with a healthy outcome (hook needsInput), so
        this mark and is-needs-you are two different facts. */
@@ -9820,8 +9825,8 @@ function cmuxBadgeNode(agent, snap = state.snap) {
    before the click. So the mark says who judged, and says what did not change. */
 function ackedMarkNode(agent, snap = state.snap) {
   if (!ackedAgent(agent, snap)) return null;
-  const said = "You acknowledged this alert, so it is out of Needs you. "
-    + "The agent is still waiting — nothing about its state changed.";
+  const said = "You acknowledged this request. Alert treatment is muted until the agent makes a new request. "
+    + "The session remains open and its state is unchanged.";
   return el("span", { class: "acked-mark", title: said, "aria-label": said, text: "acked ·" });
 }
 
@@ -9842,11 +9847,11 @@ function syncAckButton(agent, snap = state.snap) {
        leads, and the sentence that says what this does — and what it does NOT
        do — follows it. */
     "aria-label": on
-      ? "Unack — undo the acknowledgement for " + name + ": returns it to alerts"
-      : "Ack — Acknowledge " + name + ": removes from alerts; agent may still be waiting",
+      ? "Unack — undo the acknowledgement for " + name + ": restores alert treatment"
+      : "Ack — Acknowledge " + name + ": mutes alert treatment until a new request; session remains open",
     title: on
-      ? "Put this session back in Needs you."
-      : "Take this session out of Needs you. It does not answer the agent and does not change its state.",
+      ? "Restore alert treatment for this request."
+      : "Mute this request until the agent makes a new one. It does not answer the agent or change session state.",
     dataset: { fkey: "sync-ack:" + agent.id },
     onclick: (e) => { e.stopPropagation(); void applySyncAck(agent, !on); },
   }, on ? "Unack" : "Ack");
@@ -10326,7 +10331,7 @@ function investigationHeadAction(item) {
    omitted when no agent on the client reports session usage — an aggregate we
    cannot derive is never faked to zero. */
 function programRollupLine(program) {
-  const cells = programRollupCells(program.agents || [], program.rollup);
+  const cells = programRollupCells(program.agents || [], program.rollup, state.snap);
   return el("div", { class: "dw-rollup", "aria-label": "Program rollup" },
     cells.map((c) => el("span", { class: "dw-rollup-cell" + (c.alert ? " is-alert" : "") },
       el("span", { class: "dw-rollup-value mono", text: c.value }),

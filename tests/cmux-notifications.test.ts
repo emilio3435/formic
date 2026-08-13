@@ -406,15 +406,15 @@ describe("SYNC-NB alert fingerprints and Ack store", () => {
     ...overrides,
   });
 
-  test("fingerprints use semantic alert state and a human-facing transition boundary, never hook write clocks", () => {
+  test("fingerprints change only when the semantic alert changes, never on conversation or hook clocks", () => {
     const hook = baseAlertAgent();
-    expect(alertFingerprintFor(hook)).toBe("hook:needsInput:hook-input:2026-08-13T09:59:00.000Z");
+    expect(alertFingerprintFor(hook)).toBe("hook:needsInput:hook-input");
     expect(alertFingerprintFor({ ...hook, updatedAt: "2026-08-13T10:15:00.000Z" }))
       .toBe(alertFingerprintFor(hook));
     expect(alertFingerprintFor({ ...hook, hookLifecycleAt: "2026-08-13T10:16:00.000Z" }))
       .toBe(alertFingerprintFor(hook));
     expect(alertFingerprintFor({ ...hook, lastHumanFacingAt: "2026-08-13T10:16:00.000Z" }))
-      .not.toBe(alertFingerprintFor(hook));
+      .toBe(alertFingerprintFor(hook));
 
     const signal = baseAlertAgent({
       hookLifecycle: "idle",
@@ -422,9 +422,15 @@ describe("SYNC-NB alert fingerprints and Ack store", () => {
       attentionSignal: { kind: "question-pending", evidence: "Which option should I use?" },
       lastHumanFacingAt: "2026-08-13T10:01:00.000Z",
     });
-    expect(alertFingerprintFor(signal)).toBe("signal:question-pending:2026-08-13T10:01:00.000Z");
+    expect(alertFingerprintFor(signal)).toMatch(/^signal:question-pending:[a-z0-9]+$/);
     expect(alertFingerprintFor({ ...signal, updatedAt: "2026-08-13T10:20:00.000Z" }))
       .toBe(alertFingerprintFor(signal));
+    expect(alertFingerprintFor({ ...signal, lastHumanFacingAt: "2026-08-13T10:21:00.000Z" }))
+      .toBe(alertFingerprintFor(signal));
+    expect(alertFingerprintFor({
+      ...signal,
+      attentionSignal: { kind: "question-pending", evidence: "Should I publish this now?" },
+    })).not.toBe(alertFingerprintFor(signal));
   });
 
   test("JsonAckStore persists the frozen AgentAck shape and explicit delete", async () => {
@@ -450,7 +456,7 @@ describe("SYNC-NB alert fingerprints and Ack store", () => {
 });
 
 describe("PUT/DELETE /api/sync/ack/:agentId", () => {
-  test("real hook heartbeats preserve Ack, a fresh human-facing alert self-revokes, DELETE unacks, and quiet agents are 409", async () => {
+  test("ordinary replies preserve Ack, a new request self-revokes, DELETE unacks, and quiet agents are 409", async () => {
     const now = Date.parse("2026-08-13T10:02:00.000Z");
     const ackStore = new MemoryAckStore(() => now);
     const home = await mkdtemp(join(tmpdir(), "formic-ack-hook-producer-"));
@@ -511,6 +517,10 @@ describe("PUT/DELETE /api/sync/ack/:agentId", () => {
     const state = new HubState(runner, archiveStore, [], { collectors, ackStore });
     await writeHookRecord();
     await state.refresh();
+    const initialFingerprint = alertFingerprintFor(
+      state.get().programs.flatMap((program) => program.agents)[0]!,
+    );
+    expect(initialFingerprint).toMatch(/^hook:needsInput:question-pending:[a-z0-9]+$/);
     const fetch = createMountainFetch({
       state,
       runner,
@@ -532,7 +542,7 @@ describe("PUT/DELETE /api/sync/ack/:agentId", () => {
         ack: {
           agentId: "codex:ack-agent",
           ackedAt: "2026-08-13T10:02:00.000Z",
-          alertFingerprint: "hook:needsInput:question-pending:2026-08-13T09:59:00.000Z",
+          alertFingerprint: initialFingerprint,
         },
       });
       expect(state.get().acks).toEqual([...ackStore.list()]);
@@ -545,13 +555,16 @@ describe("PUT/DELETE /api/sync/ack/:agentId", () => {
       expect(state.get().programs.flatMap((program) => program.agents)[0]?.hookLifecycleAt)
         .toBe("2026-08-13T10:10:00.000Z");
 
+      await appendFile(transcriptPath, `${JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-13T10:10:30.000Z",
+        payload: { type: "user_message", message: "Use the first option." },
+      })}\n`);
+      await state.refresh();
+      expect(ackStore.list()).toHaveLength(1);
+
       hookRecordUpdatedAt = Date.parse("2026-08-13T10:11:00.000Z") / 1_000;
       await appendFile(transcriptPath, [
-        JSON.stringify({
-          type: "event_msg",
-          timestamp: "2026-08-13T10:10:30.000Z",
-          payload: { type: "user_message", message: "Use the first option." },
-        }),
         JSON.stringify({
           type: "response_item",
           timestamp: "2026-08-13T10:11:00.000Z",

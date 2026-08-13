@@ -68,6 +68,14 @@ const BLOCKING_KINDS = new Set([
 
 const NOTICED_KINDS = new Set(["stalled-active"]);
 
+function acknowledgedAgentIds(snap) {
+  const ids = new Set();
+  for (const ack of Array.isArray(snap && snap.acks) ? snap.acks : []) {
+    if (ack && typeof ack.agentId === "string" && ack.agentId) ids.add(ack.agentId);
+  }
+  return ids;
+}
+
 /* `nothing-wanted`, `out-of-scope` and `not-readable` deliberately have no
    class. Absence, not a third value: "we looked and nothing wants you", "it is
    finished" and "there was nothing to read" are three different facts and none
@@ -376,11 +384,16 @@ export function notificationCandidates(snap, queueItems = [], now = Date.now(), 
   const impactFor = deps.impactFor || defaultImpact;
   const candidates = [];
   const taken = new Set();
+  const acknowledged = acknowledgedAgentIds(snap);
 
   /* handoff — agents the attention layer has classified. Built FIRST so that an
      agent's `agent:<id>` finding resolves to its own row in its own drawer
      rather than to an advisory panel about it. */
   for (const { agent, program } of snapshotAgents(snap)) {
+    if (acknowledged.has(agent.id)) {
+      taken.add(agentItemId(agent.id));
+      continue;
+    }
     const attentionClass = attentionClassOf(agent);
     if (!attentionClass) continue;
     const item = handoffItem(agent, program, attentionClass, now, programNameFor);
@@ -563,8 +576,9 @@ export function notificationPanelModel(snap, queueItems = [], now = Date.now(), 
    see the screen to check it. */
 export function blockingAgentIds(snap) {
   const ids = [];
+  const acknowledged = acknowledgedAgentIds(snap);
   for (const { agent } of snapshotAgents(snap)) {
-    if (attentionClassOf(agent) === "blocking") ids.push(agent.id);
+    if (!acknowledged.has(agent.id) && attentionClassOf(agent) === "blocking") ids.push(agent.id);
   }
   return ids.sort();
 }

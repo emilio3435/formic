@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import type { AgentAck, AgentSnapshot } from "../shared/types";
+import { fnvKey } from "./repo-identity";
 import { hookInputWantsHuman } from "./task-state";
 
 export interface AckStore {
@@ -17,31 +18,40 @@ function terminalWithoutLiveContradiction(agent: AgentSnapshot): boolean {
   return agent.activity === "ended" && agent.processState !== "running";
 }
 
-/* The latest readable human-facing transcript boundary is stable across hook
- * writes and advances when the conversation genuinely advances. `startedAt`
- * is a conservative fallback: when no trustworthy transition clock exists,
- * preserving an Ack is more honest than revoking it on a heartbeat. */
-function alertBoundary(agent: AgentSnapshot): string {
-  return agent.lastHumanFacingAt ?? agent.startedAt ?? "unclocked";
+/* Evidence, not transcript time, identifies the request the operator saw.
+ * `lastHumanFacingAt` advances on an ordinary reply as well as on a new ask;
+ * using it here revoked Ack while the same request was still on screen. The
+ * evidence is bounded upstream and hashed before persistence so acks.json does
+ * not become a second transcript store. */
+function alertEvidenceKey(agent: AgentSnapshot): string | undefined {
+  const evidence = agent.attentionSignal?.evidence?.trim();
+  return evidence ? fnvKey(evidence) : undefined;
 }
 
-/** Semantic alert state paired with a trustworthy transition boundary.
- * `hookLifecycleAt` and `updatedAt` are write/heartbeat clocks and are never
- * fingerprint inputs. */
+function withEvidence(prefix: string, agent: AgentSnapshot): string {
+  const evidenceKey = alertEvidenceKey(agent);
+  return evidenceKey ? `${prefix}:${evidenceKey}` : prefix;
+}
+
+/** Semantic alert identity. Conversation, hook-write and snapshot clocks are
+ * never fingerprint inputs; a changed request changes its bounded evidence. */
 export function alertFingerprintFor(agent: AgentSnapshot): string | undefined {
   if (terminalWithoutLiveContradiction(agent)) return undefined;
   if (hookInputWantsHuman(agent)) {
-    return `hook:${agent.hookLifecycle}:${agent.attentionSignal?.kind ?? "hook-input"}:${alertBoundary(agent)}`;
+    return withEvidence(
+      `hook:${agent.hookLifecycle}:${agent.attentionSignal?.kind ?? "hook-input"}`,
+      agent,
+    );
   }
   if (agent.taskState === "parked" || agent.taskState === "done") return undefined;
   if (agent.attentionSignal) {
-    return `signal:${agent.attentionSignal.kind}:${alertBoundary(agent)}`;
+    return withEvidence(`signal:${agent.attentionSignal.kind}`, agent);
   }
   if (agent.outcome && agent.outcome !== "healthy") {
-    return `outcome:${agent.outcome}:${alertBoundary(agent)}`;
+    return `outcome:${agent.outcome}`;
   }
   if (agent.status === "attention") {
-    return `status:attention:${alertBoundary(agent)}`;
+    return "status:attention";
   }
   return undefined;
 }
