@@ -813,6 +813,10 @@ export interface HubSnapshot {
   recentlyResolved?: OperatorIssue[];
   triageSummaries?: TriageQueueSummary[];
   pulse?: HubPulse;
+  /** Full cmux notification bodies come from notification.list, never events. */
+  cmuxNotifications?: CmuxNotificationSummary[];
+  /** Board-local operator judgments; never cmux or agent state. */
+  acks?: AgentAck[];
   programs: ProgramSnapshot[];
 }
 
@@ -846,4 +850,25 @@ export interface BroadcastResponse {
   sent: number;
   failed: number;
   results: BroadcastRecipientResult[];
+}
+
+/* SYNC — frozen contract shapes (docs/superpowers/plans/2026-08-13-sync,
+   00-MASTER-PLAN.md §Contract). Exact keys are load-bearing: SYNC-NB produces
+   them, SYNC-NF renders exactly them. */
+
+export interface AgentAck {
+  agentId: string;
+  ackedAt: string;
+  alertFingerprint: string;
+}
+
+export interface CmuxNotificationSummary {
+  id: string;
+  workspaceId: string;
+  surfaceId: string;
+  title: string;
+  subtitle: string;
+  body: string;
+  isRead: boolean;
+  createdAt: string;
 }
