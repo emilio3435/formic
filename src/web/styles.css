@@ -1606,6 +1606,11 @@ body.feed-frozen .programs { opacity: 0.62; }
 }
 .scope-clear:hover { color: var(--ink); text-decoration: underline; }
 .scope-stale { color: var(--ember); font-weight: 600; }
+/* SYNC-NF. What the operator's own Acks are holding out of the alert list. It
+   sits in the sentence that already reconciles two populations, and it takes
+   quiet ink for the same reason the mark on the row does: a hidden alert is a
+   fact about a DECISION, not a state the fleet reached. */
+.scope-acked { color: var(--muted); font-weight: 500; }
 
 /* ---------- programs ---------- */
 
@@ -2279,6 +2284,49 @@ body.feed-frozen .programs { opacity: 0.62; }
    can be dead AND asking — the two marks must never fight over one slot. The
    .row-died pill carries the words; this is the scannable echo. */
 .agent-row.is-died { border-right: 3px solid var(--failed); }
+
+/* ---------- SYNC-NF · terminal notifications and the board-local Ack ----------
+
+   Every one of these is deliberately achromatic. The status palette (--needs,
+   --ember, --moss, --amber) means "the fleet is in this state"; none of these
+   three marks is a state the fleet reached. The badge counts what a TERMINAL is
+   holding, and the ack mark and its button report a decision a PERSON made —
+   painting either in a status colour would put the board's loudest ink on the
+   one thing that is not a reading about a session. */
+.cmux-badge {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--muted);
+  background: var(--sand);
+  border-radius: 3px;
+  padding: 0 0.3rem;
+  white-space: nowrap;
+}
+/* The operator's word, in the faintest weight on the row: it explains why this
+   row is not in the strip, and it must never read as a verdict on the agent. */
+.acked-mark {
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.sync-ack {
+  padding: 0 0.35rem;
+  font: 500 10.5px/1.6 var(--font-ui);
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.sync-ack:hover:not([disabled]) { color: var(--ink); border-color: var(--line-strong); }
+.sync-ack[disabled] { opacity: 0.55; cursor: default; }
+/* Pressed state carries no colour either — only the border firms up, so the
+   toggle is legible without borrowing the alert channel. */
+.sync-ack.is-acked { border-style: dashed; }
 
 /* A declared task state. Quiet by construction — this is the one mark on the
    board that says a row is silent BECAUSE someone decided it should be, so it
@@ -4367,6 +4415,33 @@ body.feed-frozen .programs { opacity: 0.62; }
   border-top: 1px solid var(--line);
 }
 .notify-sect-hint { font-size: 0.72rem; color: var(--faint); }
+
+/* SYNC-NF. cmux's own notifications, in the section furniture the panel already
+   uses — this is one more list, not a second design. It is the only list here
+   that carries controls, because these are the only items with an id the board
+   can clear; everything else on this panel is a reading about a session. */
+.cmux-notify { display: block; padding-bottom: 0.4rem; }
+.cmux-notify-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.35rem 0.95rem;
+}
+.cmux-notify-name { font: 500 0.8rem/1.4 var(--font-ui); color: var(--ink); }
+.cmux-notify-body { font: 400 0.75rem/1.45 var(--font-ui); color: var(--muted); }
+.cmux-notify-acts { display: flex; gap: 0.35rem; margin-left: auto; }
+.cmux-notify-act {
+  padding: 0 0.4rem;
+  font: 500 0.72rem/1.7 var(--font-ui);
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.cmux-notify-act:hover:not([disabled]) { color: var(--ink); border-color: var(--line-strong); }
+.cmux-notify-act[disabled] { opacity: 0.55; cursor: default; }
 .notify-quiet {
   display: flex;
   align-items: baseline;

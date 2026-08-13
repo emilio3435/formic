@@ -3173,6 +3173,11 @@ function notifyPanelPaintSig(model, open) {
     cleanerView(state.snap, state.cleaner).state,
     state.cleaner.error,
     feedFrozen() ? "held" : "",
+    /* SYNC-NF. The unread terminal set is NOT in `model` — that model is the
+       board's own attention derivation over sessions, and these are cmux's own
+       notifications — so without this a cleared notification would sit on
+       screen until something unrelated moved the signature. */
+    unreadCmuxNotifications(state.snap).map((note) => note.id).join(","),
   ].join("\u001f");
 }
 
@@ -3299,6 +3304,54 @@ function notifyQuietRow(item) {
     el("span", { class: "notify-quiet-time", text: notifyWaitText(item) }));
 }
 
+/* ---------- SYNC-NF · the terminal's own notifications, in the panel ----------
+
+   Minimal by instruction: this is one more section in the list the panel
+   already draws, in the same section furniture (.notify-sect / .notify-eyebrow)
+   as Watching and Running on its own. The notification center's own shape is
+   unsettled and two competing mockups for it are unpicked — adjudicating that
+   from inside this lane would be the redesign the kickoff forbids.
+
+   It is here and not only on the rows because the clear verbs need a SINGLE
+   notification to act on. A row's badge can stand for several, and a control
+   that fans out over an unknown number of terminal alerts is a control whose
+   effect the operator cannot predict before pressing it. */
+function cmuxNotifyRow(note) {
+  const name = [note.title, note.subtitle].filter((part) => typeof part === "string" && part.trim()).join(" — ")
+    || "Untitled terminal notification";
+  const verb = (action, label) => el("button", {
+    type: "button",
+    class: "cmux-notify-act",
+    disabled: syncPending.has("notify:" + note.id) ? "" : null,
+    /* Named for the notification, not for the verb. Several of these coexist in
+       one panel, and "Mark read" alone tells a screen reader nothing about
+       which terminal alert it is about to answer. */
+    "aria-label": label + ": " + name,
+    dataset: { fkey: "sync-notify:" + action + ":" + note.id },
+    onclick: () => { void clearCmuxNotification(note.id, action); },
+  }, label);
+  return el("div", { class: "cmux-notify-row" },
+    el("span", { class: "cmux-notify-name", text: name }),
+    /* The body, which only this surface has: the event stream redacts it, so
+       the server re-listed it. Bounded by the same helper the peek lines use. */
+    note.body ? el("q", { class: "cmux-notify-body", text: conciseText(note.body, 140) }) : null,
+    el("span", { class: "cmux-notify-acts" }, verb("mark_read", "Mark read"), verb("dismiss", "Dismiss")));
+}
+
+function renderCmuxNotifySection(snap = state.snap) {
+  const unread = unreadCmuxNotifications(snap);
+  if (!unread.length) return null;
+  const section = el("section", { class: "cmux-notify", "aria-label": "Terminal notifications" },
+    el("div", { class: "notify-sect" },
+      el("span", { class: "notify-eyebrow", text: "Terminal" }),
+      /* Says whose list this is. These are cmux's own notifications, not the
+         board's readings about sessions — the two are different populations and
+         a reader who conflates them will go looking for an agent that is fine. */
+      el("span", { class: "notify-sect-hint", text: unread.length + " unread in cmux" })));
+  for (const note of unread) section.append(cmuxNotifyRow(note));
+  return section;
+}
+
 function renderNotificationCenter() {
   const panel = $("notifications-panel");
   const toggle = $("notify-toggle");
@@ -3354,6 +3407,12 @@ function renderNotificationCenter() {
       el("span", { class: "notify-eyebrow", text: "Running on its own" })));
     for (const item of model.investigations) panel.append(notifyQuietRow(item));
   }
+
+  // SYNC-NF. Last of the lists, above the proof line: a terminal notification
+  // is the least urgent thing on this panel — nobody is stopped by one — and it
+  // is the only one carrying controls, so it goes where a scan ends.
+  const terminalNotifications = renderCmuxNotifySection(state.snap);
+  if (terminalNotifications) panel.append(terminalNotifications);
 
   /* All clear does not go blank. "Watching, found nothing" and "not watching"
      are the two states an empty panel is otherwise ambiguous between, and the
@@ -6787,6 +6846,16 @@ function renderFilterBar(ui = state) {
      server setting, so the disclaimer was false for the first chip on the bar. */
 }
 
+/* What an Ack is holding back, in the sentence's own voice: what was hidden,
+   and — the half that matters — what is still true of the sessions it hid. */
+function acknowledgedClause(count) {
+  return el("span", {
+    class: "scope-acked",
+    title: "You acknowledged these alerts. They are out of Needs you; the sessions are unchanged and may still be waiting on a person.",
+    text: count + " acknowledged — hidden from Needs you, still waiting",
+  });
+}
+
 /* Two slots, one line at a time.
 
    D4: the board's sentence moved INTO the filter bar row, between the lenses and
@@ -6838,10 +6907,22 @@ function renderScopeNote(shown) {
      already said everything there is to say. */
   const active = activeLenses(state);
   const narrowing = Boolean(state.query) || Boolean(state.facetProgram) || active.length > 0;
-  if (!narrowing && !state.fetchFailed) { note.hidden = true; return; }
+  /* SYNC-NF. An Ack takes a row out of the alert list, which is a narrowing the
+     operator did on purpose — and the ONE thing this region exists to prevent
+     is a board that is quietly showing less than it appears to. It speaks here
+     rather than in a mark on the strip because #bar-scope-note is the live
+     region that survives the repaint: an aria-live element that is destroyed
+     and recreated announces nothing, so a sentence built anywhere else would
+     never reach a screen reader at all. */
+  const acknowledged = acknowledgedCount(state.snap);
+  if (!narrowing && !acknowledged && !state.fetchFailed) { note.hidden = true; return; }
   note.hidden = false;
   if (!narrowing) {
-    note.append(el("span", { class: "scope-stale", text: "last refresh failed" }));
+    if (acknowledged) note.append(acknowledgedClause(acknowledged));
+    if (state.fetchFailed) {
+      if (acknowledged) note.append(" · ");
+      note.append(el("span", { class: "scope-stale", text: "last refresh failed" }));
+    }
     return;
   }
 
@@ -6896,6 +6977,10 @@ function renderScopeNote(shown) {
      the sentence can never quote a total the tab beside it disagrees with. */
   line.append(" — ", el("span", { class: "scope-count", text: shown + " of " + workingSet(state).length }));
   note.append(line);
+  // SYNC-NF, after the reconciliation and before Clear: the acks are a fact
+  // about the alert list rather than about this count, so they never join the
+  // "N of M" arithmetic — they are stated beside it.
+  if (acknowledged) note.append(" · ", acknowledgedClause(acknowledged));
   /* Clears the LENSES and the query, and deliberately not the two things that
      are not lenses: the review policy belongs to the fleet rather than to this
      browser, and the time window is the working set itself — a "clear filters"
@@ -7322,6 +7407,101 @@ const programSectionCache = new Map(); // programId -> { sig, node }
 const programBodies = new Map();       // programId -> the .program-agents node
 const agentRowCache = new Map();       // "<programId>\u001f<rowKey>" -> { sig, node }
 
+/* ---------- SYNC-NF · cmux notifications and the board-local Ack ----------
+
+   Two snapshot fields, rendered verbatim and derived nowhere else:
+   `cmuxNotifications` — the unread TERMINAL alerts cmux is holding, listed
+   server-side because the event stream redacts their bodies — and `acks`, the
+   operator's own judgments.
+
+   The Ack is the one that has to be said twice. It hides a row from the alert
+   list and it changes NOTHING about the session: it does not write to cmux, it
+   does not answer the agent, and the fleet counters keep counting the agent
+   because the agent really is still waiting. It self-revokes SERVER-side on a
+   fresh alert fingerprint, which is why nothing in this client remembers an
+   ack — the only reason a row is hidden is that this snapshot says so, so a
+   revoked ack comes back on the next poll with no expiry timer here to get
+   stuck. (An expiring record kept client-side is exactly the shape the
+   attention snooze above has a scar for.)
+
+   And the two are deliberately independent. Clearing a notification does not
+   take a row out of Needs-you: "cmux is holding an unread alert" and "this
+   agent is asking for a person" were one field once, and folding them lost the
+   second one every time the first was answered. */
+
+const cmuxNotifyCache = new WeakMap();  // snap -> Map<workspaceId, unread summaries>
+const ackCache = new WeakMap();         // snap -> Set<agentId>
+
+/* Unread only, indexed by workspace. Read notifications are not items: they are
+   the record of an answered one, and counting them would make a badge that can
+   never reach zero. */
+function unreadCmuxByWorkspace(snap = state.snap) {
+  if (!snap || typeof snap !== "object") return new Map();
+  const cached = cmuxNotifyCache.get(snap);
+  if (cached) return cached;
+  const index = new Map();
+  for (const note of Array.isArray(snap.cmuxNotifications) ? snap.cmuxNotifications : []) {
+    if (!note || note.isRead) continue;
+    const workspaceId = typeof note.workspaceId === "string" ? note.workspaceId : "";
+    if (!workspaceId) continue;
+    index.set(workspaceId, [...(index.get(workspaceId) || []), note]);
+  }
+  cmuxNotifyCache.set(snap, index);
+  return index;
+}
+
+// Oldest first, so the dropdown reads in the order the terminal produced them.
+function unreadCmuxNotifications(snap = state.snap) {
+  return [...unreadCmuxByWorkspace(snap).values()].flat()
+    .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")) || String(a.id).localeCompare(String(b.id)));
+}
+
+/* WORKSPACE-scoped, not surface-scoped, because that is the question the badge
+   answers: cmux notifies a workspace, and every session parked in it is one an
+   operator would go to that terminal for. */
+function agentUnreadCmux(agent, snap = state.snap) {
+  const workspaceId = agent && agent.target && agent.target.workspaceId;
+  if (!workspaceId) return [];
+  return unreadCmuxByWorkspace(snap).get(workspaceId) || [];
+}
+
+function ackedIds(snap = state.snap) {
+  if (!snap || typeof snap !== "object") return new Set();
+  const cached = ackCache.get(snap);
+  if (cached) return cached;
+  const ids = new Set();
+  for (const record of Array.isArray(snap.acks) ? snap.acks : []) {
+    if (record && typeof record.agentId === "string" && record.agentId) ids.add(record.agentId);
+  }
+  ackCache.set(snap, ids);
+  return ids;
+}
+
+function ackedAgent(agent, snap = state.snap) {
+  return Boolean(agent) && ackedIds(snap).has(agent.id);
+}
+
+/* Alert-LIST membership, which is what an Ack governs — deliberately not a
+   second opinion about alerting(). The row keeps every other consequence of
+   asking for a human (its state word, its ink, its place in the rollup); what
+   it loses is its seat in the strip. */
+function stripAlerting(agent, snap = state.snap) {
+  return alerting(agent) && !ackedAgent(agent, snap);
+}
+
+/* How many rows the operator's own judgment is holding out of the alert list.
+   Counted over the snapshot rather than over the rendered strip, so a filtered
+   board still reports it: an ack the current lens happens to hide is still an
+   ack the operator made, and a count that silently dropped it would tell them
+   nothing is hidden while something is. */
+function acknowledgedCount(snap = state.snap) {
+  let count = 0;
+  for (const { agent } of agentsById(snap).values()) {
+    if (ackedAgent(agent, snap) && alerting(agent)) count += 1;
+  }
+  return count;
+}
+
 /* ---------- the pinned Needs-you strip ----------
 
    Everything alerting(), across every program, in one block at the top of the
@@ -7345,10 +7525,10 @@ const STRIP_ID = "\u0000needs-you";
    Built from the ALREADY-FILTERED list, so a search or a facet narrows the
    strip exactly as it narrows the groups. An operator who filtered to one
    program is not shown another program's alert and told it needs them. */
-function needsYouStrip(visible) {
+function needsYouStrip(visible, ui = state) {
   const rows = [];
   for (const { program, agents } of visible) {
-    for (const agent of agents) if (alerting(agent)) rows.push({ agent, program });
+    for (const agent of agents) if (stripAlerting(agent, ui.snap)) rows.push({ agent, program });
   }
   return rows;
 }
@@ -7434,7 +7614,12 @@ function renderNeedsYouStrip(rows) {
 function hollowInPane(agents, finished, ui) {
   if (ui.view !== "board" || needsYouDisplayOf(ui) !== "pane") return false;
   if (!agents.length) return false;
-  if (!agents.every((agent) => alerting(agent))) return false;
+  /* stripAlerting, not alerting: an ACKED row is drawn in this group rather
+     than pinned, so a group holding one is not hollow. Reading alerting() here
+     would skip the section that is now the only place that row is drawn — the
+     row would vanish off the board entirely, which is the one thing an Ack is
+     forbidden to do. */
+  if (!agents.every((agent) => stripAlerting(agent, ui.snap))) return false;
   return !(finished || []).length;
 }
 
@@ -7516,6 +7701,13 @@ function agentRowSig(agent, ui, opts = {}) {
     // this signature moving, so it has to be in here or the row keeps its
     // cached, unmarked node.
     opts.alerting ? "alert-mark" : "",
+    /* SYNC-NF. Both of this lane's row facts live on the SNAPSHOT rather than
+       on the agent record, so agentRecordSig carries neither: a notification
+       arriving, or an ack landing, moves nothing else in this string and the
+       row would keep its cached, unchanged node. Documented failure class,
+       same as opts.alerting directly above. */
+    "cmux:" + agentUnreadCmux(agent, ui.snap).length,
+    ackedAgent(agent, ui.snap) ? "acked" : "",
     swarmNote(agent, opts) || "",
   ].join("\u001f");
 }
@@ -8325,7 +8517,7 @@ function agentRowPlan(program, agents, ui = state, board = boardIndex(ui), opts 
      mode only, for the same reason: inline mode draws no strip, so pinning a
      row away here would remove it from the only place it is drawn. */
   const pinnedIds = ui.view === "board" && needsYouDisplayOf(ui) === "pane"
-    ? new Set(agents.filter((agent) => alerting(agent)).map((agent) => agent.id))
+    ? new Set(agents.filter((agent) => stripAlerting(agent, ui.snap)).map((agent) => agent.id))
     : new Set();
 
   /* Inline mode's row-level signal. The strip used to BE the signal; with it
@@ -8980,6 +9172,10 @@ function renderAgentRow(agent, program, opts = {}) {
          reader arrowing row-to-row may never visit the heading between them. */
       null),
     el("span", { class: "row-identity-tags" },
+      /* SYNC-NF. The ack mark leads the line — it is the reason this row is not
+         in the strip where the operator last saw it, so it has to be the first
+         thing read here rather than the last. */
+      ackedMarkNode(agent, state.snap),
       /* Session tag, only when this row's name is not unique on the board. It
          rides the existing identity-tags line rather than adding a row, and it
          is the same short id the drawer and the copy-id buttons speak, so an
@@ -9079,7 +9275,14 @@ function renderAgentRow(agent, program, opts = {}) {
           return el("span", { class: "swarm-chip", title: where, "aria-label": where }, "swarm " + fullCount);
         }
         return null;
-      })()),
+      })(),
+      /* SYNC-NF, at the tail: the terminal's own unread count, then the one
+         control this row offers over the alert list. Both pass the row diet's
+         test — the badge says a terminal is holding something the operator has
+         to go and read, and the button is the only way to answer the strip
+         without lying about the session. */
+      cmuxBadgeNode(agent, state.snap),
+      syncAckButton(agent, state.snap)),
     description ? el("span", { class: "row-identity-tags row-summary row-description", title: "Latest human message or current status summary. Select for full details.", text: description }) : null);
 
   // Right-side instrument cluster: status word · outcome, model + ctx%, tokens,
@@ -9242,6 +9445,68 @@ function renderAgentRow(agent, program, opts = {}) {
           : "Workspace id stays " + nameTarget.workspaceId)
         : "Source agent: " + sourceName + " · id stays " + agent.id,
     }));
+}
+
+/* ---------- SYNC-NF · the three row nodes ----------
+
+   All three are omitted rather than rendered empty, which is why the row is
+   byte-identical on the overwhelming majority of sessions: no unread terminal
+   notification, no ack, nothing asking. */
+
+/* The count, in QUIET ink. It is a fact about the terminal, not a verdict about
+   the session — cmux holding an unread alert says nothing about whether the
+   agent is stuck — so it takes --muted and leaves the status palette alone.
+   Clicking it does nothing on purpose: a clear acts on ONE notification and
+   this can stand for several, so the verbs live on the dropdown entries where
+   each one has its own id and its own title to name. */
+function cmuxBadgeNode(agent, snap = state.snap) {
+  const unread = agentUnreadCmux(agent, snap);
+  if (!unread.length) return null;
+  const words = unread.length + " unread terminal notification" + (unread.length === 1 ? "" : "s");
+  return el("span", {
+    class: "cmux-badge",
+    title: words + " in this cmux workspace. Clear them from the notifications panel.",
+    "aria-label": words + " in this session's cmux workspace",
+    text: String(unread.length),
+  });
+}
+
+/* The operator's word, and only ever the operator's word. Every phrasing that
+   suggested the SESSION had reached a state — done, resolved, cleared — is
+   wrong here: the agent may be sitting at the same prompt it was sitting at
+   before the click. So the mark says who judged, and says what did not change. */
+function ackedMarkNode(agent, snap = state.snap) {
+  if (!ackedAgent(agent, snap)) return null;
+  const said = "You acknowledged this alert, so it is out of Needs you. "
+    + "The agent is still waiting — nothing about its state changed.";
+  return el("span", { class: "acked-mark", title: said, "aria-label": said, text: "acked ·" });
+}
+
+/* One control slot, two states. An Ack the operator cannot take back is a
+   one-way door on a judgment they made from a one-line summary. */
+function syncAckButton(agent, snap = state.snap) {
+  if (!alerting(agent)) return null;
+  const on = ackedAgent(agent, snap);
+  const name = agentName(agent);
+  return el("button", {
+    type: "button",
+    class: "sync-ack" + (on ? " is-acked" : ""),
+    disabled: syncPending.has("ack:" + agent.id) ? "" : null,
+    /* The accessible name OVERRIDES the visible text, so it has to CONTAIN it —
+       WCAG 2.5.3, the rule notifyQuietRow above carries the scar of. A voice
+       operator reads "Ack" off the screen and says it; a name that opened with
+       "Acknowledge" would not match the word they can see. So the visible label
+       leads, and the sentence that says what this does — and what it does NOT
+       do — follows it. */
+    "aria-label": on
+      ? "Unack — undo the acknowledgement for " + name + ": returns it to alerts"
+      : "Ack — Acknowledge " + name + ": removes from alerts; agent may still be waiting",
+    title: on
+      ? "Put this session back in Needs you."
+      : "Take this session out of Needs you. It does not answer the agent and does not change its state.",
+    dataset: { fkey: "sync-ack:" + agent.id },
+    onclick: (e) => { e.stopPropagation(); void applySyncAck(agent, !on); },
+  }, on ? "Unack" : "Ack");
 }
 
 function swarmNote(agent, opts) {
@@ -12342,6 +12607,86 @@ async function sendControl(agent, action, instruction) {
   refreshActions(); // the server just journalled this attempt — success or not
 }
 
+/* ---------- SYNC-NF · the two writes ----------
+
+   `/api/sync/notifications` carries a clear through the server's action funnel
+   to cmux; `/api/sync/ack/:agentId` writes the operator's board-local judgment
+   and never touches cmux at all. They share one request shape because they
+   share one honesty rule: HTTP completion is not evidence. cmux answers a wrong
+   parameter with exit code 0 and does nothing, so the server surfaces its
+   refusals as a typed `ActionResult` and this believes `ok` only when the
+   envelope says so in a boolean. Anything else is a refusal with a name.
+
+   In-flight keys live here rather than in client-state.js: they are this file's
+   own bookkeeping, and the shared state object is contended by three lanes. */
+
+const syncPending = new Set(); // "ack:<agentId>" | "notify:<notificationId>"
+
+async function syncRequest(url, method, body) {
+  try {
+    const res = await apiFetch(url, {
+      method,
+      headers: body ? { "content-type": "application/json" } : { accept: "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+    }, API_WRITE_TIMEOUT_MS);
+    let envelope = null;
+    try { envelope = await res.json(); } catch { /* a build without the route answers HTML */ }
+    if (envelope && envelope.ok === true) return { ok: true };
+    return {
+      ok: false,
+      // The server's own refusal class when it named one ("invalid_state"), and
+      // the status when it did not — never a bare "failed" with no handle on it.
+      code: (envelope && typeof envelope.code === "string" && envelope.code) || "HTTP_" + res.status,
+      detail: (envelope && typeof envelope.detail === "string" && envelope.detail) || "",
+    };
+  } catch (err) {
+    return { ok: false, code: "unreachable", detail: err && err.message ? err.message : "network error" };
+  }
+}
+
+function syncFailureText(what, result) {
+  return what + " failed [" + result.code + "]" + (result.detail ? ": " + result.detail : "");
+}
+
+/* One notification, by its own id. The `all` / `all_read` / `tab_id` variants of
+   cmux's vocabulary are deliberately unreachable from here: a board control
+   that cleared every terminal notification on the machine is not a control an
+   operator can take back. */
+async function clearCmuxNotification(id, action) {
+  const key = "notify:" + id;
+  if (syncPending.has(key)) return { ok: false, code: "pending" };
+  syncPending.add(key);
+  render();
+  const result = await syncRequest("/api/sync/notifications", "POST", { action, id });
+  syncPending.delete(key);
+  // The badge is a reading off the snapshot, so re-reading it is what makes the
+  // count visibly drop — nothing here edits the client's copy of the list.
+  if (result.ok) await fetchSnapshot();
+  else toast(syncFailureText(action === "dismiss" ? "Dismiss" : "Mark read", result), "err");
+  render();
+  return result;
+}
+
+async function applySyncAck(agent, on) {
+  const agentId = agent && agent.id;
+  if (!agentId) return { ok: false, code: "no_agent" };
+  const key = "ack:" + agentId;
+  if (syncPending.has(key)) return { ok: false, code: "pending" };
+  syncPending.add(key);
+  render();
+  const result = await syncRequest("/api/sync/ack/" + encodeURIComponent(agentId), on ? "PUT" : "DELETE");
+  syncPending.delete(key);
+  /* Same re-read, same reason, and here it is the WHOLE mechanism: the client
+     keeps no ack of its own, so the row leaves (or rejoins) the strip only
+     because the next snapshot's `acks` says so. A refused ack therefore moves
+     nothing at all, which is exactly right — the operator's judgment did not
+     land, so the board must not act as though it had. */
+  if (result.ok) await fetchSnapshot();
+  else toast(syncFailureText(on ? "Ack" : "Unack", result), "err");
+  render();
+  return result;
+}
+
 /* ---------- presentation labels (source identities stay authoritative) ---------- */
 
 async function fetchLabels() {
@@ -13322,6 +13667,17 @@ Object.assign(globalThis.TheAntHill, {
   TRANSCRIPT_DEFAULT_LIMIT, TRANSCRIPT_MAX_LIMIT, TRANSCRIPT_RENDER_CAP,
   ACTIONS_DEFAULT_LIMIT, ACTIONS_MAX_LIMIT,
   ATTENTION_SNOOZE_MS, API_READ_TIMEOUT_MS, API_TRANSCRIPT_TIMEOUT_MS, API_WRITE_TIMEOUT_MS,
+  /* SYNC-NF. The snapshot readers, the two writes and the surfaces they paint.
+     `syncPending` is here for the same reason `state` is: the request functions
+     write it and the renderers read it, so a disabled control mid-flight is not
+     assertable without both ends. `notifyPanelPaintSig` joins the surface it
+     signs — the unread set is not in the panel model, so the guard against a
+     cleared notification staying on screen has to be exercised directly. */
+  unreadCmuxByWorkspace, unreadCmuxNotifications, agentUnreadCmux,
+  ackedIds, ackedAgent, stripAlerting, acknowledgedCount,
+  cmuxBadgeNode, ackedMarkNode, syncAckButton, acknowledgedClause,
+  renderCmuxNotifySection, cmuxNotifyRow, notifyPanelPaintSig,
+  clearCmuxNotification, applySyncAck, syncRequest, syncFailureText, syncPending,
 });
 
 if (typeof document !== "undefined" && typeof window !== "undefined") {
