@@ -733,7 +733,14 @@ async function cursorStateEvidence(
         for (const [id, pct] of fromBlob) if (!occupancyPct.has(id)) occupancyPct.set(id, pct);
       }
     } catch (error) {
-      errors.push(`cursor composer headers: ${error instanceof Error ? error.message : String(error)}; context occupancy will be missing for this scan`);
+      /* The consequence depends on whether the table already answered. On a
+         table-gated install the blob is only a fallback, so a damaged blob
+         costs nothing the table covers — reporting "occupancy will be missing"
+         there would be a claim the scan itself contradicts. */
+      const detail = error instanceof Error ? error.message : String(error);
+      errors.push(occupancyPct.size > 0
+        ? `cursor composer headers: ${detail}; the legacy header blob is unreadable, so context occupancy comes from the composerHeaders table alone`
+        : `cursor composer headers: ${detail}; context occupancy will be missing for this scan`);
     }
     cursorStateCache = {
       path,
@@ -845,22 +852,36 @@ function occupancyReading(id: unknown, pct: unknown): [string, number] | undefin
 
    A row whose JSON is unreadable is skipped rather than throwing: unlike the
    blob, where one bad parse means the whole source is unusable, here 927 good
-   rows should not be discarded because one is damaged. */
-export function readComposerHeaderTable(database: Database): Map<string, number> {
+   rows should not be discarded because one is damaged.
+
+   The QUERY is guarded for the opposite reason. The caller only proves the
+   table NAME exists, and this payload is versioned in flight
+   (`composer.composerHeaders.version`) by a vendor that has already moved it
+   twice — so a renamed or dropped column is a live possibility. This runs
+   inside the readForeignSqlite callback, where a throw is laundered into
+   "state.vscdb could not be opened safely" and deletes every GUI session from
+   the scan: one damaged row costs one reading, but one renamed column would
+   cost the whole board. Cursor changing shape means "no occupancy this scan",
+   never an error — the same policy parseComposerHeaders documents below. */
+function readComposerHeaderTable(database: Database): Map<string, number> {
   const map = new Map<string, number>();
-  const rows = database
-    .query("select composerId, value from composerHeaders")
-    .all() as Array<{ composerId?: unknown; value?: unknown }>;
-  for (const row of rows) {
-    if (row.value === undefined || row.value === null) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(typeof row.value === "string" ? row.value : Buffer.from(row.value as Uint8Array).toString("utf8"));
-    } catch {
-      continue;
+  try {
+    const rows = database
+      .query("select composerId, value from composerHeaders")
+      .all() as Array<{ composerId?: unknown; value?: unknown }>;
+    for (const row of rows) {
+      if (row.value === undefined || row.value === null) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(typeof row.value === "string" ? row.value : Buffer.from(row.value as Uint8Array).toString("utf8"));
+      } catch {
+        continue;
+      }
+      const reading = occupancyReading(row.composerId, asRecord(parsed)?.contextUsagePercent);
+      if (reading) map.set(reading[0], reading[1]);
     }
-    const reading = occupancyReading(row.composerId, asRecord(parsed)?.contextUsagePercent);
-    if (reading) map.set(reading[0], reading[1]);
+  } catch {
+    // Readings already accumulated are real measurements; keep them.
   }
   return map;
 }
