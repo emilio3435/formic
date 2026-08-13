@@ -13185,10 +13185,16 @@ async function fetchLabels() {
    board uncoloured rather than reaching for a fallback palette the cmux
    workspaces would not be wearing. */
 async function fetchRepoColors() {
+  const generation = bootGeneration;
   try {
     const res = await apiFetch("/api/repo-colors", { headers: { accept: "application/json" } }, API_READ_TIMEOUT_MS);
     const body = await res.json();
     if (!res.ok || !body || body.ok !== true || !body.settings) throw new Error("bad repo-colour response");
+    /* The board was frozen while this was in flight, so there is nothing left
+       to paint into: applying it here repaints over whatever stopped the boot.
+       The geometry gate froze the board on purpose, and a repaint arriving
+       mid-measurement made it fail on a layout it never rendered. */
+    if (generation !== bootGeneration) return;
     setRepoColors(body.repoNames, body.settings);
     state.repoColorSettings = body.settings;
     render();
@@ -13910,7 +13916,15 @@ function renderUsageWard(ward, quotasOnly) {
 
 const bootIntervals = [];
 
+/* Bumped every time the board is frozen. Work boot STARTED can still be in
+   flight when it stops, and a response landing afterwards must not repaint over
+   whatever froze it — see fetchRepoColors. A counter rather than a boolean, so
+   a fetch started AFTER a stop is still legitimate: what is stale is a response
+   whose generation no longer matches, not every response from then on. */
+let bootGeneration = 0;
+
 function stopBoot() {
+  bootGeneration += 1;
   while (bootIntervals.length) clearInterval(bootIntervals.pop());
   // The stream is part of boot: leaving it open kept a live EventSource (and a
   // stale readyState read) alive after stopBoot() claimed to have stopped.
