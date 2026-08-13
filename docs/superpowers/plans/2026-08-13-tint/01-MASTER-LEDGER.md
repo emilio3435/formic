@@ -15,11 +15,11 @@
 
 | Gate | State | Evidence |
 |---|---|---|
-| Plan approved by Emilio | PENDING | decisions locked 2026-08-13 00:2x CDT; awaiting explicit go on the plan itself |
+| Plan approved by Emilio | DONE | "GO!" 2026-08-13 00:57 CDT |
 | Open decisions 1–4 answered | DONE | groups ON at merge · all repo-mapped · piggyback collector · push+PR when green (standing) |
-| `feat/tint-integration` cut from `main` | PENDING | — |
-| Contract stub committed (first commit) | PENDING | sha: — |
-| Sub-orchs spawned + model/vehicle verified | PENDING | ps evidence per lane: — |
+| `feat/tint-integration` cut from `main` | DONE | worktree tint-integration @ 625fd6c base |
+| Contract stub committed (first commit) | DONE | 22e75d8 (tsc --noEmit 0); docs 06d385c |
+| Sub-orchs spawned + model/vehicle verified | DONE | pids f=70978 s=71016 g=71062 p=71208, all `--model opus --effort high --permission-mode auto` via ~/.local/bin/claude, cwd = own worktree (ps+lsof 01:0x CDT) |
 | F merged, floor green | PENDING | tsc/test output: — |
 | S merged, floor green | PENDING | — |
 | G merged, floor green | PENDING | — |
@@ -34,10 +34,10 @@
 
 | Lane | Goal doc | Branch / worktree | Workspace | Model · vehicle | Status | Report seen | Floor (my run) |
 |---|---|---|---|---|---|---|---|
-| TINT-F | GOAL-F-foundation.md | `feat/tint-f` · `../the-mountain.worktrees/tint-f` | `TINT · f-orch · opus · 08-13` | Opus 5 high · claude | NOT SPAWNED | — | — |
-| TINT-S | GOAL-S-sync.md | `feat/tint-s` · `../the-mountain.worktrees/tint-s` | `TINT · s-orch · opus · 08-13` | Opus 5 high · claude | NOT SPAWNED | — | — |
-| TINT-G | GOAL-G-groups.md | `feat/tint-g` · `../the-mountain.worktrees/tint-g` | `TINT · g-orch · opus · 08-13` | Opus 5 high · claude | NOT SPAWNED | — | — |
-| TINT-P | GOAL-P-prompt.md | `feat/tint-p` · `../the-mountain.worktrees/tint-p` | `TINT · p-orch · opus · 08-13` | Opus 5 high · claude | NOT SPAWNED | — | — |
+| TINT-F | GOAL-F-foundation.md | `feat/tint-f` · `../the-mountain.worktrees/tint-f` | workspace:26 `TINT · f-orch · opus · 08-13` | Opus 5 high · claude (pid 70978, verified) | WORKING | — | — |
+| TINT-S | GOAL-S-sync.md | `feat/tint-s` · `../the-mountain.worktrees/tint-s` | workspace:27 `TINT · s-orch · opus · 08-13` | Opus 5 high · claude (pid 71016, verified) | WORKING | — | — |
+| TINT-G | GOAL-G-groups.md | `feat/tint-g` · `../the-mountain.worktrees/tint-g` | workspace:28 `TINT · g-orch · opus · 08-13` | Opus 5 high · claude (pid 71062, verified) | WORKING | — | — |
+| TINT-P | GOAL-P-prompt.md | `feat/tint-p` · `../the-mountain.worktrees/tint-p` | workspace:29 `TINT · p-orch · opus · 08-13` | Opus 5 high · claude (pid 71208, verified) | WORKING | — | — |
 
 Sub-orch worker lanes appear in each sub-orch's own ledger section of its `LANE-REPORT`; master tracks sub-orchs only, but sweeps everything under the `TINT · ` prefix.
 
