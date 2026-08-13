@@ -35,11 +35,26 @@ const ORIGIN = "http://127.0.0.1:4701";
    ------------------------------------------------------------------------ */
 
 /** A git stand-in that answers `rev-parse --git-common-dir` from a table of
- *  cwd → common dir, and refuses everything else the way git does. */
+ *  cwd → common dir, and refuses everything else the way git does.
+ *
+ *  It INSPECTS the argv, and that is the whole point of it. Reading only
+ *  `command[2]` made these tests pass against an implementation asking for
+ *  `--show-toplevel` — the exact worktree-fragmenting bug they exist to
+ *  prevent. A fake that answers any question with the answer to one question
+ *  cannot tell you which question was asked. */
 function fakeGit(table: Record<string, string>): RepoKeyExec {
   return (command) => {
-    const cwd = command[2] ?? "";
-    const answer = table[cwd];
+    const [binary, dashC, cwd, ...flags] = command;
+    if (binary !== "git" || dashC !== "-C") {
+      throw new Error(`repoKeyForCwd shelled something other than \`git -C\`: ${command.join(" ")}`);
+    }
+    if (!flags.includes("rev-parse") || !flags.includes("--git-common-dir")) {
+      throw new Error(`repoKeyForCwd must ask for --git-common-dir, not: ${flags.join(" ")}`);
+    }
+    if (flags.includes("--show-toplevel")) {
+      throw new Error("--show-toplevel answers the LINKED WORKTREE's own directory, which fragments one repository into many");
+    }
+    const answer = table[cwd ?? ""];
     return answer === undefined
       ? { exitCode: 128, stdout: "" }
       : { exitCode: 0, stdout: `${answer}\n` };
@@ -356,6 +371,39 @@ describe("repoColorDiscovery", () => {
     expect(discovery.workspaces["WS-1"]).toBe("the-mountain");
   });
 
+  test("a printed name claimed by two repositories drops out of the join entirely", () => {
+    /* Ruling (master, 2026-08-13). Two repositories can print the same name —
+       the board prints RepoIdentity.repoName, which is an origin basename, and
+       two checkouts of forks share it while their canonical keys differ. The
+       previous `names[name] = key` was last-writer-wins over COLLECTOR order,
+       so one of the two wore the other's colour and which one changed between
+       polls. No tint beats wrong tint: an operator who sees an uncoloured band
+       asks why; one who sees it wearing its neighbour's hue never knows to. */
+    const forward = repoColorDiscovery([
+      { repoKey: "the-mountain", repoName: "the-ant-hill" },
+      { repoKey: "the-mountain-fork", repoName: "the-ant-hill" },
+    ]);
+    const backward = repoColorDiscovery([
+      { repoKey: "the-mountain-fork", repoName: "the-ant-hill" },
+      { repoKey: "the-mountain", repoName: "the-ant-hill" },
+    ]);
+    expect(forward.names).toEqual({});
+    expect(backward.names).toEqual(forward.names);
+    /* Both repositories still get COLOURS — they are real repositories and the
+       cmux fan-out is keyed by repoKey, which is never ambiguous. It is only
+       the board's name-based lookup that has to abstain. */
+    expect(forward.repoKeys).toEqual(["the-mountain", "the-mountain-fork"]);
+  });
+
+  test("one repository seen many times is not ambiguous", () => {
+    const discovery = repoColorDiscovery([
+      { repoKey: "the-mountain", repoName: "the-ant-hill" },
+      { repoKey: "the-mountain", repoName: "The-Ant-Hill" },
+      { repoKey: "the-mountain", repoName: "the-ant-hill" },
+    ]);
+    expect(discovery.names).toEqual({ "the-ant-hill": "the-mountain" });
+  });
+
   test("a tie breaks lexicographically, not by whoever was read last", () => {
     const forward = repoColorDiscovery([
       { repoKey: "zeta", workspaceId: "WS-1" },
@@ -511,16 +559,29 @@ describe("/api/repo-colors", () => {
     expect(badVerb.status).toBe(405);
   });
 
-  test("DELETE returns a repository to its palette slot", async () => {
-    const handle = await subject();
+  test("DELETE returns a repository to its palette slot AND pushes it to cmux", async () => {
+    /* Clearing an override is a colour change, so it fans out exactly as
+       setting one does. Returning the restored hex and writing nothing left
+       cmux wearing the colour the operator just took back, until some later GET
+       happened to notice — a write path that pushes only half its outcomes. */
+    const writes: { workspaceId: string; hex: string }[] = [];
+    const handle = await subject((batch) => { writes.push(...batch); });
     const headers = { origin: ORIGIN, "content-type": "application/json" };
     await handle(new Request(`${ORIGIN}/api/repo-colors/formic`, {
       method: "PUT", headers, body: JSON.stringify({ hex: "#123456" }),
     }));
+    expect(writes).toEqual([{ workspaceId: "WS-2", hex: "#123456" }]);
+    writes.length = 0;
+
     const body = await (await handle(new Request(`${ORIGIN}/api/repo-colors/formic`, {
       method: "DELETE", headers,
     }))).json() as any;
-    expect(body.settings.assignments.formic.source).toBe("auto");
+    const restored = body.settings.assignments.formic;
+    expect(restored.source).toBe("auto");
+    expect(restored.slot).not.toBeNull();
+    expect(writes).toEqual([{ workspaceId: "WS-2", hex: restored.hex }]);
+    // And only that repository's workspaces — formic's, never the-mountain's.
+    expect(writes.every((write) => write.workspaceId === "WS-2")).toBe(true);
   });
 });
 

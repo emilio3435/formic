@@ -120,6 +120,20 @@ const byClass = (root: unknown, name: string): FakeNode[] =>
 const STORM = "#2e66a8";
 const SIENNA = "#b05f3a";
 
+/* The colour state as the SERVER actually hands it over: two tables, joined by
+   the canonical repo key. Printed name and repo key are different strings on
+   this very checkout — origin `…/the-ant-hill.git` makes RepoIdentity.repoName
+   `the-ant-hill`, while repoKeyForCwd reads the git common dir and answers
+   `the-mountain` — so every fixture here keeps them distinct on purpose. A
+   helper that let them be the same word is what hid the join defect. */
+function useColors(repoNames: Record<string, string>, hexByKey: Record<string, string>) {
+  const assignments: Record<string, unknown> = {};
+  for (const [key, hex] of Object.entries(hexByKey)) {
+    assignments[key] = { repoKey: key, hex, slot: null, source: "auto" };
+  }
+  M.setRepoColors(repoNames, { assignments, mirrorGroups: true, syncFromCmux: true });
+}
+
 function agent(overrides: Record<string, unknown> = {}) {
   return {
     id: "codex:a1",
@@ -176,31 +190,127 @@ const ui = () => ({
 });
 
 beforeEach(() => {
-  M.setRepoColors({});
+  M.setRepoColors({}, { assignments: {} });
 });
 
 /* ---------------------------------------------------------------------------
    The join.
    ------------------------------------------------------------------------ */
 
+describe("the wire join: a real GET envelope reaches a rendered row", () => {
+  /* THE test this lane shipped without, and the whole reason the board never
+     tinted while 64 tests stayed green. Every other test in this file sets the
+     colour state by hand, so all of them agreed with each other about a shape
+     that no server ever sends.
+
+     This one takes the envelope the real handler emits and pushes it through
+     the real client entry points, so the two halves are pinned to each other.
+     Printed name and repo key deliberately differ — `the-ant-hill` is what the
+     band prints on this very checkout, `the-mountain` is what the git common
+     dir answers. */
+  const envelope = {
+    ok: true,
+    settings: {
+      assignments: { "the-mountain": { repoKey: "the-mountain", hex: STORM, slot: 1, source: "auto" } },
+      mirrorGroups: true,
+      syncFromCmux: true,
+    },
+    repoNames: { "the-ant-hill": "the-mountain" },
+  };
+
+  test("name → repoKey → hex, and the band actually paints", () => {
+    M.setRepoColors(envelope.repoNames, envelope.settings);
+    expect(M.repoTintFor("the-ant-hill")).toBe(STORM);
+    const section = withDom(() =>
+      M.renderRepoSection(band({ name: "the-ant-hill" }), ui())) as unknown as FakeNode;
+    expect(section.classList.contains("has-repo-tint")).toBe(true);
+    expect(section.props["--repo-tint"]).toBe(STORM);
+  });
+
+  test("collapsing the two hops into one paints nothing — the defect, pinned", () => {
+    /* Feeding the key table straight in is what shipped. Asserting the FAILURE
+       explicitly means the test cannot be satisfied by an implementation that
+       merely happens to work when name === key. */
+    M.setRepoColors(envelope.repoNames, { assignments: envelope.repoNames });
+    expect(M.repoTintFor("the-ant-hill")).toBe("");
+  });
+
+  test("fetchRepoColors passes BOTH tables from the response it just read", async () => {
+    /* The join lives at the two call sites as much as in the function: passing
+       only body.repoNames type-checks, runs, logs nothing and tints nothing. */
+    const calls: string[] = [];
+    const realFetch = (globalThis as { fetch?: unknown }).fetch;
+    (globalThis as unknown as { fetch: unknown }).fetch = async (url: string) => {
+      calls.push(String(url));
+      return new Response(JSON.stringify(envelope), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    };
+    try {
+      await M.fetchRepoColors();
+    } finally {
+      (globalThis as unknown as { fetch: unknown }).fetch = realFetch;
+    }
+    expect(calls).toEqual(["/api/repo-colors"]);
+    expect(M.repoTintFor("the-ant-hill")).toBe(STORM);
+  });
+
+  test("putRepoColor re-joins from ITS response too — the second call site", async () => {
+    /* There are two places that turn a response into colours, and a mutation
+       run proved only one of them was covered: collapsing the join at the
+       putRepoColor call site alone left every test green. Two call sites, two
+       tests, or half the defect stays shippable. */
+    const picked = "#0e9494";
+    const reply = {
+      ok: true,
+      settings: {
+        assignments: { "the-mountain": { repoKey: "the-mountain", hex: picked, slot: null, source: "user" } },
+        mirrorGroups: true,
+        syncFromCmux: true,
+      },
+      repoNames: { "the-ant-hill": "the-mountain" },
+    };
+    const calls: { url: string; method: string }[] = [];
+    const realFetch = (globalThis as { fetch?: unknown }).fetch;
+    (globalThis as unknown as { fetch: unknown }).fetch = async (url: string, init?: { method?: string }) => {
+      calls.push({ url: String(url), method: init?.method ?? "GET" });
+      return new Response(JSON.stringify(reply), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    };
+    try {
+      /* putRepoColor repaints the whole board and the settings panel after the
+         join, and neither survives this file's deliberately minimal document.
+         The join runs BEFORE them, so the assertions below still measure it —
+         and they measure it honestly: a broken join leaves the map empty and
+         `repoTintFor` returns "", which fails here just as loudly. */
+      await withDom(() => M.putRepoColor("the-mountain", picked)).catch(() => {});
+    } finally {
+      (globalThis as unknown as { fetch: unknown }).fetch = realFetch;
+    }
+    expect(calls[0]).toEqual({ url: "/api/repo-colors/the-mountain", method: "PUT" });
+    expect(M.repoTintFor("the-ant-hill")).toBe(picked);
+  });
+});
+
 describe("repoTintFor", () => {
   test("joins on the repository name the board already prints, case-insensitively", () => {
-    M.setRepoColors({ "the-mountain": "#2E66A8" });
-    expect(M.repoTintFor("The-Mountain")).toBe(STORM);
-    expect(M.repoTintFor("  the-mountain  ")).toBe(STORM);
+    useColors({ "the-ant-hill": "the-mountain" }, { "the-mountain": "#2E66A8" });
+    expect(M.repoTintFor("The-Ant-Hill")).toBe(STORM);
+    expect(M.repoTintFor("  the-ant-hill  ")).toBe(STORM);
   });
 
   test("a repository the endpoint has not assigned gets NO colour, not a default", () => {
     /* A fallback hue here would be a colour the board shows and the cmux
        workspaces are not wearing — an identity claim with nothing behind it. */
-    M.setRepoColors({ "the-mountain": "#2E66A8" });
+    useColors({ "the-ant-hill": "the-mountain" }, { "the-mountain": "#2E66A8" });
     expect(M.repoTintFor("cooper-scheduler")).toBe("");
     expect(M.repoTintFor("")).toBe("");
     expect(M.repoTintFor(null)).toBe("");
   });
 
   test("a hex the client cannot compare later is dropped rather than stored", () => {
-    M.setRepoColors({ "the-mountain": "cornflower", formic: "#abc" });
+    useColors({ "the-mountain": "k1", formic: "k2" }, { k1: "cornflower", k2: "#abc" });
     expect(M.repoTintFor("the-mountain")).toBe("");
     expect(M.repoTintFor("formic")).toBe("#aabbcc");
   });
@@ -212,7 +322,7 @@ describe("repoTintFor", () => {
 
 describe("Whisper", () => {
   test("a tinted band carries the class, the custom property and a head dot", () => {
-    M.setRepoColors({ "the-mountain": STORM });
+    useColors({ "the-mountain": "mtn" }, { mtn: STORM });
     const section = withDom(() => M.renderRepoSection(band(), ui())) as unknown as FakeNode;
     expect(section.classList.contains("has-repo-tint")).toBe(true);
     expect(section.props["--repo-tint"]).toBe(STORM);
@@ -223,7 +333,7 @@ describe("Whisper", () => {
     /* The board ships `style-src 'self'` with no 'unsafe-inline'. A style
        ATTRIBUTE is dropped silently by that policy — the band would render, the
        colour would not, and nothing anywhere would say why. */
-    M.setRepoColors({ "the-mountain": STORM });
+    useColors({ "the-mountain": "mtn" }, { mtn: STORM });
     const section = withDom(() => M.renderRepoSection(band(), ui())) as unknown as FakeNode;
     expect(section.attributes.style).toBeUndefined();
     expect(source).not.toMatch(/style:\s*["'`][^"'`]*--repo-tint/);
@@ -241,12 +351,12 @@ describe("Whisper", () => {
        else in the signature moving — so a signature blind to it would serve the
        first paint's colourless card forever. */
     const before = M.repoShellSig(band(), ui());
-    M.setRepoColors({ "the-mountain": STORM });
+    useColors({ "the-mountain": "mtn" }, { mtn: STORM });
     expect(M.repoShellSig(band(), ui())).not.toBe(before);
   });
 
   test("the repository's NAME is never tinted — only the dot is", () => {
-    M.setRepoColors({ "the-mountain": STORM });
+    useColors({ "the-mountain": "mtn" }, { mtn: STORM });
     const section = withDom(() => M.renderRepoSection(band(), ui())) as unknown as FakeNode;
     const name = byClass(section, "repo-name")[0]!;
     expect(name.props["--repo-tint"]).toBeUndefined();
@@ -255,29 +365,67 @@ describe("Whisper", () => {
 });
 
 /* ---------------------------------------------------------------------------
-   Signal — the flat Needs-you strip.
+   Signal — the interleaved rows, and what the strip does instead.
    ------------------------------------------------------------------------ */
 
+const boardIndexStub = () => ({ byId: new Map(), ambiguous: new Set(), sharedNames: new Set() });
+
+function planFor(agents: Record<string, unknown>[], banded: boolean) {
+  const prog = program({ agents });
+  return M.agentRowPlan(prog, agents, ui(), boardIndexStub(), { finished: [], banded });
+}
+
 describe("Signal", () => {
-  test("a strip row carries the tick class and the hex", () => {
-    M.setRepoColors({ "the-mountain": SIENNA });
-    const board = { byId: new Map(), ambiguous: new Set(), sharedNames: new Set() };
-    const opts = M.stripRowOpts(program(), board);
-    expect(opts.repoTint).toBe(SIENNA);
-    const row = withDom(() => M.renderAgentRow(agent(), program(), opts)) as unknown as FakeNode;
+  test("an interleaved (flat, unbanded) row carries the tick class and the hex", () => {
+    /* This is the surface Signal is FOR. It went untested and unwired at first:
+       stripRowOpts was the only thing setting repoTint, so the treatment shipped
+       applying to nothing at all. */
+    useColors({ "the-mountain": "mtn" }, { mtn: SIENNA });
+    const one = agent();
+    const plan = planFor([one], false);
+    const row = withDom(() => plan.find((item: { key: string }) => item.key === "row:" + one.id).build()) as unknown as FakeNode;
     expect(row.classList.contains("has-repo-tick")).toBe(true);
     expect(row.props["--repo-tint"]).toBe(SIENNA);
   });
 
   test("rows inside a band get NO tick — the card above them already says it", () => {
-    M.setRepoColors({ "the-mountain": SIENNA });
-    const row = withDom(() => M.renderAgentRow(agent(), program(), {})) as unknown as FakeNode;
+    useColors({ "the-mountain": "mtn" }, { mtn: SIENNA });
+    const one = agent();
+    const plan = planFor([one], true);
+    const row = withDom(() => plan.find((item: { key: string }) => item.key === "row:" + one.id).build()) as unknown as FakeNode;
     expect(row.classList.contains("has-repo-tick")).toBe(false);
     expect(row.props["--repo-tint"]).toBeUndefined();
   });
 
+  test("the strip offers NO tick — identity never reaches an attention row", () => {
+    /* needsYouStrip admits only alerting agents, so every strip row is an
+       attention row and rule 5 gives it to status outright. Identity is carried
+       by the heading pill instead.
+
+       Withholding the tick, rather than offering one for the stylesheet to
+       drop, is what makes this airtight for the hook-needsInput shape below:
+       that agent is alerting with a HEALTHY outcome, so it carries none of the
+       is-needs-you / is-blocked / is-failed classes the identity selectors
+       exclude. An offered tick would paint on it. */
+    useColors({ "the-mountain": "mtn" }, { mtn: SIENNA });
+    const opts = M.stripRowOpts(program(), boardIndexStub());
+    expect(opts.repoTint).toBeUndefined();
+
+    const hookShaped = agent({ status: "waiting", lifecycle: "waiting", hookLifecycle: "needsInput" });
+    const row = withDom(() => M.renderAgentRow(hookShaped, program(), opts)) as unknown as FakeNode;
+    expect(row.classList.contains("has-repo-tick")).toBe(false);
+    expect(row.props["--repo-tint"]).toBeUndefined();
+    /* Pinning the shape that makes this necessary: no attention class either,
+       because pane mode deliberately does not double-mark — the strip IS the
+       signal. So there is nothing for a `:not()` to catch, and the only safe
+       treatment is none. */
+    for (const attention of ["is-needs-you", "is-blocked", "is-failed", "is-alerting"]) {
+      expect(row.classList.contains(attention), attention).toBe(false);
+    }
+  });
+
   test("the strip heading wears the quiet repo pill, bordered rather than inked", () => {
-    M.setRepoColors({ "the-mountain": SIENNA });
+    useColors({ "the-mountain": "mtn" }, { mtn: SIENNA });
     const head = withDom(() => M.renderStripGroupHead(program(), "the-mountain · main")) as unknown as FakeNode;
     const pill = byClass(head, "strip-repo-pill")[0]!;
     expect(pill).toBeDefined();

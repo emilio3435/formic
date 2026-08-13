@@ -575,14 +575,25 @@ export interface RepoColorDiscovery {
  *  can predict or debug. */
 export function repoColorDiscovery(subjects: readonly RepoColorSubject[]): RepoColorDiscovery {
   const repoKeys = new Set<string>();
-  const names: Record<string, string> = {};
+  /* Every key that has claimed each printed name, not the last one to claim it.
+     `names[name] = key` was last-writer-wins, and the writer order is collector
+     order — so two repositories whose printed names collide would trade colours
+     between polls, and which one got which was unpredictable. */
+  const claims = new Map<string, Set<string>>();
   const counts = new Map<string, Map<string, number>>();
   for (const subject of subjects) {
     const key = subject.repoKey;
     if (!key) continue;
     repoKeys.add(key);
     const name = subject.repoName?.trim().toLowerCase();
-    if (name) names[name] = key;
+    if (name) {
+      let claimants = claims.get(name);
+      if (!claimants) {
+        claimants = new Set();
+        claims.set(name, claimants);
+      }
+      claimants.add(key);
+    }
     if (!subject.workspaceId) continue;
     let tally = counts.get(subject.workspaceId);
     if (!tally) {
@@ -596,6 +607,17 @@ export function repoColorDiscovery(subjects: readonly RepoColorSubject[]): RepoC
     const winner = [...tally.entries()].sort((left, right) =>
       right[1] - left[1] || left[0].localeCompare(right[0]))[0];
     if (winner) workspaces[workspaceId] = winner[0];
+  }
+  /* An AMBIGUOUS printed name drops out of the join entirely (ruling, master
+     2026-08-13). The board can only ask "what colour is the name I am
+     printing", and when two repositories answer to that name there is no right
+     answer — so it gets no colour rather than a coin-flip one. Same bias as the
+     anchor rules: no tint beats wrong tint, and an operator who sees one band
+     uncoloured asks why, where one who sees it wearing its neighbour's hue
+     never knows to. */
+  const names: Record<string, string> = {};
+  for (const [name, claimants] of claims) {
+    if (claimants.size === 1) names[name] = [...claimants][0]!;
   }
   return { repoKeys: [...repoKeys].sort(), names, workspaces };
 }
@@ -630,6 +652,23 @@ function repoColorsPayload(
 }
 
 const REPO_KEY_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/;
+
+/** Push one repository's current colour to every workspace mapped to it. One
+ *  function for both mutating verbs, so a later verb cannot quietly skip it —
+ *  which is exactly how DELETE came to return a restored colour it never
+ *  wrote. */
+async function fanOutFor(
+  repoKey: string,
+  settings: RepoColorsSettings,
+  discovery: RepoColorDiscovery,
+  options: RepoColorsRequestOptions,
+): Promise<void> {
+  const assignment = settings.assignments[repoKey];
+  if (!assignment) return;
+  const writes = Object.entries(discovery.workspaces).flatMap(([workspaceId, key]) =>
+    key === repoKey ? [{ workspaceId, hex: assignment.hex }] : []);
+  if (writes.length) await options.fanOut?.(writes);
+}
 
 export async function handleRepoColorsRequest(
   request: Request,
@@ -667,6 +706,12 @@ export async function handleRepoColorsRequest(
     if (request.method === "DELETE") {
       const settings = await store.clearUserColor(repoKey);
       const discovery = await (options.discover?.() ?? { repoKeys: [], names: {}, workspaces: {} });
+      /* Clearing an override is a colour CHANGE, so it fans out exactly as
+         setting one does. Returning the restored palette hex and writing
+         nothing left cmux wearing the colour the operator just took back —
+         until some later GET happened to notice, or TINT-S papered over it. A
+         write path that only pushes half its outcomes is not a write path. */
+      await fanOutFor(repoKey, settings, discovery, options);
       return json(repoColorsPayload(settings, discovery));
     }
     if (request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
@@ -684,11 +729,7 @@ export async function handleRepoColorsRequest(
     }
     const settings = await store.setUserColor(repoKey, record.hex as string);
     const discovery = await (options.discover?.() ?? { repoKeys: [], names: {}, workspaces: {} });
-    const writes = Object.entries(discovery.workspaces).flatMap(([workspaceId, key]) =>
-      key === repoKey && settings.assignments[key]
-        ? [{ workspaceId, hex: settings.assignments[key]!.hex }]
-        : []);
-    if (writes.length) await options.fanOut?.(writes);
+    await fanOutFor(repoKey, settings, discovery, options);
     return json(repoColorsPayload(settings, discovery));
   } catch (error) {
     return requestError(500, "REPO_COLORS_WRITE_FAILED", error instanceof Error ? error.message : String(error));

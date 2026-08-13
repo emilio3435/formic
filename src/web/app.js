@@ -3949,7 +3949,7 @@ async function putRepoColor(repoKey, hex) {
     if (!res.ok || !body || body.ok !== true) {
       throw new Error(body && body.error && body.error.message ? body.error.message : "Save failed (HTTP " + res.status + ")");
     }
-    setRepoColors(body.repoNames);
+    setRepoColors(body.repoNames, body.settings);
     state.repoColorSettings = body.settings;
     render();
     renderSettingsPanel();
@@ -7082,11 +7082,25 @@ function repoOf(program) {
 const repoColors = new Map();   // lowercased repo name -> "#rrggbb"
 let repoColorsVersion = 0;      // bumped on every load; paint signatures read it
 
-function setRepoColors(entries) {
+/* The join is TWO hops, and collapsing it to one is how this shipped broken
+   once: `repoNames` maps a printed name to a canonical repoKey, and
+   `assignments` maps that key to a hex. They are different tables and the
+   middle value is not a colour — feeding `repoNames` straight in left every
+   entry failing normalizeRepoHex, so the map stayed empty and the board never
+   tinted while every test stayed green.
+
+   The two names genuinely differ on this very checkout: the repository's origin
+   is `…/the-ant-hill.git`, so RepoIdentity.repoName — what the band prints — is
+   `the-ant-hill`, while repoKeyForCwd reads the git common dir and answers
+   `the-mountain`. The table exists precisely for that split, which is why
+   `name === key` is never a safe shortcut. */
+function setRepoColors(repoNames, settings) {
   repoColors.clear();
-  for (const [name, hex] of Object.entries(entries || {})) {
-    const normalized = normalizeRepoHex(hex);
-    if (normalized) repoColors.set(String(name).toLowerCase(), normalized);
+  const assignments = (settings && settings.assignments) || {};
+  for (const [name, repoKey] of Object.entries(repoNames || {})) {
+    const assignment = assignments[repoKey];
+    const hex = normalizeRepoHex(assignment && assignment.hex);
+    if (hex) repoColors.set(String(name).toLowerCase(), hex);
   }
   repoColorsVersion += 1;
 }
@@ -8031,11 +8045,27 @@ function stripRowOpts(program, board) {
     fullById: board.byId,
     ambiguousNames: board.ambiguous,
     sharedNames: board.sharedNames,
-    /* Signal, and ONLY here. Rows inside a repo band already sit under a tinted
-       card that washes them by descent; a per-row tick there would be the same
-       fact said twice on every line. The strip is the one surface where a row's
-       repository is not written above it. */
-    repoTint: repoTintOfProgram(program),
+    /* NO repo tint here, deliberately, and that omission is the whole fix for
+       authority rule 5 on this surface.
+
+       `needsYouStrip` admits only alerting agents, so every row in this strip
+       is an attention row. Rule 5 gives an attention row to status outright, so
+       identity is carried by the heading pill above the run rather than by
+       anything on the row itself.
+
+       Offering a tick here and relying on the stylesheet to drop it does NOT
+       work, and that is the trap: most strip rows get an ember class from their
+       OUTCOME (needs-you / blocked / failed), but a hook-needsInput agent is
+       alerting with a HEALTHY outcome and so carries none of them. It would
+       match every `:not(.is-…)` identity selector and wear a repo wash on an
+       attention row — precisely inverted.
+
+       The tempting second fix — set `alerting: true` so the row takes the ember
+       class — is wrong here for a reason outside this lane: pane mode
+       deliberately does not double-mark, because the strip IS the signal
+       ("inline mode marks every row the strip would have taken", in
+       tests/web-client.test.ts). Not offering identity in the first place
+       closes the hole without overruling that. */
   };
 }
 
@@ -8483,6 +8513,19 @@ const SECTION_HEADS = {
    `board` is the once-per-paint fleet index; it is optional so the plan can be
    driven directly in a test with nothing but a program and a ui. */
 function agentRowPlan(program, agents, ui = state, board = boardIndex(ui), opts = {}) {
+  /* Signal, on the INTERLEAVED surface: a flat program section is not grouped
+     by repository, so nothing above these rows says which one they belong to
+     and each carries its own 3px tick. A banded row sits inside a tinted card
+     that washes it by descent — a tick there would say the same thing twice on
+     every line, which is the difference between Whisper and Signal.
+
+     Read once here rather than per row: it is constant for the program, and
+     inside the walk below `opts` is shadowed by each row's own options object,
+     so reaching for the parameter there is a temporal-dead-zone error rather
+     than the value it looks like. The stylesheet drops the tick again on any
+     row wearing an attention class, so this is identity offered and status
+     taking precedence, never the two mixed. */
+  const rowRepoTint = opts.banded ? "" : repoTintOfProgram(program);
   const visibleIds = new Set(agents.map((agent) => agent.id));
   const programById = new Map(program.agents.map((agent) => [agent.id, agent]));
   const relevantIds = new Set(visibleIds);
@@ -8590,6 +8633,7 @@ function agentRowPlan(program, agents, ui = state, board = boardIndex(ui), opts 
            "open me and see" must only fire when opening shows it. */
         swarmAlerting: !open && hasDrawnAlertingDescendant(agent.id),
         alerting: markAlerting && alerting(agent),
+        repoTint: rowRepoTint,
       };
       plan.push({
         key: "row:" + agent.id,
@@ -12339,7 +12383,7 @@ async function fetchRepoColors() {
     const res = await apiFetch("/api/repo-colors", { headers: { accept: "application/json" } }, API_READ_TIMEOUT_MS);
     const body = await res.json();
     if (!res.ok || !body || body.ok !== true || !body.settings) throw new Error("bad repo-colour response");
-    setRepoColors(body.repoNames);
+    setRepoColors(body.repoNames, body.settings);
     state.repoColorSettings = body.settings;
     render();
   } catch (err) {
