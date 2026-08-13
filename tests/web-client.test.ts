@@ -2460,11 +2460,54 @@ describe("latest-turn token semantics", () => {
     expect(M.contextUsage(undefined)).toBeNull();
   });
 
+  test("an observed occupancy percent lights the ring alone, never as invented tokens", () => {
+    /* Cursor reports how full the window is and never how many tokens are in it.
+       Multiplying the percent back through a window constant would print a token
+       count no source ever measured, so the percent renders bare. */
+    expect(M.contextUsage({ provenance: "observed", scope: "latest-turn", occupancyPct: 95.47, contextWindow: 500_000 }))
+      .toEqual({ pct: 95, text: "95%" });
+    expect(M.contextUsage({ provenance: "observed", scope: "latest-turn", occupancyPct: 100.3 }))
+      .toEqual({ pct: 100, text: "100%" });
+    /* The ingest range admits up to 100.5, and Math.round(100.5) is 101 — the
+       only value in range that can catch a dropped cap, since Math.round(100.3)
+       already returns 100 with or without one. */
+    expect(M.contextUsage({ provenance: "observed", scope: "latest-turn", occupancyPct: 100.5 }))
+      .toEqual({ pct: 100, text: "100%" });
+    // A real observed total still wins the detailed rendering.
+    expect(M.contextUsage({ provenance: "observed", scope: "latest-turn", total: 50_000, contextWindow: 200_000, occupancyPct: 95 }).text)
+      .toBe("50k of 200k (25%)");
+    // Unknown provenance or scope never lights the ring from a bare percent.
+    expect(M.contextUsage({ provenance: "unknown", scope: "latest-turn", occupancyPct: 95 })).toBeNull();
+    expect(M.contextUsage({ provenance: "observed", scope: "session", occupancyPct: 95 })).toBeNull();
+    // The token cell stays honest: occupancy is context, not tokens.
+    expect(M.tokenSummary({ provenance: "observed", scope: "latest-turn", occupancyPct: 95.47 }).text).toBe("not reported");
+    expect(M.tokenSummary({ provenance: "observed", scope: "latest-turn", occupancyPct: 95.47 }).known).toBe(false);
+    /* ...and its tooltip says WHICH thing is missing. "does not report token
+       usage locally (provenance: observed)" contradicted itself on this row:
+       the source did observe something, just not a count. */
+    const title = String(M.tokenSummary({ provenance: "observed", scope: "latest-turn", occupancyPct: 95.47 }).title);
+    expect(title).toBe("This source does not report token counts locally (provenance: observed)");
+    expect(title).not.toContain("token usage");
+  });
+
   test("context display switches between percentage and readable token capacity", () => {
     const tokens = { provenance: "observed", scope: "latest-turn", total: 50_000, contextWindow: 200_000 };
     expect(M.contextDisplayValue(tokens, "percent")).toBe("25%");
     expect(M.contextDisplayValue(tokens, "tokens")).toBe("50k / 200k");
     expect(M.contextDisplayValue({ provenance: "unknown" }, "percent")).toBe("not reported");
+  });
+
+  test("the tokens display never invents a count for an occupancy-only row", () => {
+    /* Cursor rows carry a contextWindow (stamped from the model) but no total,
+       so "usage is non-null" stopped implying "a total exists". fmtTok has no
+       guard and ends in String(n), so the tokens view printed the literal
+       "undefined / 500k" — into the ctx cell's aria-label and the row's, where a
+       screen-reader user got it regardless of the visual toggle. The percent is
+       the only reading this row has; both toggle positions show it. */
+    const occupancy = { provenance: "observed", scope: "latest-turn", occupancyPct: 95.47, contextWindow: 500_000 };
+    expect(M.contextDisplayValue(occupancy, "tokens")).toBe("95%");
+    expect(M.contextDisplayValue(occupancy, "tokens")).not.toContain("undefined");
+    expect(M.contextDisplayValue(occupancy, "percent")).toBe("95%");
   });
 
   test("role aliases resolve to stable visual role categories", () => {

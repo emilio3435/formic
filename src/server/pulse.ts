@@ -187,6 +187,13 @@ export class PulseTracker {
     ) * BUCKET_MS;
     const agents = this.#latestSnapshot?.programs.flatMap((program) => program.agents) ?? [];
     const liveAgents = agents.filter(isLive);
+    /* The ORDER of these two predicates is load-bearing: cursor rows leave
+       before provenance is consulted. Context occupancy flips ~240 Cursor rows
+       from "unknown" to "observed" while giving them no `sessionTotal`, so if a
+       future Spec B relaxed the cursor exclusion they would all land in
+       `eligible` (the denominator) and none in `reporting` (the numerator,
+       which needs sessionTotal) — burn coverage would crater with no defect
+       anywhere else. Occupancy is a size percentage, never spend. */
     const eligibleAgents = liveAgents.filter((agent) => agent.provider !== "cursor" && agent.tokens.provenance !== "unknown");
     const reportingAgents = eligibleAgents.filter(
       (agent) => agent.tokens.provenance === "observed"

@@ -323,8 +323,20 @@ export function effortFor(agent: CollectedAgent): string | undefined {
   return undefined;
 }
 
+/* Two roads to the same percentage: a harness that publishes its own meter
+   (occupancyPct, already divided) and a harness that publishes counts we divide
+   ourselves (total / contextWindow). Both are "occupancy" — the first branch is
+   just the case where the division already happened upstream. */
 export function contextPctFor(agent: CollectedAgent): number | undefined {
-  const { contextWindow, provenance, scope, total } = agent.tokens;
+  const { contextWindow, occupancyPct, provenance, scope, total } = agent.tokens;
+  /* Cursor publishes occupancy directly as a percent; there is no token
+     numerator to divide, and multiplying the percent back into the window
+     would invent one. The raw float was range-checked at ingest ([0, 100.5]);
+     the cap to 100 here is display truncation of a legitimate 100.x reading. */
+  if (provenance === "observed" && typeof occupancyPct === "number" &&
+      Number.isFinite(occupancyPct) && occupancyPct >= 0) {
+    return Math.round(Math.min(100, occupancyPct));
+  }
   /* Occupancy is a size, so the numerator is always `total` — the one field that
      means "how big the prompt was", cache reads included, in BOTH scopes. It used
      to fall back to `sessionTotal` for scope "session"; that read the same number,

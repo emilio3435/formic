@@ -659,7 +659,13 @@ function hasObservedTotal(tokens) {
 function contextDisplayValue(tokens, display = state.contextDisplay) {
   const usage = contextUsage(tokens);
   if (usage) {
-    return display === "tokens"
+    /* A non-null usage no longer implies a token TOTAL: Cursor reports how full
+       the window is and never how many tokens are in it, and those rows still
+       carry a contextWindow stamped from the model. fmtTok ends in String(n), so
+       the tokens toggle printed a literal "undefined / 500k" — into this cell's
+       aria-label and the row's, reaching a screen-reader user whichever way the
+       toggle is set. The percent is the only reading such a row has. */
+    return display === "tokens" && Number.isFinite(tokens.total)
       ? fmtTok(tokens.total) + " / " + fmtTok(tokens.contextWindow)
       : usage.pct + "%";
   }

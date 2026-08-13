@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   collectCursorSessions,
+  fillCursorOccupancy,
+  parseComposerHeaders,
   parseCursorChildSession,
   parseCursorSession,
   readCursorStoreEvidence,
@@ -24,6 +26,8 @@ import type { ArchiveStore, CmuxSurface, CollectedAgent, CommandResult, CommandR
 const SESSION_ID = "286ab053-e84f-4538-9292-4aa3fae6fe9b";
 const GUI_SESSION_ID = "a5336a9a-f434-4e7b-b8f0-a3c8509502cb";
 const CHILD_SESSION_ID = "6514e366-df29-434b-979d-52a26168e188";
+const CLI_OCCUPANCY_SESSION_ID = "0d9f6afe-2e34-4bd0-9d10-53146a02a111";
+const DAMAGED_COMPOSER_ID = "bf3a2b10-9c4d-4e5f-8a6b-1c2d3e4f5a6b";
 const fixture = (name: string): Promise<string> =>
   readFile(join(import.meta.dir, "fixtures", name), "utf8");
 const temporaryDirectories: string[] = [];
@@ -107,6 +111,27 @@ async function setupGuiComposerHome(options: {
   composerData?: { modelName: string; parameters?: { id: string; value: string }[] };
   /** Writes a composerData row whose value is not JSON, to model a damaged store. */
   corruptComposerData?: boolean;
+  /** Writes Cursor's own context meter into composer.composerHeaders. */
+  contextUsagePercent?: number;
+  /** Which composer the meter belongs to. Defaults to GUI_SESSION_ID; a foreign uuid
+      models a header map that holds no row for the session being collected. */
+  contextUsageComposerId?: string;
+  /** Writes a composerHeaders row whose value is not JSON, to model a damaged meter. */
+  corruptComposerHeaders?: boolean;
+  /** Writes Cursor's live source: a row in the composerHeaders TABLE the blob was
+      migrated into (ItemTable `composer.composerHeaders.tableGateEnabled` = true). */
+  tableUsagePercent?: number;
+  /** Which composer the TABLE row belongs to. Defaults to GUI_SESSION_ID. */
+  tableUsageComposerId?: string;
+  /** Adds a SECOND table row whose value is not JSON, to model one damaged row
+      among good ones. */
+  corruptTableRow?: boolean;
+  /** Creates the composerHeaders TABLE with columns this reader does not know,
+      to model Cursor migrating the payload again under the same table name. */
+  tableWrongColumns?: boolean;
+  /** Creates the live-schema composerHeaders TABLE with no rows at all, to model
+      a gated install whose table holds nothing this scan can use. */
+  emptyTable?: boolean;
   trackingModel?: string;
 }): Promise<string> {
   const home = await mkdtemp(join(tmpdir(), "mountain-cursor-composer-"));
@@ -136,6 +161,62 @@ async function setupGuiComposerHome(options: {
     "glass.localAgentProjects.v1",
     JSON.stringify([{ id: projectId, workspace: { id: "workspace-hash", uri: { fsPath: projectCwd } } }]),
   ]);
+  if (options.contextUsagePercent !== undefined) {
+    state.run("insert into ItemTable(key, value) values (?, ?)", [
+      "composer.composerHeaders",
+      JSON.stringify({
+        allComposers: [
+          {
+            composerId: options.contextUsageComposerId ?? GUI_SESSION_ID,
+            contextUsagePercent: options.contextUsagePercent,
+          },
+        ],
+      }),
+    ]);
+  }
+  if (options.corruptComposerHeaders) {
+    state.run("insert into ItemTable(key, value) values (?, ?)", [
+      "composer.composerHeaders",
+      "{ this is not json",
+    ]);
+  }
+  if (options.tableWrongColumns) {
+    // The table NAME Cursor writes today, carrying its payload under a column
+    // this reader does not know — the shape a further migration would take.
+    state.run("create table composerHeaders (composerId text primary key, payload text)");
+    state.run("insert into composerHeaders(composerId, payload) values (?, ?)", [
+      GUI_SESSION_ID,
+      JSON.stringify({ contextUsagePercent: 85.837109375 }),
+    ]);
+  } else if (options.tableUsagePercent !== undefined || options.corruptTableRow || options.emptyTable) {
+    /* The live schema on this machine, column names and order transcribed from
+       `sqlite_master` (928 rows). SQLite's declared types are case-insensitive
+       and `value` is TEXT in production; the readings below are bound as text,
+       so the fixture takes the same branch the live data does. */
+    state.run(`create table composerHeaders (
+      composerId text primary key,
+      workspaceId text,
+      createdAt integer,
+      lastUpdatedAt integer,
+      isArchived integer,
+      isSubagent integer,
+      recency integer,
+      checkpointAt integer,
+      value text
+    )`);
+    if (options.tableUsagePercent !== undefined) {
+      state.run("insert into composerHeaders(composerId, value) values (?, ?)", [
+        options.tableUsageComposerId ?? GUI_SESSION_ID,
+        JSON.stringify({ contextUsagePercent: options.tableUsagePercent }),
+      ]);
+    }
+    if (options.corruptTableRow) {
+      state.run("insert into composerHeaders(composerId, value) values (?, ?)", [
+        DAMAGED_COMPOSER_ID,
+        "{ not json",
+      ]);
+    }
+  }
   if (options.composerData) {
     state.run("create table cursorDiskKV (key text primary key, value blob)");
     state.run("insert into cursorDiskKV(key, value) values (?, ?)", [
@@ -193,6 +274,74 @@ async function setupGuiComposerHome(options: {
     );
     tracking.close();
   }
+  return home;
+}
+
+// Builds a CLI-side Cursor home (~/.cursor/chats/<workspace>/<uuid>/) alongside the
+// GUI globalStorage that holds the meter. The GUI collector and the CLI collector are
+// separate entry paths into `collectCursorSessions`; this fixture exercises the CLI one
+// while still giving `state.vscdb` a composer.composerHeaders row to join from.
+async function setupCliOccupancyHome(
+  contextUsagePercent?: number,
+  storeUsage?: { totalTokens: number },
+): Promise<string> {
+  const home = await mkdtemp(join(tmpdir(), "mountain-cursor-cli-occupancy-"));
+  temporaryDirectories.push(home);
+  const sessionDir = join(home, ".cursor", "chats", "workspace-hash", CLI_OCCUPANCY_SESSION_ID);
+  await mkdir(sessionDir, { recursive: true });
+  await writeFile(join(sessionDir, "meta.json"), JSON.stringify({
+    createdAtMs: 1784691200000,
+    updatedAtMs: 1784691238958,
+    cwd: "/Users/me/project",
+    hasConversation: true,
+  }));
+  // Real CLI sessions always carry a store.db; an absent one is reported as a fault,
+  // which would drown the occupancy assertions in an unrelated error. The blobs table
+  // mirrors the store fixture used by the newest-assistant-blob model test.
+  const store = new Database(join(sessionDir, "store.db"));
+  store.run("create table meta (key text primary key, value text)");
+  store.run("create table blobs (id text primary key, data blob)");
+  store.run("insert into meta(key, value) values ('0', ?)", [
+    Buffer.from(JSON.stringify({
+      agentId: CLI_OCCUPANCY_SESSION_ID,
+      name: "New Agent",
+      mode: "default",
+      lastUsedModel: "grok-4.5",
+    })).toString("hex"),
+  ]);
+  if (storeUsage) {
+    // The blob walk in cursorTokensFromDatabase takes the newest assistant record
+    // carrying usage; `usage.totalTokens` is the alias `pickUsage` reads for `total`.
+    store.run("insert into blobs(id, data) values ('assistant-usage', ?)", [
+      Buffer.from(JSON.stringify({
+        role: "assistant",
+        id: "blob-usage",
+        content: [{ type: "text", text: "ok" }],
+        usage: { inputTokens: 90000, outputTokens: 1200, totalTokens: storeUsage.totalTokens },
+      })),
+    ]);
+  }
+  store.close();
+  const globalStorage = join(home, "Library", "Application Support", "Cursor", "User", "globalStorage");
+  await mkdir(globalStorage, { recursive: true });
+  const state = new Database(join(globalStorage, "state.vscdb"));
+  state.run("create table ItemTable (key text primary key, value blob)");
+  if (contextUsagePercent !== undefined) {
+    state.run("insert into ItemTable(key, value) values (?, ?)", [
+      "composer.composerHeaders",
+      JSON.stringify({ allComposers: [{ composerId: CLI_OCCUPANCY_SESSION_ID, contextUsagePercent }] }),
+    ]);
+  }
+  state.close();
+  // Empty conversations table so the GUI pass enumerates zero rows instead of
+  // reporting a missing store as a fault of this CLI-only fixture.
+  const conversations = new Database(join(globalStorage, "conversation-search.db"));
+  conversations.run(`create table conversations (
+    fts_rowid integer primary key, source text not null, scope text not null,
+    id text not null, title text not null, updated_at integer not null,
+    is_archived integer not null, root_fingerprint text, cache_fingerprint text
+  )`);
+  conversations.close();
   return home;
 }
 
@@ -1075,6 +1224,97 @@ describe("Cursor Agent persisted session truth", () => {
     // Burn coverage counts the Cursor session as "unknown", never "eligible".
     expect(report.burn.coverage.eligible).toBe(1);
     expect(report.burn.coverage.unknown).toBe(1);
+
+    /* Occupancy changes which ring lights, and nothing else. A percent is a
+       fill reading, not a measurement of tokens — so the same session that
+       raises context coverage must leave the token sum, the reporting
+       numerator, the median and burn coverage exactly where they were. */
+    const occupiedCursor: CollectedAgent = {
+      ...cursorAgent,
+      id: "cursor:occupied",
+      sourceSessionId: "occupied",
+      tokens: { scope: "latest-turn", provenance: "observed", occupancyPct: 95.47, contextWindow: 500_000 },
+    };
+    const occupiedSnapshot = buildSnapshot({
+      agents: [occupiedCursor, claudeAgent],
+      surfaces: [],
+      archiveStore,
+      now: new Date(nowMs),
+    });
+    // Occupancy lights the context ring…
+    expect(occupiedSnapshot.programs.flatMap((program) => program.agents)
+      .find((agent) => agent.id === "cursor:occupied")?.contextPct).toBe(95);
+    // `contextReporting` is published on the snapshot root, not under totals
+    // (snapshot.ts:826) — the coverage numerator for contextPeak.
+    expect(occupiedSnapshot.contextReporting).toBe(1);
+    expect(occupiedSnapshot.contextPeak).toBe(95);
+    // …and moves nothing in the token economy.
+    expect(occupiedSnapshot.totals.tokens).toBe(1000);
+    expect(occupiedSnapshot.totals.tokenReporting).toBe(1);
+    expect(occupiedSnapshot.totals.tokenMedian).toBe(1000);
+    const occupiedPulse = new PulseTracker(undefined, nowMs);
+    occupiedPulse.observe(occupiedSnapshot, nowMs);
+    const occupiedReport = occupiedPulse.report(nowMs);
+    expect(occupiedReport.burn.coverage.eligible).toBe(1);
+    expect(occupiedReport.burn.coverage.unknown).toBe(1);
+  });
+
+  /* The block above builds its occupancy agent by hand, so it pins the SNAPSHOT
+     boundary: a percent reaching buildSnapshot must not become tokens. This one
+     drives the real collector, so the same pin also covers the COLLECTOR: if
+     fillCursorOccupancy ever multiplied the percent back into the window, the
+     invented number would land in the fleet token sum here. Both halves of the
+     honesty claim are measured on wire-shaped data, not on a fixture. */
+  test("a live-collected occupancy session raises context coverage without entering the token rollups", async () => {
+    /* A CLI session mid-turn, so it lands in `working` — the population the
+       token sum, the reporting numerator and the median are all computed over.
+       A finished GUI turn reads `waiting`, which is live enough for the context
+       ring but sits outside every token rollup, so it could not witness an
+       invented total arriving. */
+    const nowMs = 1784691250000;
+    const home = await setupCliOccupancyHome(41.2);
+    const collected = await collectCursorSessions(home, nowMs);
+    expect(collected.errors).toEqual([]);
+    const occupied = collected.value.find(({ id }) => id === `cursor:${CLI_OCCUPANCY_SESSION_ID}`);
+    expect(occupied?.tokens.occupancyPct).toBe(41.2);
+
+    const claudeAgent: CollectedAgent = {
+      id: "claude:token-session",
+      provider: "claude",
+      sourceSessionId: "token-session",
+      displayName: "Claude worker",
+      cwd: "/Users/me/other-project",
+      status: "running",
+      statusReason: "Fixture activity is recent.",
+      updatedAt: new Date(nowMs).toISOString(),
+      tokens: { total: 1000, sessionTotal: 1000, scope: "session", provenance: "observed" },
+      artifacts: [],
+      gates: [],
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    const snapshot = buildSnapshot({
+      agents: [occupied!, claudeAgent],
+      surfaces: [],
+      archiveStore,
+      now: new Date(nowMs),
+    });
+
+    const published = snapshot.programs.flatMap((program) => program.agents)
+      .find((agent) => agent.id === `cursor:${CLI_OCCUPANCY_SESSION_ID}`);
+    expect(published?.contextPct).toBe(41);
+    // Inside the token rollups' population, so the assertions below can witness
+    // an invented total rather than miss it on a technicality.
+    expect(published?.activity).toBe("working");
+    expect(snapshot.contextReporting).toBe(1);
+    expect(snapshot.totals.working).toBe(2);
+    // The fleet token sum is the Claude session alone. 41.2% of a 500k window
+    // is 206,000 tokens; if that number were ever invented it would land here.
+    expect(snapshot.totals.tokens).toBe(1000);
+    expect(snapshot.totals.tokenReporting).toBe(1);
+    expect(snapshot.totals.tokenMedian).toBe(1000);
+    const pulse = new PulseTracker(undefined, nowMs);
+    pulse.observe(snapshot, nowMs);
+    expect(pulse.report(nowMs).burn.coverage.eligible).toBe(1);
   });
 });
 
@@ -1183,5 +1423,418 @@ describe("Cursor Agent live pane identity", () => {
       resolution: "missing",
       reason: "Cursor GUI agents require exact cmux identity; cwd fallback is disabled.",
     });
+  });
+});
+
+describe("Cursor composer headers occupancy", () => {
+  const COMPOSER_ID = "7f3a2b10-9c4d-4e5f-8a6b-1c2d3e4f5a6b";
+
+  test("parses a valid header row into a composerId → percent map", () => {
+    const map = parseComposerHeaders(JSON.stringify({
+      allComposers: [{ composerId: COMPOSER_ID, contextUsagePercent: 95.47466666666666 }],
+    }));
+    expect(map.get(COMPOSER_ID)).toBe(95.47466666666666);
+    expect(map.size).toBe(1);
+  });
+
+  test("absent value and missing allComposers are empty, not errors", () => {
+    expect(parseComposerHeaders(undefined).size).toBe(0);
+    expect(parseComposerHeaders(null).size).toBe(0);
+    expect(parseComposerHeaders(JSON.stringify({ somethingElse: [] })).size).toBe(0);
+  });
+
+  test("drops non-uuid ids and out-of-range or non-finite percents without clamping", () => {
+    const map = parseComposerHeaders(JSON.stringify({
+      allComposers: [
+        { composerId: "not-a-uuid", contextUsagePercent: 50 },
+        { composerId: COMPOSER_ID, contextUsagePercent: 250 },
+        { composerId: "8f3a2b10-9c4d-4e5f-8a6b-1c2d3e4f5a6b", contextUsagePercent: Number.NaN },
+        { composerId: "9f3a2b10-9c4d-4e5f-8a6b-1c2d3e4f5a6b", contextUsagePercent: -1 },
+        { composerId: "af3a2b10-9c4d-4e5f-8a6b-1c2d3e4f5a6b", contextUsagePercent: 100.3 },
+      ],
+    }));
+    // Only the 100.3 row survives: within [0, 100.5], capped later at render.
+    expect(map.size).toBe(1);
+    expect(map.get("af3a2b10-9c4d-4e5f-8a6b-1c2d3e4f5a6b")).toBe(100.3);
+  });
+
+  test("invalid JSON throws so the caller can record a named error", () => {
+    expect(() => parseComposerHeaders("{ this is not json")).toThrow();
+  });
+
+  test("GUI session with a composer header reports occupancy but never tokens or cost", async () => {
+    const home = await setupGuiComposerHome({ contextUsagePercent: 95.47, trackingModel: "grok-4.5" });
+    const result = await collectCursorSessions(home, 1784692000000);
+    expect(result.errors).toEqual([]);
+    const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
+    expect(agent?.tokens).toMatchObject({
+      scope: "latest-turn",
+      provenance: "observed",
+      occupancyPct: 95.47,
+    });
+    expect(agent?.tokens.total).toBeUndefined();
+    expect(agent?.tokens.sessionTotal).toBeUndefined();
+    expect(agent?.cost).toBeNull();
+  });
+
+  test("a session with no header row stays on the unknown billing path", async () => {
+    const home = await setupGuiComposerHome({ trackingModel: "grok-4.5" });
+    const result = await collectCursorSessions(home, 1784692000000);
+    expect(result.errors).toEqual([]);
+    const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
+    expect(agent?.tokens.occupancyPct).toBeUndefined();
+    expect(agent?.tokens.provenance).toBe("unknown");
+  });
+
+  /* The join is by each agent's OWN session id, and only a NON-EMPTY header map can
+     prove it: the test above short-circuits on the empty-map early return, so an
+     "inherit any percent in the map" bug would sail through it. Here the meter holds
+     a real percent under a foreign composer id, which is the shape a parent's percent
+     leaking onto a child would take. The collected session must stay unknown. */
+  test("a percent belonging to another composer is never inherited", async () => {
+    const home = await setupGuiComposerHome({
+      contextUsagePercent: 88.25,
+      contextUsageComposerId: COMPOSER_ID,
+      trackingModel: "grok-4.5",
+    });
+    const result = await collectCursorSessions(home, 1784692000000);
+    expect(result.errors).toEqual([]);
+    const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
+    expect(agent).toBeDefined();
+    expect(agent?.tokens.occupancyPct).toBeUndefined();
+    expect(agent?.tokens.provenance).toBe("unknown");
+    expect(agent?.tokens.scope).toBe("unknown");
+  });
+
+  test("a corrupt composerHeaders record degrades the source without deleting occupancy-less sessions", async () => {
+    const home = await setupGuiComposerHome({ corruptComposerHeaders: true, trackingModel: "grok-4.5" });
+    const result = await collectCursorSessions(home, 1784692000000);
+    // Exactly one fault: the damaged meter is named, and nothing ELSE about the scan
+    // is reported as broken — that is the "degrades without failing the scan" half.
+    expect(result.errors.length).toBe(1);
+    expect(result.errors[0]).toContain("composer headers");
+    const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
+    expect(agent).toBeDefined();
+    expect(agent?.tokens.occupancyPct).toBeUndefined();
+  });
+
+  /* The GUI tests above all enter through collectCursorGuiSessions. CLI chat sessions
+     are a different entry path — built before the state read, from ~/.cursor/chats —
+     so the join has to happen in the shared post-pass rather than inside the GUI
+     builder. This pins that the CLI path is covered by the same map. */
+  test("CLI chats session joins the same occupancy map as GUI sessions", async () => {
+    const home = await setupCliOccupancyHome(41.2);
+    const result = await collectCursorSessions(home, 1784691250000);
+    expect(result.errors).toEqual([]);
+    const agent = result.value.find(({ id }) => id === `cursor:${CLI_OCCUPANCY_SESSION_ID}`);
+    expect(agent?.tokens).toMatchObject({ scope: "latest-turn", provenance: "observed", occupancyPct: 41.2 });
+    expect(agent?.tokens.total).toBeUndefined();
+    expect(agent?.cost).toBeNull();
+  });
+
+  test("a CLI session absent from allComposers stays unknown", async () => {
+    const home = await setupCliOccupancyHome();
+    const result = await collectCursorSessions(home, 1784691250000);
+    expect(result.errors).toEqual([]);
+    const agent = result.value.find(({ id }) => id === `cursor:${CLI_OCCUPANCY_SESSION_ID}`);
+    expect(agent).toBeDefined();
+    expect(agent?.tokens.occupancyPct).toBeUndefined();
+    expect(agent?.tokens.provenance).toBe("unknown");
+  });
+
+  /* Cursor's meter is per-composer, and a subagent is not its parent's composer. The
+     parent here carries a real percent while the child carries none, so any lookup
+     that walks up the lineage — or takes "the" percent from a one-entry map — would
+     paint the child with a number Cursor never measured for it. */
+  test("a Cursor subagent never inherits its parent's context percent", async () => {
+    const home = await mkdtemp(join(tmpdir(), "mountain-cursor-child-occupancy-"));
+    temporaryDirectories.push(home);
+    const globalStorage = join(home, "Library", "Application Support", "Cursor", "User", "globalStorage");
+    const projectCwd = "/Users/me/elio-intelligence-suite";
+    const projectId = "378abb0f-fefb-4ae9-bdf3-754920b7b4fe";
+    const projectDirectory = join(home, ".cursor", "projects", "Users-me-elio-intelligence-suite");
+    const transcriptDirectory = join(projectDirectory, "agent-transcripts", GUI_SESSION_ID);
+    await mkdir(join(transcriptDirectory, "subagents"), { recursive: true });
+    await mkdir(globalStorage, { recursive: true });
+    const nowMs = 1784692000000;
+    await writeFile(join(transcriptDirectory, `${GUI_SESSION_ID}.jsonl`), [
+      JSON.stringify({ role: "user", message: { content: [{ type: "text", text: "Coordinate the swarm." }] } }),
+      JSON.stringify({ type: "turn_ended", status: "success" }),
+    ].join("\n"));
+    await utimes(join(transcriptDirectory, `${GUI_SESSION_ID}.jsonl`), new Date(1784691238958), new Date(1784691238958));
+    const childPath = join(transcriptDirectory, "subagents", `${CHILD_SESSION_ID}.jsonl`);
+    await writeFile(childPath, [
+      JSON.stringify({ role: "user", message: { content: "Goal: Verify the build." } }),
+      JSON.stringify({ role: "assistant", message: { content: [{ type: "text", text: "Build verified." }] } }),
+      JSON.stringify({ type: "turn_ended", status: "success" }),
+    ].join("\n"));
+    await utimes(childPath, new Date(nowMs - 60_000), new Date(nowMs - 60_000));
+
+    const state = new Database(join(globalStorage, "state.vscdb"));
+    state.run("create table ItemTable (key text primary key, value blob)");
+    state.run("insert into ItemTable(key, value) values (?, ?)", [
+      "glass.localAgentProjectMembership.v1",
+      JSON.stringify({ [GUI_SESSION_ID]: projectId, [CHILD_SESSION_ID]: projectId }),
+    ]);
+    state.run("insert into ItemTable(key, value) values (?, ?)", [
+      "glass.localAgentProjects.v1",
+      JSON.stringify([{ id: projectId, workspace: { id: "workspace-hash", uri: { fsPath: projectCwd } } }]),
+    ]);
+    // Only the PARENT composer has a meter row; the child deliberately has none.
+    state.run("insert into ItemTable(key, value) values (?, ?)", [
+      "composer.composerHeaders",
+      JSON.stringify({ allComposers: [{ composerId: GUI_SESSION_ID, contextUsagePercent: 88 }] }),
+    ]);
+    state.close();
+
+    const conversations = new Database(join(globalStorage, "conversation-search.db"));
+    conversations.run(`create table conversations (
+      fts_rowid integer primary key,
+      source text not null,
+      scope text not null,
+      id text not null,
+      title text not null,
+      updated_at integer not null,
+      is_archived integer not null,
+      root_fingerprint text,
+      cache_fingerprint text
+    )`);
+    conversations.run(
+      "insert into conversations(source, scope, id, title, updated_at, is_archived, root_fingerprint) values ('local', '', ?, ?, ?, 0, 'fingerprint')",
+      [GUI_SESSION_ID, "Swarm parent", 1784691238958],
+    );
+    conversations.close();
+
+    const result = await collectCursorSessions(home, nowMs);
+
+    expect(result.errors).toEqual([]);
+    const child = result.value.find(({ id }) => id === `cursor:${CHILD_SESSION_ID}`);
+    expect(child?.parentSourceSessionId).toBe(GUI_SESSION_ID);
+    expect(child?.tokens.occupancyPct).toBeUndefined();
+    expect(child?.tokens.provenance).toBe("unknown");
+    const parent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
+    expect(parent?.tokens.occupancyPct).toBe(88);
+  });
+
+  /* A percent is a ratio with no numerator: it can say how full the window is but
+     never how many tokens are in it. Where store.db still reports a real observed
+     total, that measurement outranks the meter, and the percent must not overwrite
+     it — nor sit beside it, where the ring would be drawn from the ratio while the
+     numbers came from the store. */
+  test("an observed store.db total outranks the composer meter", async () => {
+    const home = await setupCliOccupancyHome(95, { totalTokens: 120000 });
+    const result = await collectCursorSessions(home, 1784691250000);
+    expect(result.errors).toEqual([]);
+    const agent = result.value.find(({ id }) => id === `cursor:${CLI_OCCUPANCY_SESSION_ID}`);
+    expect(agent?.tokens.total).toBe(120000);
+    expect(agent?.tokens.provenance).toBe("observed");
+    expect(agent?.tokens.occupancyPct).toBeUndefined();
+  });
+
+  /* Cursor migrated composer headers out of the ItemTable blob into a dedicated
+     table on 2026-07-05. Every test above this point feeds the blob, so all of
+     them would still pass against a source that stopped being written weeks
+     ago. These four read the live one. */
+  test("the composerHeaders table lights occupancy with no blob present at all", async () => {
+    const home = await setupGuiComposerHome({ tableUsagePercent: 85.837109375, trackingModel: "grok-4.5" });
+    const result = await collectCursorSessions(home, 1784692000000);
+    expect(result.errors).toEqual([]);
+    const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
+    expect(agent?.tokens).toMatchObject({
+      scope: "latest-turn",
+      provenance: "observed",
+      occupancyPct: 85.837109375,
+    });
+    expect(agent?.tokens.total).toBeUndefined();
+    expect(agent?.cost).toBeNull();
+  });
+
+  /* The whole point of the task. Both sources carry a reading for the SAME
+     composer; the blob's is the July-5 freeze and the table's is what Cursor
+     wrote last. If a regression ever reinstates blob precedence, this is the
+     only test that notices — the ring would keep lighting, just with a number
+     39 days old. */
+  test("the table's reading beats a stale blob for the same composer", async () => {
+    const home = await setupGuiComposerHome({
+      tableUsagePercent: 85.837109375,
+      contextUsagePercent: 12.5,
+      trackingModel: "grok-4.5",
+    });
+    const result = await collectCursorSessions(home, 1784692000000);
+    expect(result.errors).toEqual([]);
+    const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
+    expect(agent?.tokens.occupancyPct).toBe(85.837109375);
+  });
+
+  /* This branch only ever runs on a GATED install — an install without the
+     table takes the blob-only path above, never this merge. What it covers is
+     a table that answers, but not for this composer: the blob may fill the gap
+     it leaves, because filling a gap is not the same as replacing a live
+     answer with a frozen one. Without it a non-empty table would suppress the
+     blob wholesale and strand the session at unknown. */
+  test("the blob still fills composers the table has no row for", async () => {
+    const home = await setupGuiComposerHome({
+      tableUsagePercent: 77.323828125,
+      tableUsageComposerId: COMPOSER_ID,
+      contextUsagePercent: 41.2,
+      trackingModel: "grok-4.5",
+    });
+    const result = await collectCursorSessions(home, 1784692000000);
+    expect(result.errors).toEqual([]);
+    const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
+    expect(agent?.tokens.occupancyPct).toBe(41.2);
+  });
+
+  /* One damaged row is not a damaged source. The blob is all-or-nothing — a
+     single bad parse costs every composer — but the table is 928 independent
+     rows, so a skip costs one and a throw costs 927. `errors` staying empty is
+     the second half: a bad row is not a scan fault to report. */
+  test("a damaged table row is skipped without discarding the good readings", async () => {
+    const home = await setupGuiComposerHome({
+      tableUsagePercent: 17.5890625,
+      corruptTableRow: true,
+      trackingModel: "grok-4.5",
+    });
+    const result = await collectCursorSessions(home, 1784692000000);
+    expect(result.errors).toEqual([]);
+    const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
+    expect(agent?.tokens.occupancyPct).toBe(17.5890625);
+  });
+
+  /* The inverse asymmetry to the damaged row: that costs one reading of 928,
+     but a renamed column costs EVERY Cursor GUI session. The table read runs
+     inside the readForeignSqlite callback, so a `no such column` throw is
+     classified as an unreadable state.vscdb and the whole scan reports the
+     database as broken. Cursor has moved this payload twice already and
+     versions it in flight, so the next migration is a question of when. A
+     schema change must cost occupancy and nothing else.
+
+     The blob here is deliberate and is what makes the test able to fail. On a
+     gated install the blob froze the day the gate flipped, so falling back to
+     it when the TABLE breaks would republish a stale reading as this scan's
+     answer — and it would do so silently, because an unreadable table used to
+     be indistinguishable from an empty one. The 12.5 below is that frozen
+     reading: it must not reach the agent, and the failure must be named. */
+  test("a composerHeaders table with unknown columns costs occupancy, never the sessions", async () => {
+    const home = await setupGuiComposerHome({
+      tableWrongColumns: true,
+      contextUsagePercent: 12.5,
+      trackingModel: "grok-4.5",
+    });
+    const result = await collectCursorSessions(home, 1784692000000);
+    // The session survives in full — model, cwd and identity all intact.
+    const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
+    expect(agent).toBeDefined();
+    expect(agent?.model).toBe("grok-4.5");
+    // Occupancy alone is absent, and absent honestly: unknown, not the frozen 12.5.
+    expect(agent?.tokens.occupancyPct).toBeUndefined();
+    expect(agent?.tokens.provenance).toBe("unknown");
+    /* A read that could not happen is a collection error, per
+       docs/FOREIGN-SQLITE-READS.md — it names the fault and what could not be
+       enumerated, rather than passing an unreadable source off as an empty one. */
+    expect(result.errors.length).toBe(1);
+    expect(result.errors[0]).toContain("the composerHeaders table could not be read");
+    expect(result.errors[0]).toContain("context occupancy is missing for this scan");
+  });
+
+  /* Same rule from the other side, with nothing broken at all. A gated table
+     that legitimately holds no usable row is a complete answer: "Cursor has no
+     current meter for this composer". Reaching past it to the blob would turn
+     that into "Cursor says 12.5%", dated the day the gate flipped, and no error
+     would mark the substitution. An empty table and a blob are not two sources
+     to merge — on a gated install the blob is the one that stopped moving. */
+  test("a gated but empty composerHeaders table does not fall back to the frozen blob", async () => {
+    const home = await setupGuiComposerHome({
+      emptyTable: true,
+      contextUsagePercent: 12.5,
+      trackingModel: "grok-4.5",
+    });
+    const result = await collectCursorSessions(home, 1784692000000);
+    // Nothing failed, so nothing is reported: an empty table is a real answer.
+    expect(result.errors).toEqual([]);
+    const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
+    expect(agent).toBeDefined();
+    expect(agent?.model).toBe("grok-4.5");
+    expect(agent?.tokens.occupancyPct).toBeUndefined();
+    expect(agent?.tokens.provenance).toBe("unknown");
+  });
+
+  /* On the live (table-gated) install the blob is only a fallback, so a
+     damaged blob costs nothing the table already covers. The error still has
+     to be raised — the fallback really is unreadable — but it must not claim
+     occupancy is missing while the very same scan publishes a percent. An
+     error that misstates its own consequence is the failure this board exists
+     to avoid, just aimed at the operator instead of the ring. */
+  test("a corrupt blob beside a healthy table reports the fallback, not a missing ring", async () => {
+    const home = await setupGuiComposerHome({
+      tableUsagePercent: 85.837109375,
+      corruptComposerHeaders: true,
+      trackingModel: "grok-4.5",
+    });
+    const result = await collectCursorSessions(home, 1784692000000);
+    expect(result.errors.length).toBe(1);
+    expect(result.errors[0]).toContain("the legacy header blob is unreadable");
+    expect(result.errors[0]).not.toContain("context occupancy will be missing");
+    const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
+    expect(agent?.tokens.occupancyPct).toBe(85.837109375);
+  });
+
+  /* Filling occupancy also stamps provenance "observed", so the row it lands on
+     must have no token total left for that stamp to describe. An ESTIMATED
+     total that survived the fill would be republished as observed and lose the
+     `≈` the token cell prints to say "this is a guess" — laundering an estimate
+     into a measurement, which is the one thing this board must never do. The
+     collector cannot build that row today (it emits observed-with-a-total or
+     unknown-with-none), so the rule is pinned directly on the function. */
+  test("any token total blocks the occupancy fill, whatever provenance it claims", () => {
+    const cursorRow = (id: string, tokens: CollectedAgent["tokens"]): CollectedAgent => ({
+      id: `cursor:${id}`,
+      provider: "cursor",
+      sourceSessionId: id,
+      displayName: "Cursor session",
+      cwd: "/Users/me/project",
+      status: "running",
+      statusReason: "Fixture activity is recent.",
+      updatedAt: new Date(1784691250000).toISOString(),
+      tokens,
+      artifacts: [],
+      gates: [],
+    });
+    const estimated = cursorRow("estimated-total", {
+      total: 4321,
+      scope: "latest-turn",
+      provenance: "estimated",
+    });
+    const zeroTotal = cursorRow("zero-total", { total: 0, scope: "latest-turn", provenance: "observed" });
+    const unreported = cursorRow("unreported", { scope: "unknown", provenance: "unknown" });
+
+    fillCursorOccupancy(
+      {
+        path: "/fixture/state.vscdb",
+        fingerprint: "fixture",
+        sessionCwds: new Map(),
+        hasComposerData: false,
+        composerData: new Map(),
+        occupancyPct: new Map([
+          ["estimated-total", 61.5],
+          ["zero-total", 61.5],
+          ["unreported", 61.5],
+        ]),
+        composers: new Map(),
+      },
+      [estimated, zeroTotal, unreported],
+    );
+
+    // An estimate keeps its total AND its provenance: untouched, not upgraded.
+    expect(estimated.tokens.occupancyPct).toBeUndefined();
+    expect(estimated.tokens.total).toBe(4321);
+    expect(estimated.tokens.provenance).toBe("estimated");
+    /* A total of exactly 0 still blocks the fill — `total !== undefined` is the
+       predicate, as it was before, so this ruling did not move. */
+    expect(zeroTotal.tokens.occupancyPct).toBeUndefined();
+    // The shape the feature exists for is still filled.
+    expect(unreported.tokens.occupancyPct).toBe(61.5);
+    expect(unreported.tokens.provenance).toBe("observed");
+    expect(unreported.tokens.total).toBeUndefined();
   });
 });

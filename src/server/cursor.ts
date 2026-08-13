@@ -45,6 +45,7 @@ let cursorStateCache: {
   sessionCwds: Map<string, string>;
   hasComposerData: boolean;
   composerData: Map<string, string | Uint8Array>;
+  occupancyPct: Map<string, number>;
   composers: Map<string, CursorStoreEvidence>;
 } | undefined;
 
@@ -698,16 +699,76 @@ async function cursorStateEvidence(
           );
         }
       }
+      // Read in the SAME pass as ItemTable and cursorDiskKV: a second open would
+      // be a second read-only snapshot of a database Cursor is still writing.
+      const hasHeaderTable = database
+        .query("select name from sqlite_master where type = 'table' and name = 'composerHeaders'")
+        .get() !== null;
+      const headerRow = database
+        .query("select value from ItemTable where key = 'composer.composerHeaders'")
+        .get() as { value?: string | Uint8Array | null } | null;
       return {
         sessionCwds: guiSessionCwds(database),
         hasComposerData,
         composerData,
+        /* Both halves are needed downstream: the table being ABSENT is silence
+           (the gate has not flipped here), while the table being present and
+           unreadable is a fault, and an empty map alone cannot tell them
+           apart. */
+        hasHeaderTable,
+        occupancyFromTable: hasHeaderTable ? readComposerHeaderTable(database) : undefined,
+        composerHeadersRaw: headerRow?.value ?? undefined,
       };
     });
+    /* Parsed OUTSIDE the sqlite callback so a damaged meter record degrades only
+       the occupancy join: inside, a throw would be reported as an unreadable
+       state.vscdb and delete every GUI session from this scan. */
+    const { composerHeadersRaw, hasHeaderTable, occupancyFromTable, ...rest } = evidence;
+    /* Three states of the table, three different answers.
+
+       ABSENT — the gate has not flipped on this install, Cursor still writes
+       the blob, and the blob is the live source. Silence, no error.
+
+       PRESENT AND READ — it is the source Cursor writes now. The blob froze
+       the day the gate flipped, so it may fill ids the table has no row for,
+       but it may never BE the answer: replacing an empty table's readings with
+       it wholesale would publish weeks-old numbers as current.
+
+       PRESENT AND UNREADABLE — a fault, not absence. Serving the frozen blob
+       here is the same wrong answer given confidently, so the blob is skipped
+       entirely and the failure is named against this scan, per
+       docs/FOREIGN-SQLITE-READS.md: an incompatible schema is a collection
+       error that says both what broke and what could not be enumerated. */
+    let occupancyPct = occupancyFromTable ?? new Map<string, number>();
+    if (hasHeaderTable && occupancyFromTable === undefined) {
+      errors.push(
+        "cursor composer headers: the composerHeaders table could not be read; " +
+        "context occupancy is missing for this scan",
+      );
+    } else {
+      try {
+        const fromBlob = parseComposerHeaders(composerHeadersRaw);
+        if (!hasHeaderTable) {
+          occupancyPct = fromBlob;
+        } else if (occupancyPct.size > 0) {
+          for (const [id, pct] of fromBlob) if (!occupancyPct.has(id)) occupancyPct.set(id, pct);
+        }
+      } catch (error) {
+        /* The consequence depends on whether the table already answered. On a
+           table-gated install the blob is only a fallback, so a damaged blob
+           costs nothing the table covers — reporting "occupancy will be missing"
+           there would be a claim the scan itself contradicts. */
+        const detail = error instanceof Error ? error.message : String(error);
+        errors.push(occupancyPct.size > 0
+          ? `cursor composer headers: ${detail}; the legacy header blob is unreadable, so context occupancy comes from the composerHeaders table alone`
+          : `cursor composer headers: ${detail}; context occupancy will be missing for this scan`);
+      }
+    }
     cursorStateCache = {
       path,
       fingerprint: fingerprint ?? "",
-      ...evidence,
+      ...rest,
+      occupancyPct,
       composers: new Map(),
     };
     return cursorStateCache;
@@ -792,6 +853,90 @@ function composerModelForSession(value: string | Uint8Array | undefined, session
     model: modelName === "default" ? undefined : modelName,
     effort: composerEffort(modelConfig?.selectedModels),
   };
+}
+
+// One composer's occupancy reading, validated identically no matter which
+// source produced it: the legacy ItemTable blob or the composerHeaders table.
+// [0, 100.5] admits Cursor's 100.x floats; anything else is dropped, never
+// clamped, so a garbage reading never becomes a plausible one.
+function occupancyReading(id: unknown, pct: unknown): [string, number] | undefined {
+  if (typeof id !== "string" || !UUID_PATTERN.test(id)) return undefined;
+  if (typeof pct !== "number" || !Number.isFinite(pct) || pct < 0 || pct > 100.5) return undefined;
+  return [id, pct];
+}
+
+/* Cursor moved composer headers out of the ItemTable blob into this table
+   (ItemTable `composer.composerHeaders.tableGateEnabled` = true). The blob
+   still exists and still parses — it simply stopped being written, which is
+   the failure mode this read exists to avoid: a source that answers
+   confidently with data frozen weeks ago. One row per composer, its `value`
+   column the same JSON shape the blob's array elements had.
+
+   A row whose JSON is unreadable is skipped rather than throwing: unlike the
+   blob, where one bad parse means the whole source is unusable, here 927 good
+   rows should not be discarded because one is damaged.
+
+   The QUERY is guarded for the opposite reason. The caller only proves the
+   table NAME exists, and this payload is versioned in flight
+   (`composer.composerHeaders.version`) by a vendor that has already moved it
+   twice — so a renamed or dropped column is a live possibility. This runs
+   inside the readForeignSqlite callback, where a throw is laundered into
+   "state.vscdb could not be opened safely" and deletes every GUI session from
+   the scan: one damaged row costs one reading, but one renamed column would
+   cost the whole board.
+
+   So the two failures are told apart by the RETURN, not by the map's size. A
+   map — possibly empty — is a read that succeeded. `undefined` is "the table
+   is there and could not be read", which the caller reports as a named
+   collection error and, crucially, does NOT answer from the frozen blob. */
+function readComposerHeaderTable(database: Database): Map<string, number> | undefined {
+  const map = new Map<string, number>();
+  try {
+    const rows = database
+      .query("select composerId, value from composerHeaders")
+      .all() as Array<{ composerId?: unknown; value?: unknown }>;
+    for (const row of rows) {
+      if (row.value === undefined || row.value === null) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(typeof row.value === "string" ? row.value : Buffer.from(row.value as Uint8Array).toString("utf8"));
+      } catch {
+        continue;
+      }
+      const reading = occupancyReading(row.composerId, asRecord(parsed)?.contextUsagePercent);
+      if (reading) map.set(reading[0], reading[1]);
+    }
+  } catch {
+    /* `.all()` materializes every row before the loop starts, so nothing is
+       accumulated when the query itself fails; there are no partial readings
+       to keep, and a partial map would be indistinguishable from a whole one
+       anyway. */
+    return undefined;
+  }
+  return map;
+}
+
+// ItemTable composer.composerHeaders carried Cursor's own context meter per
+// composer until the table above took over. The payload has moved twice
+// already (composerData → this blob → the composerHeaders table), so a missing
+// key or missing allComposers is Cursor changing shape again and means "no
+// occupancy from the blob", never an error. Invalid JSON throws so the caller
+// names the failure instead of reading it as absence.
+export function parseComposerHeaders(
+  value: string | Uint8Array | undefined | null,
+): Map<string, number> {
+  const map = new Map<string, number>();
+  if (value === undefined || value === null) return map;
+  const json = typeof value === "string" ? value : Buffer.from(value).toString("utf8");
+  const parsed: unknown = JSON.parse(json);
+  const composers = asRecord(parsed)?.allComposers;
+  if (!Array.isArray(composers)) return map;
+  for (const entry of composers) {
+    const record = asRecord(entry);
+    const reading = occupancyReading(record?.composerId, record?.contextUsagePercent);
+    if (reading) map.set(reading[0], reading[1]);
+  }
+  return map;
 }
 
 function cachedComposerModel(
@@ -1030,6 +1175,38 @@ async function fillMissingCursorModels(
   }
 }
 
+// Cursor's own context meter, joined strictly by each agent's OWN session id —
+// children without a header row of their own stay unknown by construction.
+// store.db stays authoritative: an observed total (if Cursor ever writes usage
+// again) outranks the meter and keeps the total/contextWindow derivation.
+/* Exported for the precedence pin in tests/cursor.test.ts. The row the guard
+   below refuses — a total wearing anything other than observed provenance —
+   cannot be built through collectCursorSessions, which emits exactly two token
+   shapes: observed with a total, or unknown with none. */
+export function fillCursorOccupancy(
+  state: NonNullable<typeof cursorStateCache> | undefined,
+  agents: CollectedAgent[],
+): void {
+  if (!state || state.occupancyPct.size === 0) return;
+  for (const agent of agents) {
+    const pct = state.occupancyPct.get(agent.sourceSessionId);
+    if (pct === undefined) continue;
+    /* Any total at all blocks the fill, whatever its provenance. Gating on
+       "observed AND total" would leave an estimated total in place while
+       rewriting provenance to "observed" — the token cell would then print an
+       estimate with the observed mark instead of `≈`. Unreachable today (the
+       collector emits only two token shapes), and the web layer's rule is
+       already this one. A total of exactly 0 still blocks, as before. */
+    if (agent.tokens.total !== undefined) continue;
+    agent.tokens = {
+      ...agent.tokens,
+      scope: "latest-turn",
+      provenance: "observed",
+      occupancyPct: pct,
+    };
+  }
+}
+
 export async function collectCursorSessions(
   home = homedir(),
   nowMs = Date.now(),
@@ -1143,6 +1320,7 @@ export async function collectCursorSessions(
     if (!knownIds.has(agent.id)) agents.push(agent);
   }
   await fillMissingCursorModels(state, agents, errors);
+  fillCursorOccupancy(state, agents);
   return { value: agents, errors, ...(cursorAbsent ? { absent: true } : {}) };
 }
 

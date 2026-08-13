@@ -61,4 +61,57 @@ describe("snapshot context utilization", () => {
   ])("leaves contextPct unknown without a usable latest-turn token total", (tokens) => {
     expect(contextPctFor(tokens)).toBeUndefined();
   });
+
+  test("derives contextPct from an observed occupancy percent without any token total", () => {
+    expect(contextPctFor({
+      contextWindow: 500_000,
+      occupancyPct: 95.47466666666666,
+      scope: "latest-turn",
+      provenance: "observed",
+    })).toBe(95);
+  });
+
+  test("caps an over-100 occupancy reading at 100 and works without a window", () => {
+    expect(contextPctFor({
+      occupancyPct: 100.3,
+      scope: "latest-turn",
+      provenance: "observed",
+    })).toBe(100);
+  });
+
+  /* 100.5 is the exact reading the cap exists for: it is the top of the range
+     ingest admits, and Math.round(100.5) is 101 — a percentage the board must
+     never show. The 100.3 case above rounds to 100 with or without the cap, so
+     it pins the branch but not the cap. */
+  test("caps the highest reading ingest admits, which would otherwise round to 101", () => {
+    expect(contextPctFor({
+      occupancyPct: 100.5,
+      scope: "latest-turn",
+      provenance: "observed",
+    })).toBe(100);
+  });
+
+  /* The only test where the two derivations disagree, and therefore the only
+     one that pins their ORDER. Every other occupancy case omits `total`, so
+     moving the occupancy branch below the total/window division keeps them all
+     green while silently changing which number the board shows. The harness's
+     own meter is the measurement; total/contextWindow is our arithmetic over a
+     window we guessed from the model name, so the meter wins. */
+  test("a harness-published occupancy outranks the total/window division", () => {
+    expect(contextPctFor({
+      contextWindow: 200_000,
+      total: 125_000,
+      occupancyPct: 42,
+      scope: "latest-turn",
+      provenance: "observed",
+    })).toBe(42);
+  });
+
+  test("ignores occupancy that is not observed", () => {
+    expect(contextPctFor({
+      occupancyPct: 95,
+      scope: "latest-turn",
+      provenance: "unknown",
+    })).toBeUndefined();
+  });
 });
