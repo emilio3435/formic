@@ -34,10 +34,10 @@
 
 | Lane | Goal doc | Branch / worktree | Workspace | Model · vehicle | Status | Report seen | Floor (my run) |
 |---|---|---|---|---|---|---|---|
-| TINT-F | GOAL-F-foundation.md | `feat/tint-f` · `../the-mountain.worktrees/tint-f` | workspace:26 `TINT · f-orch · opus · 08-13` | Opus 5 high · claude (pid 70978, verified) | DONE 01:35 — 4 commits, clean tree, traps fixed, cross-source red proven pre-existing at base | yes | pending |
-| TINT-S | GOAL-S-sync.md | `feat/tint-s` · `../the-mountain.worktrees/tint-s` | workspace:27 `TINT · s-orch · opus · 08-13` | Opus 5 high · claude (pid 71016, verified) | DONE 01:41 — addendum 2f22c83 (anchor filter, live-probed), green | yes | pending |
-| TINT-G | GOAL-G-groups.md | `feat/tint-g` · `../the-mountain.worktrees/tint-g` | workspace:28 `TINT · g-orch · opus · 08-13` | Opus 5 high · claude (pid 71062, verified) | REPORTED DONE 01:28 (2 commits, cross-session report) | yes — findings relayed | pending (verify-g ws spawned) |
-| TINT-P | GOAL-P-prompt.md | `feat/tint-p` · `../the-mountain.worktrees/tint-p` | workspace:29 `TINT · p-orch · opus · 08-13` | Opus 5 high · claude (pid 71208, verified) | WORKING | — | — |
+| TINT-F | GOAL-F-foundation.md | `feat/tint-f` · `../the-mountain.worktrees/tint-f` | workspace:26 `TINT · f-orch · opus · 08-13` | Opus 5 high · claude (pid 70978, verified) | REOPENED 01:52 — verifier VERDICT: BLOCK (5 findings, fix order sent) | yes | verify: BLOCK @ 01:49 |
+| TINT-S | GOAL-S-sync.md | `feat/tint-s` · `../the-mountain.worktrees/tint-s` | workspace:27 `TINT · s-orch · opus · 08-13` | Opus 5 high · claude (pid 71016, verified) | DONE 01:41 — addendum 2f22c83 (anchor filter, live-probed), green | yes | verify: PASS |
+| TINT-G | GOAL-G-groups.md | `feat/tint-g` · `../the-mountain.worktrees/tint-g` | workspace:28 `TINT · g-orch · opus · 08-13` | Opus 5 high · claude (pid 71062, verified) | REPORTED DONE 01:28 (2 commits) | yes — findings relayed | verify: PASS (incl. 2 mutation spot-checks) |
+| TINT-P | GOAL-P-prompt.md | `feat/tint-p` · `../the-mountain.worktrees/tint-p` | workspace:29 `TINT · p-orch · opus · 08-13` | Opus 5 high · claude (pid 71208, verified) | TOUCH-UP 01:52 — TERM=dumb guard ordering (verifier hole) | yes | verify: PASS w/ 1 hole |
 
 Sub-orch worker lanes appear in each sub-orch's own ledger section of its `LANE-REPORT`; master tracks sub-orchs only, but sweeps everything under the `TINT · ` prefix.
 
@@ -57,6 +57,8 @@ Sub-orch worker lanes appear in each sub-orch's own ledger section of its `LANE-
 | 01:28 | G | Open question (orphan anchor rows after ungroup) | master locked: leave for operator; no auto-close |
 | 01:3x | S | Reopened for anchor-filter addendum before merge (mirrorGroups ships ON) | landed 2f22c83; filter placed in cmux-color-sync.ts (better fence fit, accepted); skip-whole-window on group.list failure LOCKED |
 | 01:37 | master | Grok verifier spawns broke: kickoff-length inline prompts truncated mid-string, zsh stuck at dquote> — Emilio caught it | 4 stuck workspaces closed; briefs rewritten as .lane-evidence/VERIFY-BRIEF-*.md files; respawned ws:41–44 with one-line commands; confirmed running (Grok 4.6 High autorun) |
+| 01:49 | verify-f | VERDICT: BLOCK — (1) client feeds repoNames (name→repoKey) into setRepoColors (expects name→hex): board never tints, 64 tests green because none drive the wire join; (2) shared printed basename last-writer-wins (order-dependent wrong color); (3) Signal ticks only set on strip rows whose attention classes the CSS excludes — never paint; hook-needsInput row gets identity wash (rule-5 violation); (4) fakeGit tests hollow vs --git-common-dir; (5) DELETE doesn't fan out restored hex | master confirmed defect 1 by eye; F reopened with fix order; ruling LOCKED: ambiguous printed names drop out of the join (no tint beats wrong tint) |
+| 01:49 | verify-s/g/p | VERDICTS: PASS ×3 (G incl. two mutation spot-checks landing red as claimed; P absent-vars proven live) | P gets one touch-up: TERM=dumb must beat inherited COLORTERM |
 | 01:41 | master | Tolerated-red correction (S+F both proved): tonight's expected red is cross-source-token-agreement (fleet-dependent, >20 join floor); a11y-geometry-gate PASSES on this machine tonight | floor runs use corrected list |
 
 ## Parked (carried from plan §8, grown tonight)
