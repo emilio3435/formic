@@ -39,10 +39,15 @@ function runWithinSignal(
 ): Promise<CommandResult> {
   if (!signal) return runner.run(command, timeoutMs);
   if (signal.aborted) return Promise.reject(signal.reason ?? new Error("cmux collection cancelled"));
+  /* The signal goes DOWN to the runner as well as being raced here. Rejecting
+     this promise only stops the caller waiting; handing the signal to the
+     runner is what kills the child. Without the hand-down a superseded pass
+     keeps a cmux RPC alive, which is the contention the watchdog exists to
+     end. */
   return new Promise<CommandResult>((resolve, reject) => {
     const onAbort = (): void => reject(signal.reason ?? new Error("cmux collection cancelled"));
     signal.addEventListener("abort", onAbort, { once: true });
-    runner.run(command, timeoutMs).then(resolve, reject).finally(() => {
+    runner.run(command, timeoutMs, signal).then(resolve, reject).finally(() => {
       signal.removeEventListener("abort", onAbort);
     });
   });

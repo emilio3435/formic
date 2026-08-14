@@ -241,10 +241,23 @@ export interface CommandResult {
   stdout: string;
   stderr: string;
   timedOut: boolean;
+  /* The caller withdrew before this finished, so the process was killed and its
+     output is incomplete. Distinct from `timedOut`, which means the command
+     itself was too slow, and distinct from a non-zero exit, which means it
+     failed. A cancelled command is not evidence about the fleet — reporting one
+     as a collector failure would tell the operator a subsystem is broken when
+     the only thing that happened is that a newer pass replaced this one. */
+  cancelled?: boolean;
 }
 
 export interface CommandRunner {
-  run(command: readonly string[], timeoutMs?: number): Promise<CommandResult>;
+  /* `signal` is what makes a watchdog-superseded pass stop COSTING anything.
+     Without it a cancelled pass only stops being waited on: its subprocesses
+     run to completion, and two passes' worth of `ps`, `lsof` and cmux RPCs
+     share one machine, which is how an overrun compounded 12.1s -> 13.5s ->
+     26.6s. An implementation that accepts the signal must kill the process, not
+     merely stop awaiting it. */
+  run(command: readonly string[], timeoutMs?: number, signal?: AbortSignal): Promise<CommandResult>;
 }
 
 export interface ArchiveStore {

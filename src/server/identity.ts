@@ -378,6 +378,11 @@ export async function enrichCmuxIdentity(
   surfaces: readonly CmuxSurface[],
   agents: readonly CollectedAgent[],
   runner: CommandRunner,
+  /* This probe is where a superseded pass costs the most: three sequential
+     subprocesses, one of which enumerates open files across every agent
+     process. A pass the watchdog gave up on must stop spending them, not just
+     stop being waited on. */
+  signal?: AbortSignal,
 ): Promise<IdentityCollectionResult> {
   const probeStartedMs = Date.now();
   const probeTimings: Array<{ label: string; elapsedMs: number; input: string }> = [];
@@ -442,7 +447,12 @@ export async function enrichCmuxIdentity(
       const attributionResult = await runner.run(
         cmuxCommand(runtimeCmuxExecutable(), ["rpc", "system.top", CMUX_PROCESS_ATTRIBUTION_PARAMS]),
         ATTRIBUTION_TIMEOUT_MS,
+        signal,
       );
+      /* A cancelled attempt must not burn the retry. The retry exists for a
+         transient cmux failure; supersession is not one, and spending it here
+         would leave the next real failure with no second chance. */
+      if (attributionResult.cancelled) break;
       if (attributionResult.timedOut) {
         attempts.push(`timed out after ${ATTRIBUTION_TIMEOUT_MS}ms`);
       } else if (attributionResult.exitCode !== 0) {
@@ -503,8 +513,15 @@ export async function enrichCmuxIdentity(
   const processResult = await runner.run(
     ["env", "LC_ALL=C", "ps", "-axo", "pid=,tty=,lstart=,command="],
     8_000,
+    signal,
   );
   const processElapsedMs = Date.now() - processStartedMs;
+  /* Cancellation is not a fault and must not be published as one. A superseded
+     pass reports nothing: its replacement is already collecting, and telling
+     the operator "process identity lookup exited -1" would name a broken
+     subsystem when nothing broke. Returned WITHOUT `failedProbeSurfaces`, which
+     quarantines every target and switches the write controls off. */
+  if (processResult.cancelled) return { value: [...surfaces], errors: [] };
   if (processResult.timedOut || processResult.exitCode !== 0) {
     const error = processResult.timedOut
       ? "process identity lookup timed out"
@@ -608,12 +625,14 @@ export async function enrichCmuxIdentity(
        probe runs long the board withdraws every terminal target and the
        operator's controls switch off. */
     const openFileStartedMs = Date.now();
-    const openFileResult = await runner.run(["/usr/sbin/lsof", "-n", "-P", "-a", "-p", pids.join(","), "-Fn"], 10_000);
+    const openFileResult = await runner.run(["/usr/sbin/lsof", "-n", "-P", "-a", "-p", pids.join(","), "-Fn"], 10_000, signal);
     probeTimings.push({
       label: "lsof",
       elapsedMs: Date.now() - openFileStartedMs,
       input: `pids=${pids.length}`,
     });
+    /* Same rule as the process table above: a superseded pass says nothing. */
+    if (openFileResult.cancelled) return { value: [...surfaces], errors: [] };
     openFiles = parseOpenFiles(openFileResult.stdout);
     const hasUsableIdentityOutput = [...openFiles.values()]
       .flat()

@@ -120,6 +120,29 @@ describe("TTY and open-session identity evidence", () => {
       .toBe(Math.floor(Date.parse("Wed Aug  5 16:36:08 2026") / 1_000));
   });
 
+  test("a cancelled probe reports nothing and quarantines nobody", async () => {
+    /* Cancellation is not evidence about the fleet. When the watchdog
+       supersedes a pass, its probes are killed mid-flight — and the replacement
+       pass is already collecting, so the superseded one has nothing to say.
+
+       Getting this wrong is worse than it sounds. `failedProbeSurfaces` marks
+       every surface as a failed probe, which withdraws the terminal targets and
+       switches Send and Interrupt OFF fleet-wide. So misreading "we cancelled
+       you" as "the process table is broken" would disable the operator's
+       controls every single time the watchdog fired — the exact class of defect
+       this whole program has been unwinding. */
+    const runner = new SequenceRunner([
+      { exitCode: 0, stdout: fixture("process-table.txt"), stderr: "", timedOut: false },
+      { exitCode: -1, stdout: "", stderr: "command cancelled", timedOut: false, cancelled: true },
+    ]);
+
+    const enriched = await enrichCmuxIdentity([surface], [agent], runner);
+
+    expect(enriched.errors, "a cancelled probe was published as a collector failure").toEqual([]);
+    expect(enriched.value, "a cancelled probe quarantined the surfaces").toHaveLength(1);
+    expect(enriched.value[0]?.identityTrace?.outcome).not.toBe("probe-failed");
+  });
+
   test("the open-file probe never asks the resolver to name a socket peer", async () => {
     /* THE DEFECT, 2026-08-13. Identity spent ~9.3s of the board's 10s deadline,
        and 4.7s of that was one lsof call. lsof reverse-DNSes the remote address
