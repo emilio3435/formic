@@ -10191,6 +10191,10 @@ function inspectorPaintSig(sel, view, ui) {
     // across a frozen refresh — so without this the dock would keep painting
     // live-looking Focus/Send/Interrupt/Archive over four-day-old routing.
     feedFrozen(ui) ? "held" : "",
+    /* Sixth instance of the mutates-only-itself clock: setRepoColors bumps
+       repoColorsVersion and nothing the agent record carries. Without this
+       an open drawer keeps the first paint's untinted desk. */
+    String(repoColorsVersion),
   ].join("\u001f");
 }
 
@@ -11312,6 +11316,8 @@ function renderAgentDrawer(pane, view) {
   desk.append(el("div", { id: "drawer-evidence-body", class: "drawer-evidence-body" },
     renderEvidence(agent),
     renderLineageSpine(agent)));
+  const deskTint = repoTintOfProgram(program) || repoTintFor(agent.repo && agent.repo.repoName);
+  paintRepoTint(desk, deskTint, "has-repo-tint");
 
   let grid = null;
   const setDrawerMode = (evidence, focus = true) => {

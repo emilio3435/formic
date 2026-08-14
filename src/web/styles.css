@@ -5947,6 +5947,16 @@ a.artifact-path:hover { text-decoration: underline; }
   letter-spacing: 0.01em;
 }
 
+/* Selected-row hop. The row dropped the wash and the tick because it is
+   selected (`:not(.is-selected)` on every TINT-F row rule). The Evidence
+   desk wears the same hex now. Attention classes are not excluded here —
+   status already lives on the row rail and the drawer head. */
+.drawer-desk.has-repo-tint,
+.drawer-grid .drawer-desk.has-repo-tint {
+  background: color-mix(in srgb, var(--repo-tint) 4%, var(--surface));
+  border-left: 2px solid color-mix(in srgb, var(--repo-tint) 45%, transparent);
+}
+
 /* The repo-colour region in Settings: one swatch row per repository. */
 .repo-colors {
   display: flex;

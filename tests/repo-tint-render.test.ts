@@ -792,3 +792,135 @@ describe("refresh on Settings open and live roster change", () => {
     }
   });
 });
+
+describe("the Evidence desk wears the repo tint", () => {
+  function inspectorUi(overrides: Record<string, unknown> = {}) {
+    return {
+      snap: null,
+      queueItems: [] as unknown[],
+      triage: new Map(),
+      triagePending: new Set<string>(),
+      evidenceOpen: false,
+      pending: new Set<string>(),
+      feedback: new Map(),
+      confirming: null,
+      renaming: null,
+      renamePending: false,
+      renameError: "",
+      labelsLoading: false,
+      labelLoadError: "",
+      identity: { agentId: null, loading: false, error: "", data: null },
+      transcript: {},
+      actions: { items: [] },
+      wsRenaming: null,
+      wsRenamePending: false,
+      wsRenameError: "",
+      attentionPending: new Set<string>(),
+      attentionErrors: new Map(),
+      attention: new Map(),
+      ...overrides,
+    };
+  }
+
+  function paintDesk(session: ReturnType<typeof agent>, prog: ReturnType<typeof program>) {
+    return withDom(() => {
+      const pane = document.createElement("div") as unknown as FakeNode;
+      M.renderAgentDrawer(pane, { kind: "agent", agent: session, program: prog });
+      return pane;
+    });
+  }
+
+  test("an assigned printed name tints the desk, not Chat or the pane", () => {
+    useColors({ "the-mountain": "mtn" }, { mtn: SIENNA });
+    const session = agent();
+    const pane = paintDesk(session, program({ agents: [session] }));
+    const desk = byClass(pane, "drawer-desk")[0]!;
+    expect(desk.classList.contains("has-repo-tint")).toBe(true);
+    expect(desk.props["--repo-tint"]).toBe(SIENNA);
+    expect(pane.classList.contains("has-repo-tint")).toBe(false);
+    expect(byClass(pane, "drawer-doc")[0]!.classList.contains("has-repo-tint")).toBe(false);
+    expect(byClass(pane, "drawer-shell-head")[0]!.classList.contains("has-repo-tint")).toBe(false);
+  });
+
+  test("the origin-named join tints when repoName is the-ant-hill", () => {
+    M.setRepoColors(originEnvelope.repoNames, originEnvelope.settings);
+    const session = agent({
+      repo: {
+        repoKey: "the-ant-hill",
+        repoName: "the-ant-hill",
+        worktreePath: "/Users/e/Developer/the-mountain",
+        ephemeral: false,
+      },
+    });
+    const pane = paintDesk(session, program({ name: "the-ant-hill", agents: [session] }));
+    const desk = byClass(pane, "drawer-desk")[0]!;
+    expect(M.repoTintFor("the-ant-hill")).toBe(STORM);
+    expect(desk.classList.contains("has-repo-tint")).toBe(true);
+    expect(desk.props["--repo-tint"]).toBe(STORM);
+  });
+
+  test("the join refuses a folder name when the assignment is origin-named", () => {
+    /* repoKey is a live assignment key. repoName is not. paintRepoTint(…, repo.repoKey)
+       would tint; paintRepoTint(…, repo.repoName) must not. Default agent() cannot
+       catch this — its repoKey is "hash", which has no hex either way. */
+    M.setRepoColors(originEnvelope.repoNames, originEnvelope.settings);
+    const session = agent({
+      repo: {
+        repoKey: "the-ant-hill",
+        repoName: "the-mountain",
+        worktreePath: "/Users/e/Developer/the-mountain",
+        ephemeral: false,
+      },
+    });
+    const pane = paintDesk(session, program({ agents: [session] }));
+    const desk = byClass(pane, "drawer-desk")[0]!;
+    expect(M.repoTintFor("the-mountain")).toBe("");
+    expect(M.repoTintFor("the-ant-hill")).toBe(STORM);
+    expect(desk.classList.contains("has-repo-tint")).toBe(false);
+    expect(desk.props["--repo-tint"]).toBeUndefined();
+  });
+
+  test("an unassigned repository leaves the desk on the unscoped CSS", () => {
+    const session = agent();
+    const pane = paintDesk(session, program({ agents: [session] }));
+    const desk = byClass(pane, "drawer-desk")[0]!;
+    expect(desk.classList.contains("has-repo-tint")).toBe(false);
+    expect(desk.props["--repo-tint"]).toBeUndefined();
+  });
+
+  test("a needs-you session still tints the desk when a hex exists", () => {
+    /* status:"attention" → deriveOutcome "needs-you". The hook-shaped
+       waiting+needsInput fixture in this file is outcome "healthy" and wears
+       no attention class — a paint skip on needs-you/blocked/failed would
+       stay green on that shape. Do not use it here. */
+    useColors({ "the-mountain": "mtn" }, { mtn: SIENNA });
+    const session = agent({ status: "attention", lifecycle: "waiting" });
+    const pane = paintDesk(session, program({ agents: [session] }));
+    const desk = byClass(pane, "drawer-desk")[0]!;
+    expect(desk.classList.contains("has-repo-tint")).toBe(true);
+    expect(desk.props["--repo-tint"]).toBe(SIENNA);
+  });
+
+  test("inspectorPaintSig moves when repoColorsVersion does, with the agent unchanged", () => {
+    const session = agent();
+    const view = { kind: "agent", agent: session, program: program({ agents: [session] }) };
+    const sel = { kind: "agent", id: session.id };
+    const ui = inspectorUi();
+    M.setRepoColors({}, { assignments: {} });
+    const before = M.inspectorPaintSig(sel, view, ui);
+    M.setRepoColors({}, { assignments: {} });
+    const after = M.inspectorPaintSig(sel, view, ui);
+    expect(after).not.toBe(before);
+  });
+
+  test("the desk override is 4% into --surface and a 45% spine; the unscoped desk is untouched", () => {
+    expect(styles).toMatch(
+      /\.drawer-desk\.has-repo-tint[\s\S]{0,200}var\(--repo-tint\) 4%[\s\S]{0,80}var\(--surface\)/,
+    );
+    expect(styles).toMatch(
+      /\.drawer-desk\.has-repo-tint[\s\S]{0,240}border-left:\s*2px\s+solid\s+color-mix\(in srgb, var\(--repo-tint\) 45%/,
+    );
+    expect(styles).toMatch(/\.drawer-desk\s*\{[^}]*border-left:\s*2px\s+solid\s+var\(--ink\)/);
+    expect(styles).toMatch(/\n\.drawer-desk \{([^}]*overflow-y:\s*auto[^}]*--sand[^}]*)\}/);
+  });
+});
