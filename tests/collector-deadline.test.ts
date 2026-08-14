@@ -245,6 +245,44 @@ describe("a refresh the watchdog abandoned does not publish over its replacement
     }
   });
 
+  test("a missed deadline names the collector that had not returned", async () => {
+    /* The whole point of the instrumentation. Two culprits were named from
+       reading the code and both dissolved on measurement, so the board has to
+       say which collector it is actually waiting on. A duration cannot answer
+       it — the guilty collector has not finished, so it has no duration. The
+       PENDING set is the finding. */
+    const logged = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const state = hub({ notifications: () => never() });
+      await refresh(state);
+
+      const timings = logged.mock.calls
+        .map((call) => String(call[0]))
+        .find((line) => line.includes("pass timings"));
+      expect(timings, "no pass timings line was logged on a missed deadline").toBeDefined();
+      expect(timings).toContain("PENDING=[cmux notification collection failed]");
+      /* A collector that DID return must not be accused. */
+      expect(timings).not.toContain("PENDING=[cmux discovery failed");
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  test("a pass that meets its deadline logs no timings at all", async () => {
+    /* The contrast case, and the reason this is safe to ship into a log that is
+       already a wall of noise: a healthy board stays silent. */
+    const logged = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await refresh(hub({}));
+      const noisy = logged.mock.calls
+        .map((call) => String(call[0]))
+        .filter((line) => line.includes("pass timings"));
+      expect(noisy).toEqual([]);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
   test("a pass nothing abandoned still publishes normally", async () => {
     /* The contrast case. A guard that simply refused to publish would pass the
        test above and leave the board frozen forever. */

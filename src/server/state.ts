@@ -834,13 +834,45 @@ export class HubState {
     let identityResult: IdentityResult | undefined;
     const collectionErrors: string[] = [];
     let controlDeadlineExpired = false;
+    /* Which collector actually spent the deadline. Two investigations named a
+       culprit from code reading and both dissolved on measurement — the
+       transcript walk reads one file, and Cursor's store measures fast while the
+       board misses the deadline continuously. The answer has to come off the
+       running board.
+
+       What names the guilty collector is `pending`, not `timings`: at the moment
+       the deadline fires the slow one has not returned, so it has no duration to
+       report. The set of labels still outstanding IS the finding. */
+    const passStartedMs = Date.now();
+    const timings = new Map<string, number>();
+    const pending = new Set<string>();
+    const track = async <T>(label: string, work: Promise<T>): Promise<T> => {
+      const startedMs = Date.now();
+      pending.add(label);
+      try {
+        return await work;
+      } finally {
+        pending.delete(label);
+        timings.set(label, Date.now() - startedMs);
+      }
+    };
+    const passBreakdown = (): string => {
+      const finished = [...timings.entries()]
+        .sort(([, a], [, b]) => b - a)
+        .map(([label, ms]) => `${label}=${ms}ms`)
+        .join(" ");
+      /* Sorted so the line is stable enough to diff across passes. */
+      const outstanding = [...pending].sort().join(",");
+      return `total=${Date.now() - passStartedMs}ms ${finished}`
+        + (outstanding ? ` PENDING=[${outstanding}]` : " PENDING=[none]");
+    };
     const capture = async <T>(
       label: string,
       work: Promise<T>,
       assign: (value: T) => void,
     ): Promise<void> => {
       try {
-        const value = await work;
+        const value = await track(label, work);
         if (!controlDeadlineExpired) assign(value);
       } catch (error) {
         if (!controlDeadlineExpired) {
@@ -863,7 +895,7 @@ export class HubState {
       }, controlTimeoutMs);
     });
     const providerCollection = this.collectors.sessionProvider && this.collectors.finalizeSessions
-      ? (async () => {
+      ? track("providers", (async () => {
           const configKey = `${windowMs}:${thresholds?.freshMs ?? "default"}:${thresholds?.quietMs ?? "default"}`;
           const selection = await this.#providerSettlement.settle(
             providers,
@@ -900,7 +932,7 @@ export class HubState {
               `session collection failed: provider fleet finalization failed: ${error instanceof Error ? error.message : String(error)}`,
             );
           }
-        })()
+        })())
       : capture("session collection failed", this.collectors.sessions(homedir(), windowMs, thresholds), (value) => {
           sessionsResult = value;
         });
@@ -1006,6 +1038,9 @@ export class HubState {
     if (!aggregateSettled) {
       collectionErrors.push(deadlineError);
       console.error(`[HubState] ${deadlineError}; publishing partial snapshot`);
+      /* Only on a miss. A healthy pass says nothing, so this cannot become the
+         next wall of noise the last one hid behind. */
+      console.error(`[HubState] pass timings: ${passBreakdown()}`);
     }
     /* A result missing because the DEADLINE fired did not fail for some other
        collector's reason. This published `collectionErrors[0]` — whichever
