@@ -5998,3 +5998,13 @@ a.artifact-path:hover { text-decoration: underline; }
 }
 .repo-colors-reset:hover { color: var(--ink); border-color: var(--line-strong); }
 .repo-colors-empty { margin: 0; color: var(--faint); font-size: 12px; }
+.repo-colors-row.is-absent {
+  background: var(--sand);
+}
+.repo-colors-row.is-absent .repo-colors-name {
+  color: var(--muted);
+}
+.repo-colors-row.is-absent .repo-colors-source {
+  color: var(--muted);
+  font-weight: 600;
+}

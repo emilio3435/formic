@@ -3699,7 +3699,9 @@ describe("operations canvas layout", () => {
     await withState({ snap: null, conn: "live", fetchFailed: true }, async () => {
       await withRequests([{ status: 200, json: fresh }], async (calls) => {
         await M.recollectSnapshot();
-        expect(calls.map((c) => [c.method, c.url])).toEqual([["POST", "/api/recollect"]]);
+        const rec = calls.map((c) => [c.method, c.url]);
+        expect(rec[0]).toEqual(["POST", "/api/recollect"]);
+        expect(rec.filter(([, url]) => url === "/api/recollect")).toHaveLength(1);
         expect(M.state.snap.generatedAt).toBe(fresh.generatedAt);
         expect(M.state.fetchFailed).toBe(false);
       });
@@ -3712,8 +3714,9 @@ describe("operations canvas layout", () => {
         { status: 200, json: fresh },
       ], async (calls) => {
         await M.recollectSnapshot();
-        expect(calls.map((c) => [c.method, c.url]))
-          .toEqual([["POST", "/api/recollect"], ["GET", "/api/snapshot"]]);
+        const rec = calls.map((c) => [c.method, c.url]);
+        expect(rec[0]).toEqual(["POST", "/api/recollect"]);
+        expect(rec).toContainEqual(["GET", "/api/snapshot"]);
         expect(M.state.snap.generatedAt).toBe(fresh.generatedAt);
       });
     });

@@ -43,7 +43,7 @@ import {
   JsonRepoGroupProvenanceStore,
   MemoryRepoGroupProvenanceStore,
 } from "./cmux-groups";
-import { repoKeyForCwd, sameHex } from "../shared/repo-color";
+import { folderKeyForCwd, sameHex } from "../shared/repo-color";
 import { snapshotFingerprint } from "./snapshot";
 import { handleTriageRequest, MemoryTriageQueueStore, type TriageInvestigationRunner, type TriageQueueStore } from "./triage";
 import type { ArchiveStore, CmuxSurface, CommandRunner } from "./types";
@@ -412,17 +412,17 @@ function limitFrom(url: URL, fallback: number, maximum: number): number | Respon
 /* TINT-F — repo colours: discovery, the default store, and the fan-out.
 
    Kept beside the route it serves for the same reason defaultActionLogStore is:
-   a store that only makes sense for one endpoint. The git call behind
-   repoKeyForCwd is memoized by worktree path — the endpoint runs on every board
-   poll and the fleet routinely carries forty agents across a dozen checkouts,
-   which would be forty `git rev-parse` spawns a poll. A worktree's repository
-   does not change under it; a restart re-reads them all. */
+   a store that only makes sense for one endpoint. Live colour keys come from
+   the band name already on the snapshot (`agent.repo.repoName`). Folder git
+   (`folderKeyForCwd`) is memoized by worktree path and used only as an alias
+   so persisted the-mountain rows can rebase onto the-ant-hill. A worktree's
+   repository does not change under it; a restart re-reads them all. */
 const repoKeyByWorktree = new Map<string, string | null>();
 
 function cachedRepoKey(worktreePath: string): string | null {
   let key = repoKeyByWorktree.get(worktreePath);
   if (key === undefined) {
-    key = repoKeyForCwd(worktreePath);
+    key = folderKeyForCwd(worktreePath);
     repoKeyByWorktree.set(worktreePath, key);
   }
   return key;
@@ -440,14 +440,19 @@ export function resetRepoKeyCache(): void {
    it never reaches this walk. TINT-S filters anchors at the collector; anything
    here that started enumerating workspaces directly would have to filter them
    again, and writing a colour to an anchor is a defect the sync then fights. */
-function discoverRepoColors(snapshot: HubSnapshot): RepoColorDiscovery {
+export function discoverRepoColors(
+  snapshot: HubSnapshot,
+  folderKeys?: Readonly<Record<string, string | null>>,
+): RepoColorDiscovery {
   return repoColorDiscovery(snapshot.programs.flatMap((program) =>
     program.agents.flatMap((agent) => {
       const worktreePath = agent.repo?.worktreePath;
-      if (!worktreePath) return [];
       return [{
-        repoKey: cachedRepoKey(worktreePath),
+        repoKey: agent.repo?.repoName?.trim().toLowerCase() || null,
         repoName: agent.repo?.repoName,
+        folderKey: worktreePath
+          ? (folderKeys && worktreePath in folderKeys ? folderKeys[worktreePath] : cachedRepoKey(worktreePath))
+          : null,
         workspaceId: agent.target?.workspaceId,
       }];
     })));

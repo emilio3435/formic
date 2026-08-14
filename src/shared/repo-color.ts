@@ -21,8 +21,9 @@ export const REPO_PALETTE = [
 export const REPO_OVERFLOW_HEX = "#64707C";
 
 export interface RepoColorAssignment {
-  /** Canonical repo key: basename of the git common dir's toplevel, lowercased.
-   *  All worktrees of a repo collapse to one key (git rev-parse --git-common-dir). */
+  /** Canonical colour key: origin basename (the GitHub repo name), lowercased.
+   *  Folder key (basename of the git common dir's parent) only when origin is absent.
+   *  All worktrees of a repo collapse to one key. */
   repoKey: string;
   hex: string;
   /** Palette slot, or null when overflow/user-picked hex. */
@@ -61,8 +62,23 @@ const defaultExec: RepoKeyExec = (command) => {
   return { exitCode: result.exitCode, stdout: result.stdout.toString() };
 };
 
-/** Derive the repo key for an agent; null when cwd is not in a git repo. */
-export function repoKeyForCwd(cwd: string, options: RepoKeyOptions = {}): string | null {
+/** Last path segment of a git remote, minus a trailing `.git`. HTTPS and
+ *  `git@host:path` both work; empty or junk is null, never a guessed name. */
+export function originBasename(remote: string): string | null {
+  const first = remote.split(/\r?\n/, 1)[0]?.trim() ?? "";
+  if (!first) return null;
+  const stripped = first.replace(/\.git$/i, "");
+  const slash = stripped.lastIndexOf("/");
+  const colon = stripped.lastIndexOf(":");
+  const cut = Math.max(slash, colon);
+  if (cut < 0) return null;
+  const name = stripped.slice(cut + 1).trim().toLowerCase();
+  return name || null;
+}
+
+/** Folder the `.git` common dir lives in — today's colour key, kept as the
+ *  fallback when origin is missing. Same `--git-common-dir` rules as before. */
+export function folderKeyForCwd(cwd: string, options: RepoKeyOptions = {}): string | null {
   if (!cwd) return null;
   const exec = options.exec ?? defaultExec;
   const result = exec(["git", "-C", cwd, "rev-parse", "--git-common-dir"]);
@@ -78,6 +94,19 @@ export function repoKeyForCwd(cwd: string, options: RepoKeyOptions = {}): string
   const commonDir = resolve(cwd, raw);
   const key = basename(dirname(commonDir)).toLowerCase();
   return key || null;
+}
+
+/** Derive the repo key for an agent; null when cwd is not in a git repo.
+ *  Origin basename wins so two clones of the same GitHub repo share one key. */
+export function repoKeyForCwd(cwd: string, options: RepoKeyOptions = {}): string | null {
+  if (!cwd) return null;
+  const exec = options.exec ?? defaultExec;
+  const remote = exec(["git", "-C", cwd, "remote", "get-url", "origin"]);
+  if (remote.exitCode === 0) {
+    const fromOrigin = originBasename(remote.stdout);
+    if (fromOrigin) return fromOrigin;
+  }
+  return folderKeyForCwd(cwd, options);
 }
 
 /* FNV-1a, the same stable string hash `repo-identity` already uses for its own
@@ -161,6 +190,58 @@ export function withAssignments(
        drift that is only spelling. Everything downstream of here compares
        colours, so this is the last place that can be sure. */
     assignments[key] = { repoKey: key, hex: normalizeHex(hexForSlot(slot))!, slot, source: "auto" };
+  }
+  return { ...settings, assignments };
+}
+
+export interface ColorKeyAlias {
+  folderKey: string;
+  originKey: string;
+}
+
+/** Copy a folder-keyed assignment onto the origin key the board now uses.
+ *
+ *  Two clones of one GitHub repo used to be two rows. After origin became the
+ *  colour key they must become one, without inventing a new hue: the winning
+ *  donor is `source: "user"` over `auto`, then the folder that appears most
+ *  often in the live alias list, then lexicographic folder key. An origin that
+ *  already has a row keeps it; donor folder keys still drop. A folder with no
+ *  live alias stays, so Settings can mark it not on the board. */
+export function rebaseAssignmentsOntoOriginKeys(
+  settings: RepoColorsSettings,
+  aliases: readonly ColorKeyAlias[],
+): RepoColorsSettings {
+  const assignments: Record<string, RepoColorAssignment> = { ...settings.assignments };
+  const byOrigin = new Map<string, string[]>();
+  for (const { folderKey, originKey } of aliases) {
+    if (!folderKey || !originKey) continue;
+    const list = byOrigin.get(originKey) ?? [];
+    list.push(folderKey);
+    byOrigin.set(originKey, list);
+  }
+  const weight = (originKey: string, folderKey: string) =>
+    aliases.filter((row) => row.originKey === originKey && row.folderKey === folderKey).length;
+  for (const [originKey, folderKeys] of byOrigin) {
+    const uniqueFolders = [...new Set(folderKeys)];
+    if (!assignments[originKey]) {
+      const donors = uniqueFolders
+        .map((key) => ({ key, assignment: assignments[key] }))
+        .filter((row): row is { key: string; assignment: RepoColorAssignment } => Boolean(row.assignment));
+      if (donors.length) {
+        donors.sort((left, right) => {
+          const source = Number(right.assignment.source === "user") - Number(left.assignment.source === "user");
+          if (source) return source;
+          const heaviness = weight(originKey, right.key) - weight(originKey, left.key);
+          if (heaviness) return heaviness;
+          return left.key.localeCompare(right.key);
+        });
+        const winner = donors[0]!.assignment;
+        assignments[originKey] = { ...winner, repoKey: originKey };
+      }
+    }
+    for (const folderKey of uniqueFolders) {
+      if (folderKey !== originKey) delete assignments[folderKey];
+    }
   }
   return { ...settings, assignments };
 }

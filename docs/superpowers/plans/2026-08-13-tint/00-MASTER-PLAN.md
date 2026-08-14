@@ -48,7 +48,7 @@ export const REPO_PALETTE = [
 export const REPO_OVERFLOW_HEX = "#64707C";
 
 export interface RepoColorAssignment {
-  /** Canonical repo key: basename of the git common dir's toplevel, lowercased.
+  /** Canonical repo key: origin basename (the GitHub repo name), lowercased; folder fallback when origin is absent.
    *  All worktrees of a repo collapse to one key (git rev-parse --git-common-dir). */
   repoKey: string;
   hex: string;

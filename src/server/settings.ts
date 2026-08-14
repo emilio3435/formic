@@ -5,7 +5,9 @@ import {
   defaultRepoColorsSettings,
   hexForSlot,
   normalizeHex,
+  rebaseAssignmentsOntoOriginKeys,
   withAssignments,
+  type ColorKeyAlias,
   type RepoColorAssignment,
   type RepoColorsSettings,
 } from "../shared/repo-color";
@@ -502,13 +504,26 @@ export class JsonRepoColorsStore {
   }
 
   /** Give every discovered repository a colour, keeping the ones already made.
-   *  Returns the settings in force; writes only when something was added, so a
-   *  poll over an unchanged fleet does no disk I/O. */
-  async ensure(repoKeys: readonly string[]): Promise<RepoColorsSettings> {
-    const next = withAssignments(this.#settings, repoKeys);
-    if (Object.keys(next.assignments).length === Object.keys(this.#settings.assignments).length) {
-      return this.get();
-    }
+   *  Rebases folder keys onto origin keys first when aliases are present.
+   *  Returns the settings in force; writes only when assignment identity
+   *  changed — rebase can keep the same count while swapping `the-mountain`
+   *  for `the-ant-hill`, and a count-only check would skip that write. */
+  async ensure(
+    repoKeys: readonly string[],
+    aliases: readonly ColorKeyAlias[] = [],
+  ): Promise<RepoColorsSettings> {
+    const rebased = aliases.length
+      ? rebaseAssignmentsOntoOriginKeys(this.#settings, aliases)
+      : this.#settings;
+    const next = withAssignments(rebased, repoKeys);
+    const sameKeys =
+      Object.keys(next.assignments).length === Object.keys(this.#settings.assignments).length
+      && Object.keys(next.assignments).every((key) => {
+        const left = next.assignments[key];
+        const right = this.#settings.assignments[key];
+        return left && right && left.hex === right.hex && left.source === right.source;
+      });
+    if (sameKeys) return this.get();
     return this.#write(next);
   }
 
@@ -551,6 +566,8 @@ export class JsonRepoColorsStore {
 export interface RepoColorSubject {
   /** Canonical repo key, from repoKeyForCwd; null when the agent is not in a repo. */
   repoKey: string | null;
+  /** Folder key (common-dir parent), when known — used to rebase stored rows. */
+  folderKey?: string | null;
   /** The name the BOARD prints for this repository, if any. */
   repoName?: string;
   /** cmux workspace this agent's surface lives in, if resolved. */
@@ -559,10 +576,14 @@ export interface RepoColorSubject {
 
 export interface RepoColorDiscovery {
   repoKeys: string[];
+  /** Sorted unique origin keys currently discovered — same as `repoKeys`. */
+  liveKeys: string[];
   /** Lowercased board repo name → canonical repo key. The client joins on this. */
   names: Record<string, string>;
   /** cmux workspace id → canonical repo key. */
   workspaces: Record<string, string>;
+  /** Live folder→origin pairs so persisted folder keys can rebase onto origin. */
+  aliases: ColorKeyAlias[];
 }
 
 /** Fold the live fleet into the three maps the colour endpoint answers with.
@@ -581,10 +602,12 @@ export function repoColorDiscovery(subjects: readonly RepoColorSubject[]): RepoC
      between polls, and which one got which was unpredictable. */
   const claims = new Map<string, Set<string>>();
   const counts = new Map<string, Map<string, number>>();
+  const aliases: ColorKeyAlias[] = [];
   for (const subject of subjects) {
     const key = subject.repoKey;
     if (!key) continue;
     repoKeys.add(key);
+    if (subject.folderKey) aliases.push({ folderKey: subject.folderKey, originKey: key });
     const name = subject.repoName?.trim().toLowerCase();
     if (name) {
       let claimants = claims.get(name);
@@ -619,7 +642,8 @@ export function repoColorDiscovery(subjects: readonly RepoColorSubject[]): RepoC
   for (const [name, claimants] of claims) {
     if (claimants.size === 1) names[name] = [...claimants][0]!;
   }
-  return { repoKeys: [...repoKeys].sort(), names, workspaces };
+  const sortedKeys = [...repoKeys].sort();
+  return { repoKeys: sortedKeys, liveKeys: [...sortedKeys], names, workspaces, aliases };
 }
 
 export interface RepoColorsRequestOptions {
@@ -648,6 +672,7 @@ function repoColorsPayload(
        `git rev-parse` to derive the canonical key for itself. Flagged to the
        master in LANE-REPORT-tint-f §5. */
     repoNames: discovery.names,
+    liveKeys: discovery.repoKeys,
   };
 }
 
@@ -682,8 +707,8 @@ export async function handleRepoColorsRequest(
   const tail = url.pathname.slice("/api/repo-colors".length).replace(/^\//, "");
   if (request.method === "GET") {
     if (tail) return requestError(404, "NOT_FOUND", "Read every repository's colour from /api/repo-colors.");
-    const discovery = await (options.discover?.() ?? { repoKeys: [], names: {}, workspaces: {} });
-    const settings = await store.ensure(discovery.repoKeys);
+    const discovery = await (options.discover?.() ?? { repoKeys: [], liveKeys: [], names: {}, workspaces: {}, aliases: [] });
+    const settings = await store.ensure(discovery.repoKeys, discovery.aliases ?? []);
     const writes = Object.entries(discovery.workspaces).flatMap(([workspaceId, repoKey]) => {
       const assignment = settings.assignments[repoKey];
       return assignment ? [{ workspaceId, hex: assignment.hex }] : [];
@@ -705,7 +730,7 @@ export async function handleRepoColorsRequest(
   try {
     if (request.method === "DELETE") {
       const settings = await store.clearUserColor(repoKey);
-      const discovery = await (options.discover?.() ?? { repoKeys: [], names: {}, workspaces: {} });
+      const discovery = await (options.discover?.() ?? { repoKeys: [], liveKeys: [], names: {}, workspaces: {}, aliases: [] });
       /* Clearing an override is a colour CHANGE, so it fans out exactly as
          setting one does. Returning the restored palette hex and writing
          nothing left cmux wearing the colour the operator just took back —
@@ -728,7 +753,7 @@ export async function handleRepoColorsRequest(
       return requestError(400, "INVALID_HEX", "hex must be #RGB or #RRGGBB.");
     }
     const settings = await store.setUserColor(repoKey, record.hex as string);
-    const discovery = await (options.discover?.() ?? { repoKeys: [], names: {}, workspaces: {} });
+    const discovery = await (options.discover?.() ?? { repoKeys: [], liveKeys: [], names: {}, workspaces: {}, aliases: [] });
     await fanOutFor(repoKey, settings, discovery, options);
     return json(repoColorsPayload(settings, discovery));
   } catch (error) {

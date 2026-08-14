@@ -1588,6 +1588,7 @@ globalThis.TheAntHill = {
      them — exported so the treatments are assertable as functions rather than
      as substrings of this file. */
   setRepoColors, repoTintFor, repoTintOfProgram, normalizeRepoHex, fetchRepoColors,
+  liveRepoSig, maybeRefreshRepoColors, openSettingsPanel, closeSettingsPanel,
   renderRepoSection, repoShellSig, stripRowOpts, renderStripGroupHead,
   // The shelf's governor. Exported because the lookback clause inside it is the
   // only thing standing between a 24-row shelf and a 446-row one, and a
@@ -1994,6 +1995,7 @@ function applySnapshot(snap, sequence = null) {
     throw new Error("unexpected snapshot shape");
   }
   state.snap = snap;
+  maybeRefreshRepoColors(snap);
   state.snapshotSequence = snapshotSequenceFrom(sequence);
   if (Number.isFinite(Number(snap.scanWindowHours))) state.scanWindowHours = Number(snap.scanWindowHours);
   state.fetchFailed = false;
@@ -3094,6 +3096,12 @@ function renderSettingsPreview() {
 /* Closing clears both verdicts. Reopening to a stale "Saved" from ten minutes
    ago would confirm a save the operator is no longer thinking about, and a
    stale error would report a failure they already fixed. */
+function openSettingsPanel() {
+  state.settingsPanelOpen = true;
+  renderSettingsPanel();
+  void fetchRepoColors();
+}
+
 function closeSettingsPanel() {
   state.settingsPanelOpen = false;
   state.settingsSavedAt = 0;
@@ -3832,17 +3840,16 @@ function renderSettingsPanel() {
     /* The local display pref rebuilds the panel too, or the radio the operator
        just clicked would keep the stale checkmark until a server value moved. */
     state.needsYouDisplay || "",
-    // Same argument for the repo-colour region: its data arrives on its own
-    // clock and moves nothing else in here.
-    String(repoColorsVersion),
   ].join("\u001f");
   if (paintUnchanged("settings", sig)) {
     /* The two things that must follow the board without disturbing the form:
        the preview, which predicts what these numbers do, and the save verdict,
        which is time-boxed and would otherwise expire by rebuilding the panel
-       out from under whatever is being typed. */
+       out from under whatever is being typed. Colours arrive on their own
+       clock and paint into a host, so they refresh here too. */
     renderSettingsPreview();
     renderSettingsVerdict();
+    paintRepoColorSettings();
     return;
   }
   // textContent = "" is this client's clear idiom; replaceChildren is not part
@@ -3923,8 +3930,8 @@ function renderSettingsPanel() {
        say about a colour. */
     el("fieldset", { class: "settings-local" },
       el("legend", { text: "Repository colours" }),
-      el("p", { class: "settings-help", text: "Six fixed hues, then neutral clay. A colour you pick here also travels to that repository's cmux workspaces." }),
-      renderRepoColorSettings()),
+      el("p", { class: "settings-help", text: "A colour you pick here follows the repository name on the board, including every clone of that GitHub repo, and travels to its cmux workspaces." }),
+      el("div", { id: "repo-colors-host", class: "repo-colors-host" })),
     /* The two answers a save can give, said where the save happened. A stable
        node rather than a conditional child, so it can appear, change and expire
        without rebuilding the form around it. */
@@ -3959,6 +3966,7 @@ function renderSettingsPanel() {
       }, "Done"))));
   renderSettingsPreview();
   renderSettingsVerdict();
+  paintRepoColorSettings();
 }
 
 /* TINT-F. Which repository wears which colour, and the override.
@@ -3968,28 +3976,49 @@ function renderSettingsPanel() {
    instead of overflow clay — which is why Reset is offered beside the swatch
    rather than only as a global wipe.
 
-   It reads `state.repoColorSettings.assignments`, keyed by the canonical repo
-   key (the git common dir's basename), which is also the word an operator
-   recognises — `the-mountain`, `cooper-scheduler`. No live board data is needed
-   here at all: an assignment outlives the session that caused it. */
+   Assignment keys are origin/band names (`the-ant-hill`). Rows with no live
+   session stay pickable and are marked not on the board. The list paints into
+   `#repo-colors-host` so a colour GET cannot rebuild the Settings form. */
+function paintRepoColorSettings() {
+  const host = $("repo-colors-host");
+  if (!host) return;
+  const sig = JSON.stringify(state.repoColorSettings) + "\u001f" + (state.liveRepoKeys || []).join(",");
+  /* An empty host after a form rebuild must still fill, even when the colour
+     payload has not moved — otherwise Save-pending would leave the list blank. */
+  if (paintUnchanged("repo-colors", sig) && host.childElementCount) return;
+  host.textContent = "";
+  host.append(renderRepoColorSettings());
+}
+
 function renderRepoColorSettings(settings = state.repoColorSettings) {
   const assignments = (settings && settings.assignments) || {};
-  const keys = Object.keys(assignments).sort();
-  if (!keys.length) {
+  const live = new Set((state.liveRepoKeys || []).map((key) => String(key).toLowerCase()));
+  const keys = Object.keys(assignments);
+  const ranked = keys.sort((left, right) => {
+    const leftLive = live.has(left.toLowerCase()) ? 0 : 1;
+    const rightLive = live.has(right.toLowerCase()) ? 0 : 1;
+    return leftLive - rightLive || left.localeCompare(right);
+  });
+  if (!ranked.length) {
     return el("div", { class: "repo-colors" },
       el("p", {
         class: "repo-colors-empty",
         text: "No repository has been given a colour yet — one is assigned the first time the board sees a session in it.",
       }));
   }
-  return el("div", { class: "repo-colors" }, ...keys.map((key) => {
+  return el("div", { class: "repo-colors" }, ...ranked.map((key) => {
     const assignment = assignments[key] || {};
     const hex = normalizeRepoHex(assignment.hex) || "";
-    const row = el("div", { class: "repo-colors-row" },
+    const onBoard = live.has(key.toLowerCase());
+    const user = assignment.source === "user";
+    const sourceText = onBoard
+      ? (user ? "your colour" : "auto")
+      : (user ? "your colour · not on the board" : "Not on the board");
+    const row = el("div", { class: "repo-colors-row" + (onBoard ? "" : " is-absent") },
       el("span", { class: "repo-colors-name", text: key }),
       el("span", {
         class: "repo-colors-source",
-        text: assignment.source === "user" ? "your colour" : "auto",
+        text: sourceText,
       }),
       /* A native colour input, so the picker is the operating system's and this
          board ships no swatch grid of its own. Its own value is the current
@@ -3998,11 +4027,11 @@ function renderRepoColorSettings(settings = state.repoColorSettings) {
         type: "color",
         class: "repo-colors-swatch",
         value: hex,
-        "aria-label": "Colour for " + key,
+        "aria-label": "Colour for " + key + (onBoard ? "" : ", not on the board"),
         dataset: { fkey: "repo-color:" + key },
         onchange: (event) => { void putRepoColor(key, event.currentTarget.value); },
       }),
-      assignment.source === "user"
+      user
         ? el("button", {
           type: "button",
           class: "repo-colors-reset",
@@ -4036,8 +4065,9 @@ async function putRepoColor(repoKey, hex) {
     if (!res.ok || !body || body.ok !== true) {
       throw new Error(body && body.error && body.error.message ? body.error.message : "Save failed (HTTP " + res.status + ")");
     }
-    setRepoColors(body.repoNames, body.settings);
+    state.liveRepoKeys = Array.isArray(body.liveKeys) ? body.liveKeys.map(String) : [];
     state.repoColorSettings = body.settings;
+    setRepoColors(body.repoNames, body.settings);
     render();
     renderSettingsPanel();
   } catch (err) {
@@ -13261,13 +13291,34 @@ async function fetchLabels() {
   }
 }
 
-/* TINT-F. One fetch at boot, and one after every colour an operator picks.
-   There is deliberately no poll: an assignment only changes when a repository
-   the board has never seen appears — which is a fresh GET's own doing, since
-   this endpoint is what assigns it — or when somebody presses a swatch. A
-   failure here costs the tint and nothing else, so it warns and leaves the
-   board uncoloured rather than reaching for a fallback palette the cmux
-   workspaces would not be wearing. */
+/* TINT-F. One fetch at boot, one when Settings opens, one when the live origin
+   roster on a later snapshot changes, and one after every colour an operator
+   picks. There is deliberately no timer: an assignment only changes when a
+   repository the board has never seen appears — which is a fresh GET's own
+   doing, since this endpoint is what assigns it — or when somebody presses a
+   swatch. A failure here costs the tint and nothing else, so it warns and
+   leaves the board uncoloured rather than reaching for a fallback palette the
+   cmux workspaces would not be wearing. */
+function liveRepoSig(snap) {
+  const keys = new Set();
+  for (const program of (snap && snap.programs) || []) {
+    for (const agent of program.agents || []) {
+      const name = agent.repo && agent.repo.repoName;
+      if (name && String(name).trim()) keys.add(String(name).trim().toLowerCase());
+    }
+  }
+  return [...keys].sort().join(",");
+}
+
+let lastLiveRepoSig = null;
+function maybeRefreshRepoColors(snap) {
+  const sig = liveRepoSig(snap);
+  if (lastLiveRepoSig === sig) return;
+  const first = lastLiveRepoSig === null;
+  lastLiveRepoSig = sig;
+  if (!first) void fetchRepoColors();
+}
+
 async function fetchRepoColors() {
   const generation = bootGeneration;
   try {
@@ -13279,8 +13330,9 @@ async function fetchRepoColors() {
        The geometry gate froze the board on purpose, and a repaint arriving
        mid-measurement made it fail on a layout it never rendered. */
     if (generation !== bootGeneration) return;
-    setRepoColors(body.repoNames, body.settings);
+    state.liveRepoKeys = Array.isArray(body.liveKeys) ? body.liveKeys.map(String) : [];
     state.repoColorSettings = body.settings;
+    setRepoColors(body.repoNames, body.settings);
     render();
   } catch (err) {
     console.warn("repo colour fetch failed:", err);
@@ -14009,6 +14061,7 @@ let bootGeneration = 0;
 
 function stopBoot() {
   bootGeneration += 1;
+  lastLiveRepoSig = null;
   while (bootIntervals.length) clearInterval(bootIntervals.pop());
   // The stream is part of boot: leaving it open kept a live EventSource (and a
   // stale readyState read) alive after stopBoot() claimed to have stopped.
@@ -14086,8 +14139,8 @@ function boot() {
   });
 
   $("settings-toggle").addEventListener("click", () => {
-    state.settingsPanelOpen = !state.settingsPanelOpen;
-    renderSettingsPanel();
+    if (!state.settingsPanelOpen) openSettingsPanel();
+    else closeSettingsPanel();
   });
 
   $("customize-summary").addEventListener("click", () => {
@@ -14219,7 +14272,7 @@ Object.assign(globalThis.TheAntHill, {
   // same reason CONN_LABELS and the transcript limits live down here.
   settingsPreview, settingsPreviewText, SETTINGS_PRESETS, renderSettingsPanel,
   // TINT-F: the repo-colour region and its one write.
-  renderRepoColorSettings, putRepoColor,
+  renderRepoColorSettings, paintRepoColorSettings, putRepoColor,
   passesLookback, isUnverified,
   // `const`s, so they would be a TDZ error in the hoisted block above.
   STRIP_ID, SECTION_HEADS,

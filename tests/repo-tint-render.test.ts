@@ -39,6 +39,8 @@ interface FakeNode {
   [key: string]: any;
 }
 
+let byId = new Map<string, FakeNode>();
+
 function makeNode(tag: string): FakeNode {
   const classes = new Set<string>();
   const props: Record<string, string> = {};
@@ -61,6 +63,10 @@ function makeNode(tag: string): FakeNode {
     classList: {
       add(...c: string[]) { for (const x of c) if (x) classes.add(x); },
       remove(...c: string[]) { for (const x of c) classes.delete(x); },
+      toggle(c: string, on?: boolean) {
+        if (on === undefined ? classes.has(c) : !on) classes.delete(c);
+        else classes.add(c);
+      },
       contains(c: string) { return classes.has(c); },
     },
     /* The real thing: a CSSOM property write, which the board's strict CSP
@@ -68,7 +74,10 @@ function makeNode(tag: string): FakeNode {
     style: {
       setProperty(name: string, value: string) { props[name] = String(value); },
     },
-    setAttribute(k: string, v: unknown) { node.attributes[k] = String(v); },
+    setAttribute(k: string, v: unknown) {
+      node.attributes[k] = String(v);
+      if (k === "id" && v) byId.set(String(v), node as unknown as FakeNode);
+    },
     removeAttribute(k: string) { delete node.attributes[k]; },
     hasAttribute(k: string) { return k in node.attributes; },
     addEventListener(type: string, fn: (event: unknown) => unknown) {
@@ -93,11 +102,16 @@ function makeNode(tag: string): FakeNode {
 }
 
 function withDom<T>(fn: () => T): T {
+  byId = new Map();
+  const panel = makeNode("div");
+  panel.setAttribute("id", "settings-panel");
+  const toggle = makeNode("button");
+  toggle.setAttribute("id", "settings-toggle");
   (globalThis as unknown as { document: unknown }).document = {
     createElement: (t: string) => makeNode(t),
     createElementNS: (_ns: string, t: string) => makeNode(t),
     createTextNode: (s: string) => ({ nodeType: 3, textContent: String(s) }),
-    getElementById: () => null,
+    getElementById: (id: string) => byId.get(id) ?? null,
     querySelector: () => null,
     querySelectorAll: () => [] as unknown[],
   };
@@ -119,13 +133,26 @@ const byClass = (root: unknown, name: string): FakeNode[] =>
 
 const STORM = "#2e66a8";
 const SIENNA = "#b05f3a";
+const COLOUR_HELP = "A colour you pick here follows the repository name on the board, including every clone of that GitHub repo, and travels to its cmux workspaces.";
+
+/* Origin-named envelope: after discovery keyed by the printed band name,
+   name and colour key are the same word. A synthetic name≠key join is kept
+   below for the no-origin folder fallback. */
+const originEnvelope = {
+  ok: true,
+  settings: {
+    assignments: {
+      "the-ant-hill": { repoKey: "the-ant-hill", hex: STORM, slot: 1, source: "auto" },
+      "cooper-scheduler": { repoKey: "cooper-scheduler", hex: SIENNA, slot: 2, source: "user" },
+    },
+    mirrorGroups: true, syncFromCmux: true,
+  },
+  repoNames: { "the-ant-hill": "the-ant-hill", "cooper-scheduler": "cooper-scheduler" },
+  liveKeys: ["the-ant-hill"],
+};
 
 /* The colour state as the SERVER actually hands it over: two tables, joined by
-   the canonical repo key. Printed name and repo key are different strings on
-   this very checkout — origin `…/the-ant-hill.git` makes RepoIdentity.repoName
-   `the-ant-hill`, while repoKeyForCwd reads the git common dir and answers
-   `the-mountain` — so every fixture here keeps them distinct on purpose. A
-   helper that let them be the same word is what hid the join defect. */
+   the canonical repo key. */
 function useColors(repoNames: Record<string, string>, hexByKey: Record<string, string>) {
   const assignments: Record<string, unknown> = {};
   for (const [key, hex] of Object.entries(hexByKey)) {
@@ -191,6 +218,13 @@ const ui = () => ({
 
 beforeEach(() => {
   M.setRepoColors({}, { assignments: {} });
+  M.state.liveRepoKeys = [];
+  M.state.repoColorSettings = null;
+  M.state.settingsPanelOpen = false;
+  if (M.state.paintSig) {
+    M.state.paintSig.settings = "";
+    M.state.paintSig["repo-colors"] = "";
+  }
 });
 
 /* ---------------------------------------------------------------------------
@@ -205,18 +239,9 @@ describe("the wire join: a real GET envelope reaches a rendered row", () => {
 
      This one takes the envelope the real handler emits and pushes it through
      the real client entry points, so the two halves are pinned to each other.
-     Printed name and repo key deliberately differ — `the-ant-hill` is what the
-     band prints on this very checkout, `the-mountain` is what the git common
-     dir answers. */
-  const envelope = {
-    ok: true,
-    settings: {
-      assignments: { "the-mountain": { repoKey: "the-mountain", hex: STORM, slot: 1, source: "auto" } },
-      mirrorGroups: true,
-      syncFromCmux: true,
-    },
-    repoNames: { "the-ant-hill": "the-mountain" },
-  };
+     Live colour keys are origin names — `the-ant-hill` is both the band and
+     the assignment key. */
+  const envelope = originEnvelope;
 
   test("name → repoKey → hex, and the band actually paints", () => {
     M.setRepoColors(envelope.repoNames, envelope.settings);
@@ -225,14 +250,34 @@ describe("the wire join: a real GET envelope reaches a rendered row", () => {
       M.renderRepoSection(band({ name: "the-ant-hill" }), ui())) as unknown as FakeNode;
     expect(section.classList.contains("has-repo-tint")).toBe(true);
     expect(section.props["--repo-tint"]).toBe(STORM);
+    M.state.repoColorSettings = envelope.settings;
+    M.state.liveRepoKeys = envelope.liveKeys;
+    const region = withDom(() => M.renderRepoColorSettings()) as unknown as FakeNode;
+    expect(byClass(region, "repo-colors-name").map((node) => node.textContent))
+      .toContain("the-ant-hill");
+    expect(byClass(region, "repo-colors-name").map((node) => node.textContent))
+      .not.toContain("the-mountain");
   });
 
-  test("collapsing the two hops into one paints nothing — the defect, pinned", () => {
-    /* Feeding the key table straight in is what shipped. Asserting the FAILURE
-       explicitly means the test cannot be satisfied by an implementation that
-       merely happens to work when name === key. */
-    M.setRepoColors(envelope.repoNames, { assignments: envelope.repoNames });
-    expect(M.repoTintFor("the-ant-hill")).toBe("");
+  test("a no-origin folder still joins when the printed name and the colour key differ", () => {
+    /* The origin-named envelope makes name === key, so the old collapsing
+       defect (looking up hex by name in the key table) is gone on this
+       checkout. The join must still work when a folder has no origin. */
+    M.setRepoColors(
+      { "job-bored": "job-bored-folder" },
+      {
+        assignments: {
+          "job-bored-folder": { repoKey: "job-bored-folder", hex: STORM, slot: 1, source: "auto" },
+        },
+        mirrorGroups: true,
+        syncFromCmux: true,
+      },
+    );
+    expect(M.repoTintFor("job-bored")).toBe(STORM);
+    const section = withDom(() =>
+      M.renderRepoSection(band({ name: "job-bored" }), ui())) as unknown as FakeNode;
+    expect(section.classList.contains("has-repo-tint")).toBe(true);
+    expect(section.props["--repo-tint"]).toBe(STORM);
   });
 
   test("fetchRepoColors passes BOTH tables from the response it just read", async () => {
@@ -253,6 +298,7 @@ describe("the wire join: a real GET envelope reaches a rendered row", () => {
     }
     expect(calls).toEqual(["/api/repo-colors"]);
     expect(M.repoTintFor("the-ant-hill")).toBe(STORM);
+    expect(M.state.liveRepoKeys).toEqual(["the-ant-hill"]);
   });
 
   /* stopBoot() has to mean stopped, including for work boot already started.
@@ -573,6 +619,7 @@ describe("renderRepoColorSettings", () => {
   };
 
   test("one row per repository, sorted, each swatch carrying its own hex", () => {
+    M.state.liveRepoKeys = ["the-mountain", "formic"];
     const region = withDom(() => M.renderRepoColorSettings(settings)) as unknown as FakeNode;
     const rows = byClass(region, "repo-colors-row");
     expect(rows.map((row) => byClass(row, "repo-colors-name")[0]!.textContent))
@@ -582,6 +629,7 @@ describe("renderRepoColorSettings", () => {
   });
 
   test("only an operator's own colour offers a reset", () => {
+    M.state.liveRepoKeys = ["the-mountain", "formic"];
     const region = withDom(() => M.renderRepoColorSettings(settings)) as unknown as FakeNode;
     const rows = byClass(region, "repo-colors-row");
     expect(byClass(rows[0]!, "repo-colors-reset")).toHaveLength(1); // formic, user
@@ -593,5 +641,154 @@ describe("renderRepoColorSettings", () => {
   test("with nothing assigned it says so rather than rendering an empty box", () => {
     const region = withDom(() => M.renderRepoColorSettings({ assignments: {} })) as unknown as FakeNode;
     expect(byClass(region, "repo-colors-empty")[0]!.textContent).toContain("No repository");
+  });
+
+  test("the visible name is the band, the-ant-hill, not the-mountain", () => {
+    M.state.liveRepoKeys = originEnvelope.liveKeys;
+    const region = withDom(() => M.renderRepoColorSettings(originEnvelope.settings)) as unknown as FakeNode;
+    const names = byClass(region, "repo-colors-name").map((node) => node.textContent);
+    expect(names).toContain("the-ant-hill");
+    expect(names).not.toContain("the-mountain");
+  });
+
+  test("a persisted repo missing from liveKeys is not on the board", () => {
+    M.state.liveRepoKeys = originEnvelope.liveKeys;
+    const region = withDom(() => M.renderRepoColorSettings(originEnvelope.settings)) as unknown as FakeNode;
+    const rows = byClass(region, "repo-colors-row");
+    expect(rows.map((row) => byClass(row, "repo-colors-name")[0]!.textContent))
+      .toEqual(["the-ant-hill", "cooper-scheduler"]);
+    expect(rows[0]!.classList.contains("is-absent")).toBe(false);
+    expect(rows[1]!.classList.contains("is-absent")).toBe(true);
+    expect(byClass(rows[0]!, "repo-colors-source")[0]!.textContent).toBe("auto");
+    expect(byClass(rows[1]!, "repo-colors-source")[0]!.textContent).toBe("your colour · not on the board");
+    expect(byClass(rows[0]!, "repo-colors-swatch")[0]!.attributes["aria-label"])
+      .toBe("Colour for the-ant-hill");
+    expect(byClass(rows[1]!, "repo-colors-swatch")[0]!.attributes["aria-label"])
+      .toBe("Colour for cooper-scheduler, not on the board");
+  });
+
+  test("live rows sort first, then not-on-board, each group alphabetical", () => {
+    /* C < T, so alphabetical-only would put cooper-scheduler first. */
+    M.state.liveRepoKeys = originEnvelope.liveKeys;
+    const region = withDom(() => M.renderRepoColorSettings(originEnvelope.settings)) as unknown as FakeNode;
+    expect(byClass(region, "repo-colors-row").map((row) => byClass(row, "repo-colors-name")[0]!.textContent))
+      .toEqual(["the-ant-hill", "cooper-scheduler"]);
+  });
+
+  test("an auto assignment off the board says Not on the board", () => {
+    M.state.liveRepoKeys = [];
+    const region = withDom(() => M.renderRepoColorSettings({
+      assignments: {
+        "the-ant-hill": { repoKey: "the-ant-hill", hex: STORM, slot: 1, source: "auto" },
+      },
+    })) as unknown as FakeNode;
+    const row = byClass(region, "repo-colors-row")[0]!;
+    expect(row.classList.contains("is-absent")).toBe(true);
+    expect(byClass(row, "repo-colors-source")[0]!.textContent).toBe("Not on the board");
+  });
+
+  test("a colour GET does not wipe a number the operator is typing", () => {
+    withDom(() => {
+      M.state.settingsPanelOpen = true;
+      M.state.repoColorSettings = originEnvelope.settings;
+      M.state.liveRepoKeys = originEnvelope.liveKeys;
+      M.setRepoColors(originEnvelope.repoNames, originEnvelope.settings);
+      M.renderSettingsPanel();
+      const panel = byId.get("settings-panel")!;
+      const numbers = walk(panel, (node) => node.tagName === "input" && node.attributes.type === "number");
+      expect(numbers.length).toBeGreaterThan(0);
+      numbers[0]!.value = "9";
+      M.setRepoColors(originEnvelope.repoNames, originEnvelope.settings);
+      M.state.liveRepoKeys = originEnvelope.liveKeys;
+      M.paintRepoColorSettings();
+      M.renderSettingsPanel();
+      const after = walk(panel, (node) => node.tagName === "input" && node.attributes.type === "number");
+      expect(after[0]!.value).toBe("9");
+    });
+  });
+
+  test("legend help follows the repository name, including clones", () => {
+    withDom(() => {
+      M.state.settingsPanelOpen = true;
+      M.renderSettingsPanel();
+      const helps = walk(byId.get("settings-panel"), (node) => node.classList.contains("settings-help"));
+      expect(helps.map((node) => node.textContent)).toContain(COLOUR_HELP);
+    });
+  });
+
+  test("absent rows are sand, not faded — the swatch stays a real colour", () => {
+    expect(styles).toMatch(/\.repo-colors-row\.is-absent\s*\{[^}]*background:\s*var\(--sand\)/);
+    expect(styles).not.toMatch(/\.repo-colors-row\.is-absent\s*\{[^}]*\bopacity\s*:/);
+  });
+});
+
+/* ---------------------------------------------------------------------------
+   Refresh: Settings open, and a new origin on a later snapshot.
+   ------------------------------------------------------------------------ */
+
+function snapWithRepos(names: string[]) {
+  return {
+    schemaVersion: 1,
+    programs: names.map((repoName, i) => ({
+      id: "p" + i,
+      name: repoName,
+      agents: [{
+        id: "a" + i, provider: "codex", sourceSessionId: "s" + i,
+        displayName: repoName, programId: "p" + i, status: "running",
+        statusReason: "", updatedAt: "2026-08-13T03:00:00.000Z",
+        lifecycle: "working", scope: "observed",
+        tokens: { provenance: "observed", total: 1 },
+        artifacts: [], gates: [], controls: [],
+        repo: { repoKey: "k" + i, repoName, worktreePath: "/x/" + repoName, ephemeral: false },
+      }],
+    })),
+  };
+}
+
+describe("refresh on Settings open and live roster change", () => {
+  const envelope = originEnvelope;
+
+  test("liveRepoSig is the sorted unique origin names", () => {
+    expect(M.liveRepoSig(snapWithRepos(["the-ant-hill", "BurnBar", "the-ant-hill"])))
+      .toBe("burnbar,the-ant-hill");
+  });
+
+  test("opening Settings GETs /api/repo-colors; closing does not", async () => {
+    const urls: string[] = [];
+    const realFetch = (globalThis as { fetch?: unknown }).fetch;
+    (globalThis as unknown as { fetch: unknown }).fetch = async (url: string) => {
+      urls.push(String(url));
+      return new Response(JSON.stringify(envelope), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    try {
+      M.state.settingsPanelOpen = false;
+      withDom(() => { void M.openSettingsPanel(); });
+      const afterOpen = urls.filter((u) => u.includes("/api/repo-colors")).length;
+      expect(afterOpen).toBeGreaterThan(0);
+      urls.length = 0;
+      try { M.closeSettingsPanel(); } catch { /* render() needs the board document */ }
+      expect(urls.filter((u) => u.includes("/api/repo-colors"))).toEqual([]);
+    } finally {
+      (globalThis as unknown as { fetch: unknown }).fetch = realFetch;
+    }
+  });
+
+  test("a new origin on a later snapshot GETs colours; a repeat roster does not", async () => {
+    const urls: string[] = [];
+    const realFetch = (globalThis as { fetch?: unknown }).fetch;
+    (globalThis as unknown as { fetch: unknown }).fetch = async (url: string) => {
+      urls.push(String(url));
+      return new Response(JSON.stringify(envelope), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    try {
+      M.stopBoot();
+      M.maybeRefreshRepoColors(snapWithRepos(["the-ant-hill"])); // first = boot-equivalent, no GET
+      M.maybeRefreshRepoColors(snapWithRepos(["the-ant-hill"])); // unchanged
+      expect(urls.filter((u) => u.includes("/api/repo-colors"))).toEqual([]);
+      M.maybeRefreshRepoColors(snapWithRepos(["the-ant-hill", "job-bored"]));
+      expect(urls.filter((u) => u.includes("/api/repo-colors"))).toEqual(["/api/repo-colors"]);
+    } finally {
+      (globalThis as unknown as { fetch: unknown }).fetch = realFetch;
+    }
   });
 });

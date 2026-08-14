@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import {
   assignSlot,
+  defaultRepoColorsSettings,
   hexForSlot,
   normalizeHex,
   REPO_OVERFLOW_HEX,
   REPO_PALETTE,
+  folderKeyForCwd,
+  rebaseAssignmentsOntoOriginKeys,
   repoKeyForCwd,
   sameHex,
   withAssignments,
@@ -25,7 +28,8 @@ import {
   normalizeRepoColors,
   repoColorDiscovery,
 } from "../src/server/settings";
-import { createMountainFetch, emptySnapshot } from "../src/server/app";
+import { createMountainFetch, discoverRepoColors, emptySnapshot } from "../src/server/app";
+import type { HubSnapshot } from "../src/shared/types";
 import { repoGroupReconcileTick, resetRepoGroupRegistrationForTests } from "../src/server/cmux-groups";
 import { statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
@@ -45,19 +49,29 @@ const ORIGIN = "http://127.0.0.1:4701";
  *  `--show-toplevel` — the exact worktree-fragmenting bug they exist to
  *  prevent. A fake that answers any question with the answer to one question
  *  cannot tell you which question was asked. */
-function fakeGit(table: Record<string, string>): RepoKeyExec {
+function fakeGit(
+  commonDirs: Record<string, string>,
+  origins: Record<string, string> = {},
+): RepoKeyExec {
   return (command) => {
-    const [binary, dashC, cwd, ...flags] = command;
+    const [binary, dashC, cwd, ...rest] = command;
     if (binary !== "git" || dashC !== "-C") {
       throw new Error(`repoKeyForCwd shelled something other than \`git -C\`: ${command.join(" ")}`);
     }
+    if (rest[0] === "remote" && rest[1] === "get-url" && rest[2] === "origin") {
+      const origin = origins[cwd ?? ""];
+      return origin === undefined
+        ? { exitCode: 2, stdout: "" }
+        : { exitCode: 0, stdout: `${origin}\n` };
+    }
+    const flags = rest;
     if (!flags.includes("rev-parse") || !flags.includes("--git-common-dir")) {
-      throw new Error(`repoKeyForCwd must ask for --git-common-dir, not: ${flags.join(" ")}`);
+      throw new Error(`unexpected git invocation: ${command.join(" ")}`);
     }
     if (flags.includes("--show-toplevel")) {
       throw new Error("--show-toplevel answers the LINKED WORKTREE's own directory, which fragments one repository into many");
     }
-    const answer = table[cwd ?? ""];
+    const answer = commonDirs[cwd ?? ""];
     return answer === undefined
       ? { exitCode: 128, stdout: "" }
       : { exitCode: 0, stdout: `${answer}\n` };
@@ -84,6 +98,46 @@ describe("repoKeyForCwd", () => {
     expect(keys).toEqual(["the-mountain", "the-mountain", "the-mountain"]);
   });
 
+  test("an origin basename wins over the folder the clone happens to sit in", () => {
+    const exec = fakeGit(
+      {
+        "/Users/e/Developer/the-mountain": "/Users/e/Developer/the-mountain/.git",
+        "/Users/e/Developer/anthill-pulse": "/Users/e/Developer/anthill-pulse/.git",
+        "/Users/e/Developer/the-mountain.worktrees/tint-f": "/Users/e/Developer/the-mountain/.git",
+      },
+      {
+        "/Users/e/Developer/the-mountain": "https://github.com/emilio3435/the-ant-hill.git",
+        "/Users/e/Developer/anthill-pulse": "git@github.com:emilio3435/the-ant-hill.git",
+        "/Users/e/Developer/the-mountain.worktrees/tint-f": "https://github.com/emilio3435/the-ant-hill.git",
+      },
+    );
+    expect(repoKeyForCwd("/Users/e/Developer/the-mountain", { exec })).toBe("the-ant-hill");
+    expect(repoKeyForCwd("/Users/e/Developer/anthill-pulse", { exec })).toBe("the-ant-hill");
+    expect(repoKeyForCwd("/Users/e/Developer/the-mountain.worktrees/tint-f", { exec })).toBe("the-ant-hill");
+  });
+
+  test("without an origin, the folder key is still the answer", () => {
+    const exec = fakeGit({
+      "/Users/e/Developer/the-mountain": "/Users/e/Developer/the-mountain/.git",
+    });
+    expect(repoKeyForCwd("/Users/e/Developer/the-mountain", { exec })).toBe("the-mountain");
+  });
+
+  test("folderKeyForCwd ignores origin and still collapses worktrees", () => {
+    const exec = fakeGit(
+      {
+        "/Users/e/Developer/the-mountain": "/Users/e/Developer/the-mountain/.git",
+        "/Users/e/Developer/the-mountain.worktrees/tint-f": "/Users/e/Developer/the-mountain/.git",
+      },
+      {
+        "/Users/e/Developer/the-mountain": "https://github.com/emilio3435/the-ant-hill.git",
+        "/Users/e/Developer/the-mountain.worktrees/tint-f": "https://github.com/emilio3435/the-ant-hill.git",
+      },
+    );
+    expect(folderKeyForCwd("/Users/e/Developer/the-mountain", { exec })).toBe("the-mountain");
+    expect(folderKeyForCwd("/Users/e/Developer/the-mountain.worktrees/tint-f", { exec })).toBe("the-mountain");
+  });
+
   test("a relative common dir is resolved against the cwd, and the key is lowercased", () => {
     const exec = fakeGit({ "/Users/e/Developer/Cooper-Scheduler": ".git" });
     expect(repoKeyForCwd("/Users/e/Developer/Cooper-Scheduler", { exec })).toBe("cooper-scheduler");
@@ -102,13 +156,13 @@ describe("repoKeyForCwd", () => {
 
   test("the real git in this checkout answers with ONE key from anywhere inside it", () => {
     /* One live call, because every fake above encodes an assumption about what
-       `rev-parse --git-common-dir` actually prints.
+       `rev-parse --git-common-dir` and `remote get-url origin` actually print.
 
-       No repository NAME is asserted here. This checkout is called
-       `the-mountain` on the development machine and `the-ant-hill` on CI (the
-       runner clones into a directory named for the GitHub repo), so a test
-       that pins either string is testing the checkout path rather than the
-       code — it passed for weeks locally and failed on the first CI run.
+       Origin makes CI and the laptop the same key: both clones of
+       the-ant-hill.git answer `the-ant-hill`, even when the checkout folder is
+       `the-mountain` on the development machine. The name is pinned only when
+       this root's origin URL contains `the-ant-hill`, so a weird checkout
+       cannot fail CI.
 
        What is true on every machine: one repository answers with ONE key, from
        its root and from any subdirectory alike. Asserted non-null first, or a
@@ -119,6 +173,13 @@ describe("repoKeyForCwd", () => {
     expect(key).not.toBeNull();
     expect(repoKeyForCwd(import.meta.dir)).toBe(key);
     expect(repoKeyForCwd(join(root, "src", "server"))).toBe(key);
+    const origin = Bun.spawnSync(["git", "-C", root, "remote", "get-url", "origin"], {
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    if (origin.exitCode === 0 && origin.stdout.toString().includes("the-ant-hill")) {
+      expect(key).toBe("the-ant-hill");
+    }
   });
 
   test("a linked worktree collapses to its repository, not to its own directory", () => {
@@ -231,6 +292,76 @@ describe("withAssignments", () => {
     const next = withAssignments(seeded, ["formic", "the-mountain"]);
     expect(next.assignments.formic).toEqual(seeded.assignments.formic!);
     expect(next.assignments["the-mountain"]!.source).toBe("auto");
+  });
+});
+
+describe("rebaseAssignmentsOntoOriginKeys", () => {
+  const empty = defaultRepoColorsSettings();
+
+  test("two folder clones of one origin become one assignment, user hex of the heavier clone wins", () => {
+    const seeded: RepoColorsSettings = {
+      ...empty,
+      assignments: {
+        "the-mountain": { repoKey: "the-mountain", hex: "#0ae6e2", slot: null, source: "user" },
+        "anthill-pulse": { repoKey: "anthill-pulse", hex: "#10d2f9", slot: null, source: "user" },
+      },
+    };
+    const aliases = [
+      { folderKey: "the-mountain", originKey: "the-ant-hill" },
+      { folderKey: "the-mountain", originKey: "the-ant-hill" },
+      { folderKey: "the-mountain", originKey: "the-ant-hill" },
+      { folderKey: "anthill-pulse", originKey: "the-ant-hill" },
+    ];
+    const next = rebaseAssignmentsOntoOriginKeys(seeded, aliases);
+    expect(next.assignments["the-ant-hill"]?.hex).toBe("#0ae6e2");
+    expect(next.assignments["the-ant-hill"]?.source).toBe("user");
+    expect(next.assignments["the-mountain"]).toBeUndefined();
+    expect(next.assignments["anthill-pulse"]).toBeUndefined();
+  });
+
+  test("a user override beats an auto donor even if the auto folder is heavier", () => {
+    const seeded: RepoColorsSettings = {
+      ...empty,
+      assignments: {
+        "the-mountain": { repoKey: "the-mountain", hex: "#5f7f2a", slot: 0, source: "auto" },
+        "anthill-pulse": { repoKey: "anthill-pulse", hex: "#10d2f9", slot: null, source: "user" },
+      },
+    };
+    const aliases = [
+      { folderKey: "the-mountain", originKey: "the-ant-hill" },
+      { folderKey: "the-mountain", originKey: "the-ant-hill" },
+      { folderKey: "anthill-pulse", originKey: "the-ant-hill" },
+    ];
+    expect(rebaseAssignmentsOntoOriginKeys(seeded, aliases).assignments["the-ant-hill"]?.hex)
+      .toBe("#10d2f9");
+  });
+
+  test("an origin key that already exists is left alone; donor folder keys still drop", () => {
+    const seeded: RepoColorsSettings = {
+      ...empty,
+      assignments: {
+        "the-ant-hill": { repoKey: "the-ant-hill", hex: "#2e66a8", slot: 1, source: "user" },
+        "the-mountain": { repoKey: "the-mountain", hex: "#0ae6e2", slot: null, source: "user" },
+      },
+    };
+    const next = rebaseAssignmentsOntoOriginKeys(seeded, [
+      { folderKey: "the-mountain", originKey: "the-ant-hill" },
+    ]);
+    expect(next.assignments["the-ant-hill"]?.hex).toBe("#2e66a8");
+    expect(next.assignments["the-mountain"]).toBeUndefined();
+  });
+
+  test("a folder assignment with no live alias stays — it will render as not on the board", () => {
+    const seeded: RepoColorsSettings = {
+      ...empty,
+      assignments: {
+        "job-bored": { repoKey: "job-bored", hex: "#e24677", slot: null, source: "user" },
+      },
+    };
+    const next = rebaseAssignmentsOntoOriginKeys(seeded, [
+      { folderKey: "the-mountain", originKey: "the-ant-hill" },
+    ]);
+    expect(next.assignments["job-bored"]?.hex).toBe("#e24677");
   });
 });
 
@@ -446,6 +577,22 @@ describe("repoColorDiscovery", () => {
     expect(forward.workspaces["WS-1"]).toBe("alpha");
     expect(backward.workspaces["WS-1"]).toBe("alpha");
   });
+
+  test("subjects that carry both keys emit aliases; liveKeys match repoKeys", () => {
+    const discovery = repoColorDiscovery([
+      { repoKey: "the-ant-hill", folderKey: "the-mountain" },
+      { repoKey: "the-ant-hill", folderKey: "the-mountain" },
+      { repoKey: "the-ant-hill", folderKey: "anthill-pulse" },
+      { repoKey: "formic" },
+    ]);
+    expect(discovery.liveKeys).toEqual(["formic", "the-ant-hill"]);
+    expect(discovery.liveKeys).toEqual(discovery.repoKeys);
+    expect(discovery.aliases).toEqual([
+      { folderKey: "the-mountain", originKey: "the-ant-hill" },
+      { folderKey: "the-mountain", originKey: "the-ant-hill" },
+      { folderKey: "anthill-pulse", originKey: "the-ant-hill" },
+    ]);
+  });
 });
 
 describe("JsonRepoColorsStore", () => {
@@ -511,8 +658,10 @@ describe("JsonRepoColorsStore", () => {
 describe("/api/repo-colors", () => {
   const discovery = {
     repoKeys: ["formic", "the-mountain"],
+    liveKeys: ["formic", "the-mountain"],
     names: { formic: "formic", "the-mountain": "the-mountain" },
     workspaces: { "WS-1": "the-mountain", "WS-2": "formic" },
+    aliases: [] as { folderKey: string; originKey: string }[],
   };
 
   async function subject(fanOut?: (writes: readonly { workspaceId: string; hex: string }[]) => void) {
@@ -533,6 +682,29 @@ describe("/api/repo-colors", () => {
       repoKey: "the-mountain",
     });
     expect(body.repoNames).toEqual(discovery.names);
+    expect(body.liveKeys).toEqual(["formic", "the-mountain"]);
+  });
+
+  test("GET reports liveKeys separately from persisted assignments", async () => {
+    const store = await JsonRepoColorsStore.open("colors.json", memorySettingsFiles());
+    await store.ensure(["cooper-scheduler", "the-mountain"]);
+    const response = await handleRepoColorsRequest(new Request("http://127.0.0.1:4701/api/repo-colors"), store, {
+      discover: () => ({
+        repoKeys: ["the-ant-hill"],
+        liveKeys: ["the-ant-hill"],
+        names: { "the-ant-hill": "the-ant-hill" },
+        workspaces: {},
+        aliases: [{ folderKey: "the-mountain", originKey: "the-ant-hill" }],
+      }),
+    });
+    const body = await response.json() as {
+      liveKeys: string[];
+      settings: { assignments: Record<string, unknown> };
+    };
+    expect(body.liveKeys).toEqual(["the-ant-hill"]);
+    expect(body.settings.assignments["the-ant-hill"]).toBeTruthy();
+    expect(body.settings.assignments["the-mountain"]).toBeUndefined();
+    expect(body.settings.assignments["cooper-scheduler"]).toBeTruthy(); // persisted, not live
   });
 
   test("GET fans out to repo-MAPPED workspaces only", async () => {
@@ -624,6 +796,37 @@ describe("/api/repo-colors", () => {
    and none of them are exercised by calling the handler by hand.
    ------------------------------------------------------------------------ */
 
+describe("discoverRepoColors", () => {
+  test("two clones of the-ant-hill.git discover as one live key", () => {
+    const snapshot = {
+      ...emptySnapshot(),
+      programs: [
+        {
+          id: "a", name: "the-ant-hill",
+          agents: [{
+            id: "1", repo: { repoName: "the-ant-hill", repoKey: "6wvl9e", worktreePath: "/Users/e/Developer/the-mountain", ephemeral: false },
+            target: { workspaceId: "WS-1" },
+          }],
+        },
+        {
+          id: "b", name: "the-ant-hill",
+          agents: [{
+            id: "2", repo: { repoName: "the-ant-hill", repoKey: "6wvl9e", worktreePath: "/Users/e/Developer/anthill-pulse", ephemeral: false },
+            target: { workspaceId: "WS-2" },
+          }],
+        },
+      ],
+    };
+    const discovery = discoverRepoColors(snapshot as HubSnapshot, {
+      "/Users/e/Developer/the-mountain": "the-mountain",
+      "/Users/e/Developer/anthill-pulse": "anthill-pulse",
+    });
+    expect(discovery.repoKeys).toEqual(["the-ant-hill"]);
+    expect(discovery.names).toEqual({ "the-ant-hill": "the-ant-hill" });
+    expect(new Set(discovery.aliases.map((row) => row.originKey))).toEqual(new Set(["the-ant-hill"]));
+  });
+});
+
 describe("createMountainFetch wiring", () => {
   function board(agents: readonly Record<string, unknown>[]) {
     const snapshot = { ...emptySnapshot(), programs: [{ id: "p1", name: "p", agents: agents as never }] };
@@ -641,16 +844,12 @@ describe("createMountainFetch wiring", () => {
     return { fetch, writes };
   }
 
-  /* The route derives its key from this REAL path through the real git, so the
-     key is whatever this checkout is called — `the-mountain` here,
-     `the-ant-hill` on CI. Derived, never spelled: the checkout's name is not
-     one of this route's claims, and pinning it failed the first CI run.
-
-     Layering, not circularity: repoKeyForCwd's own correctness is pinned by
-     the fake-git and live tests above, so using it as the oracle here is the
-     unit under test (the ROUTE) being checked against a unit already proven. */
+  /* Discovery's live colour key is the snapshot's repoName (origin band), not a
+     git spawn against this checkout's folder. These fixtures pin `the-ant-hill`
+     because that is the origin this fleet prints. Folder git still runs on
+     `worktreePath` only as an alias for migrating old assignments. */
   const here = import.meta.dir;
-  const liveKey = repoKeyForCwd(here)!;
+  const liveKey = "the-ant-hill";
 
   test("a non-authoritative app never registers the process-wide cmux group mutator", async () => {
     resetRepoGroupRegistrationForTests();
@@ -702,23 +901,18 @@ describe("createMountainFetch wiring", () => {
   });
 
   test("GET /api/repo-colors reaches the handler and colours the live fleet", async () => {
-    /* The declared repoName is deliberately NOT the key: on this machine the
-       checkout is called `the-mountain` and the declared name is too, so the
-       two coincide and the map below reads the same in either direction. On CI
-       the key is `the-ant-hill`, which is what actually proves the DIRECTION —
-       `repoNames` maps a printed name to a canonical repoKey, because the
-       browser cannot run `git rev-parse` and has only the name to ask about
-       (see setRepoColors in app.js). */
+    /* The colour key IS the printed origin name. The board joins on
+       repoName because a browser cannot run git; discovery now uses that
+       same string so `repoNames` is origin → origin (see setRepoColors). */
     const { fetch, writes } = board([{
       id: "a1",
-      repo: { repoKey: "hash", repoName: "the-mountain", worktreePath: here, ephemeral: false },
+      repo: { repoKey: "hash", repoName: "the-ant-hill", worktreePath: here, ephemeral: false },
       target: { resolution: "exact", workspaceId: "WS-LIVE" },
     }]);
     const body = await (await fetch(new Request(`${ORIGIN}/api/repo-colors`))).json() as any;
     expect(body.ok).toBe(true);
-    expect(liveKey).toBeTruthy();
     expect(Object.keys(body.settings.assignments)).toEqual([liveKey]);
-    expect(body.repoNames).toEqual({ "the-mountain": liveKey });
+    expect(body.repoNames).toEqual({ "the-ant-hill": liveKey });
     expect(body.workspaces["WS-LIVE"].repoKey).toBe(liveKey);
     expect(writes).toEqual([{ workspaceId: "WS-LIVE", hex: body.settings.assignments[liveKey].hex }]);
     fetch.dispose();
@@ -727,7 +921,7 @@ describe("createMountainFetch wiring", () => {
   test("an agent with no repository, and one with no workspace, are both left alone", async () => {
     const { fetch, writes } = board([
       { id: "a1", target: { resolution: "none" } },
-      { id: "a2", repo: { repoKey: "h", repoName: "the-mountain", worktreePath: here, ephemeral: false }, target: { resolution: "none" } },
+      { id: "a2", repo: { repoKey: "h", repoName: "the-ant-hill", worktreePath: here, ephemeral: false }, target: { resolution: "none" } },
     ]);
     const body = await (await fetch(new Request(`${ORIGIN}/api/repo-colors`))).json() as any;
     expect(Object.keys(body.settings.assignments)).toEqual([liveKey]);
@@ -741,17 +935,17 @@ describe("createMountainFetch wiring", () => {
   test("PUT reaches the handler through the same registration", async () => {
     const { fetch } = board([{
       id: "a1",
-      repo: { repoKey: "h", repoName: "the-mountain", worktreePath: here, ephemeral: false },
+      repo: { repoKey: "h", repoName: "the-ant-hill", worktreePath: here, ephemeral: false },
       target: { resolution: "exact", workspaceId: "WS-LIVE" },
     }]);
-    const response = await fetch(new Request(`${ORIGIN}/api/repo-colors/the-mountain`, {
+    const response = await fetch(new Request(`${ORIGIN}/api/repo-colors/the-ant-hill`, {
       method: "PUT",
       headers: { origin: ORIGIN, "content-type": "application/json" },
       body: JSON.stringify({ hex: "#0E9494" }),
     }));
     const body = await response.json() as any;
     expect(response.status).toBe(200);
-    expect(body.settings.assignments["the-mountain"]).toMatchObject({ hex: "#0e9494", source: "user" });
+    expect(body.settings.assignments["the-ant-hill"]).toMatchObject({ hex: "#0e9494", source: "user" });
     fetch.dispose();
   });
 });
