@@ -66,8 +66,10 @@ test("deploy checks the launchd target before verification or restart", () => {
   expect(clean).toBeGreaterThan(canonical);
   expect(fetch).toBeGreaterThan(clean);
   expect(exactMain).toBeGreaterThan(fetch);
+  expect(deploy.indexOf("git merge --ff-only origin/main")).toBeGreaterThan(fetch);
   expect(guard).toBeGreaterThan(exactMain);
-  expect(deploy.indexOf("bunx tsc")).toBeGreaterThan(guard);
+  expect(deploy.indexOf("bun install --frozen-lockfile")).toBeGreaterThan(guard);
+  expect(deploy.indexOf("bunx tsc")).toBeGreaterThan(deploy.indexOf("bun install --frozen-lockfile"));
   expect(deploy.indexOf("launchctl kickstart")).toBeGreaterThan(guard);
 });
 

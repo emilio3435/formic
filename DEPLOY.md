@@ -17,46 +17,46 @@ When in doubt, use the scripts — they encode every rule below.
 Rule: **never** launch anything on 4701 by hand. Previews always go through
 `anthill-preview.sh`, which picks a free 471x port and refuses 4701.
 
-## Deploy = merge on GitHub, then fast-forward production
+## Deploy = merge on GitHub, then run the deploy script
 
 `:4701` serves the **local files** of the dedicated
 `~/Developer/the-mountain-production` worktree. Merging a pull request changes
 GitHub's `main`; it does not update that local worktree or restart launchd.
+A green CI check is not a deploy.
 
 Keep the production worktree clean and permanently on `main`. Development stays
-in `~/Developer/the-mountain-main` or a lane worktree. The safe release sequence
-is:
+in `~/Developer/the-mountain-main` or a lane worktree. After the merge is
+authorized to go live, the safe release command is:
 
 ```bash
-# 1. Inspect before changing the production checkout.
-git -C ~/Developer/the-mountain-production status --short --branch
-git -C ~/Developer/the-mountain-production branch --show-current
-
-# 2. Fetch and fast-forward to the exact GitHub main commit.
-git -C ~/Developer/the-mountain-production \
-  fetch origin main:refs/remotes/origin/main
-git -C ~/Developer/the-mountain-production merge --ff-only origin/main
-test "$(git -C ~/Developer/the-mountain-production rev-parse HEAD)" = \
-  "$(git -C ~/Developer/the-mountain-production rev-parse origin/main)"
-
-# 3. Install the lockfile state, verify, restart, and health-check.
 cd ~/Developer/the-mountain-production
-bun install --frozen-lockfile
 bash scripts/anthill-deploy.sh
 ```
 
-After a UI deploy, open <http://127.0.0.1:4701>, confirm the intended change is
-visible, and capture screenshot evidence. A green health endpoint proves the
-server answered; it does not prove the reskin or other visual change rendered.
+The script fetches `origin/main`, then `git merge --ff-only origin/main` when
+this checkout is strictly behind and clean, runs `bun install --frozen-lockfile`,
+typechecks, runs hermetic then local-evidence gates, restarts launchd, and waits
+~45 seconds for `/api/health`. It refuses a dirty tree, a diverged HEAD, or a
+hermetic test failure. Inspect first if you want:
+
+```bash
+git -C ~/Developer/the-mountain-production status --short --branch
+```
+
+After a UI deploy, hard-refresh <http://127.0.0.1:4701>, confirm the intended
+change is visible (the script prints the live `ah-tXX` cache-bust token), and
+capture screenshot evidence. A green health endpoint proves the server
+answered; it does not prove the reskin rendered.
 
 Rules the deploy script enforces so you don't have to remember them:
 - Deploys must run from `~/Developer/the-mountain-production`.
 - Deploy worktree must be on `main`.
-- The worktree must be clean and its `HEAD` must match a freshly fetched `origin/main`.
+- The worktree must be clean. If it is strictly behind `origin/main`, the script fast-forwards; if it has diverged or is ahead, it aborts.
 - The LaunchAgent `WorkingDirectory` and server entry must point back at that exact worktree.
+- **`bun install --frozen-lockfile` runs before tests.** A lockfile mismatch aborts.
 - **Red `tsc` or a red hermetic suite (`bun run test:ci`) aborts the deploy** — broken code never reaches :4701, and no flag overrides that.
-- **The four local-evidence gates run as their own phase and also block** — `cross-source-token-agreement`, `physical-bounds`, `published-identities`, `reference-docs` (the list lives in `scripts/ci-tests.sh`; `--local-only` prints it). They read the running board, real burn history and local branches, and fail rather than skip when that evidence is missing. A red here has two meanings the script cannot tell apart: a real disagreement is a reason not to deploy, a **quiet fleet with too little recorded usage to compare is not**. Confirm which by running one directly (`bun test tests/cross-source-token-agreement.test.ts`); if it is the quiet fleet, deploy with `ANTHILL_DEPLOY_QUIET_FLEET=1 bash scripts/anthill-deploy.sh`, which prints exactly what went unverified.
-- Restart via `launchctl kickstart -k gui/$UID/ai.imaginethat.anthill`, then health-check.
+- **The four local-evidence gates run as their own phase and also block** — `cross-source-token-agreement`, `physical-bounds`, `published-identities`, `reference-docs` (the list lives in `scripts/ci-tests.sh`; `--local-only` prints it). They read the running board, real burn history and local branches, and fail rather than skip when that evidence is missing. A red here has two meanings the script cannot tell apart: a real disagreement is a reason not to deploy, a **quiet fleet with too little recorded usage to compare is not**. Confirm which by running one directly (`bun test tests/cross-source-token-agreement.test.ts`); if it is the quiet fleet (OpenBurnBar canary), deploy with `ANTHILL_DEPLOY_QUIET_FLEET=1 bash scripts/anthill-deploy.sh`, which prints exactly what went unverified.
+- Restart via `launchctl kickstart -k gui/$UID/ai.imaginethat.anthill`, then health-check for ~45 seconds (override with `ANTHILL_DEPLOY_HEALTH_TRIES`). Cold start can miss a 10-second window.
 - On an unhealthy restart it fails loudly and points to revert-through-main recovery.
 
 If the target guard finds a missing or stale LaunchAgent, it exits before tests

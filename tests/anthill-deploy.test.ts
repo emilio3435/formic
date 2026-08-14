@@ -90,12 +90,17 @@ describe("Ant Hill deploy health check", () => {
     const output = `${result.stdout.toString()}${result.stderr.toString()}`;
 
     expect(result.exitCode).toBe(1);
+    const curlCalls = readFileSync(curlLog, "utf8").trim().split("\n").filter(Boolean);
     expect(readFileSync(curlLog, "utf8")).toContain("http://127.0.0.1:4701/api/health");
+    /* Cold start can miss a 10-second window (2026-08-13: launchd was up,
+       /api/health was 200 a few seconds later). Wait ~45s before declaring
+       UNHEALTHY. Fake sleep is instant, so this is still a cheap test. */
+    expect(curlCalls.length).toBe(45);
     expect(output).toContain("UNHEALTHY: :4701 did not report a fresh snapshot after restart.");
     expect(output).toContain("Recovery: revert the unhealthy change through GitHub main");
     expect(output).not.toContain("reset --hard");
     expect(output).not.toContain("HEALTHY: :4701 answered");
-  });
+  }, 20_000);
 });
 
 /* The deploy gate ran the whole suite, which includes four files that assert
@@ -110,7 +115,20 @@ describe("Ant Hill deploy health check", () => {
    never deployable — and turns the evidence gates into a decision the operator
    has to make out loud, with a named flag, rather than a wall. */
 describe("Ant Hill deploy gate", () => {
-  interface Lab { root: string; scripts: string; env: Record<string, string>; launchLog: string }
+  interface Lab {
+    root: string;
+    scripts: string;
+    env: Record<string, string>;
+    launchLog: string;
+    bunLog: string;
+  }
+
+  function gitAt(root: string, ...args: string[]): void {
+    expect(Bun.spawnSync(
+      ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", ...args],
+      { cwd: root, env: { PATH: "/usr/bin:/bin" } },
+    ).exitCode).toBe(0);
+  }
 
   function lab(name: string): Lab {
     const home = join(SCRATCH_ROOT, name, "home");
@@ -118,16 +136,21 @@ describe("Ant Hill deploy gate", () => {
     const scripts = join(root, "scripts");
     const fakeBin = join(root, "fake-bin");
     const launchLog = join(root, "launchctl.log");
+    const bunLog = join(root, "bun.log");
     mkdirSync(scripts, { recursive: true });
     mkdirSync(fakeBin, { recursive: true });
+    mkdirSync(join(root, "src", "web"), { recursive: true });
     for (const script of ["anthill-deploy.sh", "anthill-deploy-target.sh", "ci-tests.sh"]) {
       copyFileSync(join(PROJECT_ROOT, "scripts", script), join(scripts, script));
     }
+    writeFileSync(join(root, "src/web/index.html"), `<script src="app.js?v=ah-t99"></script>\n`);
     executable(join(fakeBin, "bunx"), "#!/bin/bash\nexit 0\n");
     /* Answers as the real bun would for the two phases the gate now runs, so
        the test can make the hermetic suite and the evidence gates disagree —
        which is the whole point of the split. */
     executable(join(fakeBin, "bun"), `#!/bin/bash
+printf '%s\\n' "$*" >> "${bunLog}"
+if [ "$1" = "install" ]; then exit \${INSTALL_EXIT:-0}; fi
 if [ "$1" = "run" ] && [ "$2" = "test:ci" ]; then exit \${CI_EXIT:-0}; fi
 if [ "$1" = "test" ]; then exit \${LOCAL_EXIT:-0}; fi
 exit 0
@@ -136,25 +159,21 @@ exit 0
     executable(join(fakeBin, "sleep"), "#!/bin/bash\nexit 0\n");
     /* A healthy board, so nothing downstream of the gate can be what fails. */
     executable(join(fakeBin, "curl"), "#!/bin/bash\nprintf '200'\n");
-    const git = (...args: string[]) => expect(Bun.spawnSync(
-      ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", ...args],
-      { cwd: root, env: { PATH: "/usr/bin:/bin" } },
-    ).exitCode).toBe(0);
-    git("init", "-q", "-b", "main");
+    gitAt(root, "init", "-q", "-b", "main");
     writeFileSync(join(root, "fixture"), "fixture\n");
-    git("add", ".");
-    git("commit", "-qm", "fixture");
+    gitAt(root, "add", ".");
+    gitAt(root, "commit", "-qm", "fixture");
     const remote = join(SCRATCH_ROOT, name, "remote.git");
     expect(Bun.spawnSync(["git", "init", "-q", "--bare", remote], { env: { PATH: "/usr/bin:/bin" } }).exitCode).toBe(0);
-    git("remote", "add", "origin", remote);
-    git("push", "-q", "-u", "origin", "main");
+    gitAt(root, "remote", "add", "origin", remote);
+    gitAt(root, "push", "-q", "-u", "origin", "main");
     mkdirSync(join(home, "Library", "LaunchAgents"), { recursive: true });
     writeFileSync(join(home, "Library", "LaunchAgents", "ai.imaginethat.anthill.plist"), `<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict>
 <key>WorkingDirectory</key><string>${root}</string>
 <key>ProgramArguments</key><array><string>bun</string><string>${root}/src/server/index.ts</string></array>
 </dict></plist>`);
-    return { root, scripts, launchLog, env: { HOME: home, PATH: `${fakeBin}:/usr/bin:/bin` } };
+    return { root, scripts, launchLog, bunLog, env: { HOME: home, PATH: `${fakeBin}:/usr/bin:/bin` } };
   }
 
   function deploy(it: Lab, env: Record<string, string> = {}) {
@@ -203,5 +222,70 @@ exit 0
     const run = deploy(it, { CI_EXIT: "0", LOCAL_EXIT: "0" });
     expect(run.restarted).toBe(true);
     expect(run.output).not.toContain("OVERRIDDEN");
+  });
+
+  test("a green deploy installs the lockfile and prints the live cache-bust token", () => {
+    const it = lab("install-and-bust");
+    const run = deploy(it, { CI_EXIT: "0", LOCAL_EXIT: "0" });
+    expect(run.exitCode).toBe(0);
+    expect(run.restarted).toBe(true);
+    expect(readFileSync(it.bunLog, "utf8")).toContain("install --frozen-lockfile");
+    expect(run.output).toContain("ah-t99");
+  });
+
+  test("a red lockfile install aborts before restart", () => {
+    const it = lab("install-red");
+    const run = deploy(it, { INSTALL_EXIT: "1", CI_EXIT: "0", LOCAL_EXIT: "0" });
+    expect(run.exitCode).toBe(1);
+    expect(run.restarted).toBe(false);
+    expect(run.output).toContain("bun install FAILED");
+  });
+
+  test("behind origin/main: fast-forwards, then deploys that commit", () => {
+    const it = lab("behind-ff");
+    gitAt(it.root, "commit", "--allow-empty", "-qm", "on origin");
+    gitAt(it.root, "push", "-q", "origin", "main");
+    gitAt(it.root, "reset", "--hard", "HEAD~1");
+    const before = Bun.spawnSync(["git", "rev-parse", "HEAD"], {
+      cwd: it.root,
+      stdout: "pipe",
+    }).stdout.toString().trim();
+    const origin = Bun.spawnSync(["git", "rev-parse", "origin/main"], {
+      cwd: it.root,
+      stdout: "pipe",
+    }).stdout.toString().trim();
+    expect(before).not.toBe(origin);
+
+    const run = deploy(it, { CI_EXIT: "0", LOCAL_EXIT: "0" });
+    expect(run.exitCode).toBe(0);
+    expect(run.restarted).toBe(true);
+    expect(run.output).toContain("fast-forward");
+    const after = Bun.spawnSync(["git", "rev-parse", "HEAD"], {
+      cwd: it.root,
+      stdout: "pipe",
+    }).stdout.toString().trim();
+    expect(after).toBe(origin);
+  });
+
+  test("diverged from origin/main: refuses, restarts nothing, leaves HEAD", () => {
+    const it = lab("diverged");
+    gitAt(it.root, "commit", "--allow-empty", "-qm", "on origin");
+    gitAt(it.root, "push", "-q", "origin", "main");
+    gitAt(it.root, "reset", "--hard", "HEAD~1");
+    gitAt(it.root, "commit", "--allow-empty", "-qm", "local only");
+    const before = Bun.spawnSync(["git", "rev-parse", "HEAD"], {
+      cwd: it.root,
+      stdout: "pipe",
+    }).stdout.toString().trim();
+
+    const run = deploy(it, { CI_EXIT: "0", LOCAL_EXIT: "0" });
+    expect(run.exitCode).toBe(1);
+    expect(run.restarted).toBe(false);
+    expect(run.output).toContain("diverged");
+    const after = Bun.spawnSync(["git", "rev-parse", "HEAD"], {
+      cwd: it.root,
+      stdout: "pipe",
+    }).stdout.toString().trim();
+    expect(after).toBe(before);
   });
 });

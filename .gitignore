@@ -10,3 +10,4 @@ __pycache__/
 config/programs.json
 .lane-evidence/
 LANE-REPORT-*.md
+.formic-visual-pass/

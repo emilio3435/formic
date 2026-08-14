@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
-# Safe deploy of the current `main` worktree to production :4701.
+# Safe deploy of GitHub `main` to production :4701.
 #
 # Why this exists: deploys were done by hand (cherry-pick -> maybe run tests ->
 # restart), which once let a RED commit through. This script makes the safe path
 # the only path:
 #   - refuses to run unless this worktree is on `main`
-#   - requires a clean tree at the freshly-fetched `origin/main` commit
+#   - requires a clean tree (unrelated dirty work is never swept)
+#   - fetches origin/main and fast-forwards when this checkout is strictly behind
+#   - refuses if HEAD has diverged from, or is ahead of, origin/main
 #   - verifies launchd points back at this exact checkout
-#   - BLOCKS on a red typecheck or test suite (never deploys broken code)
-#   - restarts the launchd service and health-checks :4701
+#   - installs the lockfile, then BLOCKS on a red typecheck or test suite
+#   - restarts the launchd service and health-checks :4701 (~45s)
 #   - leaves the checkout unchanged and points to safe recovery if unhealthy
 #
-# It does NOT commit or merge for you - land your change on `main` first
-# (cherry-pick / merge), then run this to verify + go live.
+# A green GitHub merge is not a deploy. :4701 serves the local files of
+# ~/Developer/the-mountain-production until this script restarts launchd.
 #
 # Usage:  bash scripts/anthill-deploy.sh
+# Quiet fleet (OpenBurnBar canary only):  ANTHILL_DEPLOY_QUIET_FLEET=1 bash scripts/anthill-deploy.sh
 set -euo pipefail
 
 LABEL="ai.imaginethat.anthill"
@@ -46,16 +49,32 @@ git fetch origin main:refs/remotes/origin/main || { echo "fetch FAILED - not dep
 HEAD_FULL="$(git rev-parse HEAD)"
 ORIGIN_MAIN="$(git rev-parse origin/main)"
 if [[ "${HEAD_FULL}" != "${ORIGIN_MAIN}" ]]; then
-  echo "Deploy HEAD must exactly match origin/main. Aborting." >&2
-  echo "  HEAD:        ${HEAD_FULL}" >&2
-  echo "  origin/main: ${ORIGIN_MAIN}" >&2
-  exit 1
+  if git merge-base --is-ancestor HEAD origin/main; then
+    echo "-> fast-forward to origin/main"
+    git merge --ff-only origin/main || { echo "fast-forward FAILED - not deploying." >&2; exit 1; }
+    HEAD_FULL="$(git rev-parse HEAD)"
+  elif git merge-base --is-ancestor origin/main HEAD; then
+    echo "Deploy HEAD is ahead of origin/main. Aborting." >&2
+    echo "  HEAD:        ${HEAD_FULL}" >&2
+    echo "  origin/main: ${ORIGIN_MAIN}" >&2
+    echo "Production must not carry unpushed commits. Do not reset --hard." >&2
+    exit 1
+  else
+    echo "Deploy HEAD has diverged from origin/main. Aborting." >&2
+    echo "  HEAD:        ${HEAD_FULL}" >&2
+    echo "  origin/main: ${ORIGIN_MAIN}" >&2
+    echo "Preserve local work. Do not reset --hard." >&2
+    exit 1
+  fi
 fi
 
 HEAD_SHA="$(git rev-parse --short HEAD)"
 echo "Deploy candidate: $ROOT @ $HEAD_SHA (main) -> :$PROD_PORT"
 
 ANTHILL_REPO="$ROOT" bash "$ROOT/scripts/anthill-deploy-target.sh"
+
+echo "-> bun install --frozen-lockfile"
+bun install --frozen-lockfile || { echo "bun install FAILED - not deploying." >&2; exit 1; }
 
 echo "-> typecheck"
 bunx tsc --noEmit || { echo "tsc FAILED - not deploying." >&2; exit 1; }
@@ -98,8 +117,8 @@ else
     echo
     echo "If they are red because a REGRESSION reached them, fix it — that is"
     echo "what they are for. If they are red because the fleet is quiet and there"
-    echo "is not enough recorded usage to compare, deploy with:"
-    echo "  ANTHILL_DEPLOY_QUIET_FLEET=1 bash scripts/anthill-deploy.sh"
+    echo "is not enough recorded usage to compare (the OpenBurnBar canary), deploy with:"
+    echo "  ANTHILL_DEPLOY_QUIET_FLEET=1 bash ${CANONICAL_ROOT}/scripts/anthill-deploy.sh"
     echo "Check which it is by running one directly, e.g."
     echo "  bun test ${LOCAL_ONLY[0]:-tests/cross-source-token-agreement.test.ts}"
   } >&2
@@ -110,11 +129,17 @@ echo "-> restart $LABEL"
 launchctl kickstart -k "gui/$(id -u)/$LABEL"
 
 echo "-> health check :$PROD_PORT"
-for _ in $(seq 1 10); do
+HEALTH_TRIES="${ANTHILL_DEPLOY_HEALTH_TRIES:-45}"
+for _ in $(seq 1 "$HEALTH_TRIES"); do
   sleep 1
   code="$(curl -sS --max-time 2 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PROD_PORT/api/health" || true)"
   if [ "$code" = "200" ]; then
     echo "HEALTHY: :$PROD_PORT answered after restart requested at $HEAD_SHA."
+    echo "LIVE: $HEAD_SHA on :$PROD_PORT (a green GitHub merge is not a deploy)."
+    BUST="$(awk 'match($0, /ah-t[0-9]+/) { print substr($0, RSTART, RLENGTH); exit }' "$ROOT/src/web/index.html" 2>/dev/null || true)"
+    if [ -n "$BUST" ]; then
+      echo "cache-bust: $BUST. Hard-refresh the board. Proof: curl -sS http://127.0.0.1:$PROD_PORT/ | grep $BUST"
+    fi
     exit 0
   fi
 done
