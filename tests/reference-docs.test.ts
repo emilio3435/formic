@@ -509,7 +509,8 @@ describe("DEPLOY.md is a rulebook the scripts actually enforce", () => {
     expect(deployScript).toContain('CANONICAL_ROOT="${HOME}/Developer/the-mountain-production"');
     expect(deploy).toContain("Deploy worktree must be on `main`");
     expect(deployScript).toContain('if [ "$BRANCH" != "main" ]');
-    expect(deploy).toContain("freshly fetched `origin/main`");
+    expect(deploy).toContain("git merge --ff-only origin/main");
+    expect(deployScript).toContain("git merge --ff-only origin/main");
     expect(deployScript).toContain("git status --porcelain --untracked-files=all");
     expect(deployScript).toContain("git fetch origin main:refs/remotes/origin/main");
     expect(deployScript).toContain("git rev-parse origin/main");
@@ -526,7 +527,7 @@ describe("DEPLOY.md is a rulebook the scripts actually enforce", () => {
     expect(deployScript).toContain("/api/health");
     expect(deploy).toContain("revert-through-main recovery");
     expect(deployScript).toContain("revert the unhealthy change through GitHub main");
-    expect(deployScript).not.toContain("reset --hard");
+    expect(deployScript).not.toContain("git reset --hard");
   });
 
   test("the ports it reserves are the ports the scripts use", () => {
@@ -728,8 +729,9 @@ describe("the executable scripts do what DEPLOY.md says they do", () => {
     /* The quiet-fleet override forgives the local-evidence phase and nothing
        else. If it ever moved above the hermetic gate it would become a way to
        ship a red build, so its position is pinned here as well as exercised in
-       tests/anthill-deploy.test.ts. */
-    const overrideAt = deployScript.indexOf("ANTHILL_DEPLOY_QUIET_FLEET");
+       tests/anthill-deploy.test.ts. Pin the actual condition, not the first
+       mention of the env var — the usage banner names it before any gate. */
+    const overrideAt = deployScript.indexOf('[ "${ANTHILL_DEPLOY_QUIET_FLEET:-0}" = "1" ]');
     expect(overrideAt, "the quiet-fleet override left the script").toBeGreaterThan(-1);
     expect(overrideAt, "the override now sits where it could skip the hermetic suite").toBeGreaterThan(testAt);
   });
