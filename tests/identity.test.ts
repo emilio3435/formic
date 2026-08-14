@@ -120,6 +120,36 @@ describe("TTY and open-session identity evidence", () => {
       .toBe(Math.floor(Date.parse("Wed Aug  5 16:36:08 2026") / 1_000));
   });
 
+  test("the open-file probe never asks the resolver to name a socket peer", async () => {
+    /* THE DEFECT, 2026-08-13. Identity spent ~9.3s of the board's 10s deadline,
+       and 4.7s of that was one lsof call. lsof reverse-DNSes the remote address
+       of every socket it reports unless told not to, and an agent process holds
+       many sockets to API endpoints whose peers resolve slowly or never.
+
+       Measured on this fleet against one socket-heavy daemon: 20.066s without
+       `-n`, 0.055s with it. 365x. At 0% CPU for those 20 seconds — blocked on
+       the resolver, not working.
+
+       It buys nothing: this probe reads `-Fn` output for session FILE PATHS, so
+       a hostname can never match one. And it costs the operator their controls,
+       because identity gates Send and Interrupt fleet-wide — when this probe
+       runs long the board withdraws every terminal target.
+
+       Asserted on the flags rather than on a duration, because a timing test
+       would pass on any machine whose resolver happens to be fast. */
+    const runner = new SequenceRunner([
+      { exitCode: 0, stdout: fixture("process-table.txt"), stderr: "", timedOut: false },
+      { exitCode: 0, stdout: fixture("open-files.txt"), stderr: "", timedOut: false },
+    ]);
+
+    await enrichCmuxIdentity([surface], [agent], runner);
+
+    const lsof = runner.commands.find((command) => command[0]?.endsWith("lsof"));
+    expect(lsof, "the open-file probe did not run").toBeDefined();
+    expect(lsof, "lsof without -n reverse-DNSes every socket peer it reports").toContain("-n");
+    expect(lsof, "lsof without -P looks every port up in /etc/services").toContain("-P");
+  });
+
   test("lsof targets only recognized agent processes while command hints still inspect the whole tty", () => {
     expect(isRecognizedAgentProcess("-zsh")).toBeFalse();
     expect(isRecognizedAgentProcess("/usr/bin/login -pflq user /bin/zsh")).toBeFalse();
@@ -161,7 +191,7 @@ describe("TTY and open-session identity evidence", () => {
     const enriched = await enrichCmuxIdentity([surface], [agent], runner);
 
     expect(enriched.errors).toEqual([]);
-    expect(runner.commands[1]).toEqual(["/usr/sbin/lsof", "-a", "-p", "4242", "-Fn"]);
+    expect(runner.commands[1]).toEqual(["/usr/sbin/lsof", "-n", "-P", "-a", "-p", "4242", "-Fn"]);
     expect(enriched.value[0]?.sourceSessionIds).toEqual([
       "019f86c4-1558-7000-aeb8-26e2cfd0e8ec",
     ]);
@@ -270,7 +300,7 @@ describe("TTY and open-session identity evidence", () => {
     const enriched = await enrichCmuxIdentity([surface], [agent], runner);
 
     expect(enriched.errors).toEqual([]);
-    expect(runner.commands[1]).toEqual(["/usr/sbin/lsof", "-a", "-p", "202", "-Fn"]);
+    expect(runner.commands[1]).toEqual(["/usr/sbin/lsof", "-n", "-P", "-a", "-p", "202", "-Fn"]);
     expect(enriched.value[0]?.sourceSessionIds).toEqual([
       "019f86c4-1558-7000-aeb8-26e2cfd0e8ec",
     ]);
@@ -757,7 +787,7 @@ describe("TTY and open-session identity evidence", () => {
       "system.top",
       JSON.stringify({ all_windows: true, include_processes: true }),
     ]);
-    expect(runner.commands[2]).toEqual(["/usr/sbin/lsof", "-a", "-p", "202", "-Fn"]);
+    expect(runner.commands[2]).toEqual(["/usr/sbin/lsof", "-n", "-P", "-a", "-p", "202", "-Fn"]);
     expect(enriched.value[0]?.sourceSessionIds).toEqual([parent.sourceSessionId]);
     expect(enriched.value[0]?.identityTrace).toMatchObject({
       outcome: "open-file-match",

@@ -589,8 +589,26 @@ export async function enrichCmuxIdentity(
   if (pids.length > 0) {
     // Absolute path: Bun/server PATH can omit /usr/sbin, which made identity
     // enrichment fail-closed and left agents partially/quarantined.
+
+    /* `-n` is why this probe stopped spending the board's whole deadline.
+       Without it lsof reverse-DNSes the remote address of every socket it
+       reports, and an agent process holds many sockets to API endpoints whose
+       peers resolve slowly or not at all. Measured on this fleet 2026-08-13:
+       the same call against one socket-heavy daemon took 20.066s without `-n`
+       and 0.055s with it — 365x, at 0% CPU for those 20 seconds, because it was
+       blocked on the resolver rather than working.
+
+       It is pure waste here in both directions: this probe reads `-Fn` output
+       for session FILE PATHS (`identityFromSessionPath`), so a hostname can
+       never match, and resolving one costs a network round trip inside a
+       10-second budget. `-P` skips the /etc/services port-name lookup for the
+       same reason.
+
+       Keep them. Identity gates Send and Interrupt fleet-wide, so when this
+       probe runs long the board withdraws every terminal target and the
+       operator's controls switch off. */
     const openFileStartedMs = Date.now();
-    const openFileResult = await runner.run(["/usr/sbin/lsof", "-a", "-p", pids.join(","), "-Fn"], 10_000);
+    const openFileResult = await runner.run(["/usr/sbin/lsof", "-n", "-P", "-a", "-p", pids.join(","), "-Fn"], 10_000);
     probeTimings.push({
       label: "lsof",
       elapsedMs: Date.now() - openFileStartedMs,
