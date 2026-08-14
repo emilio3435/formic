@@ -1,9 +1,13 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { PROVIDERS } from "../src/shared/types";
 import { HubState } from "../src/server/state";
-import type { HubCollectors } from "../src/server/state";
-import type { ArchiveStore, CommandRunner } from "../src/server/types";
+import type { HubCollectors, HubStateOptions } from "../src/server/state";
+import type { ArchiveStore, CollectedAgent, CommandRunner } from "../src/server/types";
 import type { HubSnapshot } from "../src/shared/types";
+import type { AckStore } from "../src/server/ack";
+import type { IdentityBindingStore } from "../src/server/identity-bindings";
+import type { ProcessWitnessStore } from "../src/server/process-witness";
+import { normalizeSettings } from "../src/server/settings";
 
 /* Entry 6 of docs/UNTESTED-PATHS-MAP.md — what every collector reports when the
    aggregate deadline fires.
@@ -51,6 +55,71 @@ function hub(collectors: Partial<HubCollectors>): HubState {
 }
 
 const refresh = (state: HubState): Promise<HubSnapshot> => state.refresh({ cmux: true });
+
+const source = (id: string, overrides: Partial<CollectedAgent> = {}): CollectedAgent => ({
+  id: `codex:${id}`,
+  provider: "codex" as const,
+  sourceSessionId: id,
+  displayName: id,
+  status: "waiting" as const,
+  statusReason: "Fixture completed collection.",
+  updatedAt: "2026-08-13T12:00:00.000Z",
+  tokens: { provenance: "unknown" as const },
+  artifacts: [],
+  gates: [],
+  ...overrides,
+});
+
+interface TailHubOptions extends HubStateOptions {
+  archiveStore?: ArchiveStore;
+  transcriptTailReader?: () => Promise<never>;
+}
+
+function tailHub(options: TailHubOptions = {}, agents = [source("tail-proof")]): HubState {
+  const { archiveStore: selectedArchive = archiveStore, ...stateOptions } = options;
+  const collectors: HubCollectors = {
+    sessions: async () => ({
+      ...empty(),
+      codex: { value: agents, errors: [] },
+    }),
+    cmux: async () => ({ value: [], errors: [] }),
+    notifications: async () => ({ value: [], errors: [] }),
+    enrichIdentity: async (surfaces) => ({
+      value: [...surfaces],
+      errors: [],
+      rosterComplete: true,
+    }),
+  };
+  return new HubState(runner, selectedArchive, [], {
+    collectors,
+    refreshAggregateTimeoutMs: 40,
+    ...stateOptions,
+  });
+}
+
+async function expectBoundedTail(
+  state: HubState,
+  pendingLabel: string,
+  expectedAgentId = "codex:tail-proof",
+): Promise<HubSnapshot> {
+  const logged = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const snapshot = await Promise.race([
+      refresh(state),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error(`refresh remained stuck in ${pendingLabel}`)), 250);
+      }),
+    ]);
+    expect(snapshot.programs.flatMap(({ agents }) => agents).map(({ id }) => id)).toContain(expectedAgentId);
+    const overrun = logged.mock.calls
+      .map((call) => String(call[0]))
+      .find((line) => line.includes("publishing tail exceeded"));
+    expect(overrun).toContain(`PENDING=[${pendingLabel}]`);
+    return snapshot;
+  } finally {
+    logged.mockRestore();
+  }
+}
 
 describe("when collection runs out of time the board says so", () => {
   test("a hung collector leaves no agents AND every source stale", async () => {
@@ -291,5 +360,156 @@ describe("a refresh the watchdog abandoned does not publish over its replacement
     await state.refresh();
 
     expect(idsOn(state)).toEqual(["codex:only"]);
+  });
+});
+
+describe("the publishing tail shares one bounded deadline", () => {
+  test("a stuck identity binding write cannot hold publication", async () => {
+    const bindingStore: IdentityBindingStore = {
+      get: () => undefined,
+      list: () => [],
+      put: async () => {},
+      putMany: () => never(),
+    };
+
+    await expectBoundedTail(tailHub({ bindingStore }), "identity binding persistence");
+  });
+
+  test("a stuck process witness write cannot hold publication", async () => {
+    const witnessStore: ProcessWitnessStore = {
+      get: () => undefined,
+      record: () => never(),
+    };
+
+    await expectBoundedTail(tailHub({ witnessStore }), "process witness persistence");
+  });
+
+  test("a stuck session history write cannot hold publication", async () => {
+    const hangingArchive: ArchiveStore = {
+      has: () => false,
+      archive: async () => {},
+      record: () => never(),
+    };
+
+    await expectBoundedTail(tailHub({ archiveStore: hangingArchive }), "session history persistence");
+  });
+
+  test("a stuck transcript read cannot hold publication or become a sender verdict", async () => {
+    const agents = [
+      source("sender", {
+        artifacts: [{ kind: "transcript", label: "Transcript", path: "/dev/null" }],
+      }),
+      source("recipient", {
+        lastUserMessage: "[from codex:sender run run-1] Hold publication only until the tail budget.",
+      }),
+    ];
+    const options: TailHubOptions = {
+      transcriptTailReader: () => never(),
+    };
+
+    const snapshot = await expectBoundedTail(
+      tailHub(options, agents),
+      "sender transcript tails",
+      "codex:recipient",
+    );
+    const recipient = snapshot.programs.flatMap(({ agents }) => agents)
+      .find(({ id }) => id === "codex:recipient");
+    expect("senderVerified" in (recipient ?? {})).toBeFalse();
+  });
+
+  test("a stuck acknowledgement reconciliation cannot hold publication", async () => {
+    const ackStore: AckStore = {
+      list: () => [],
+      get: () => undefined,
+      put: () => never(),
+      delete: () => never(),
+      reconcile: () => never(),
+    };
+
+    await expectBoundedTail(tailHub({ ackStore }), "acknowledgement reconciliation");
+  });
+
+  test("a healthy publishing tail emits no overrun line", async () => {
+    const logged = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await refresh(tailHub());
+
+      expect(logged.mock.calls
+        .map((call) => String(call[0]))
+        .filter((line) => line.includes("publishing tail exceeded"))).toEqual([]);
+    } finally {
+      logged.mockRestore();
+    }
+  });
+});
+
+describe("watchdog cancellation is not collector failure", () => {
+  test("the superseded pass observes abort while its healthy replacement publishes cleanly", async () => {
+    let nowMs = 1_000;
+    const clock = spyOn(Date, "now").mockImplementation(() => nowMs);
+    let first = true;
+    let cancelled = false;
+    let receivedSignal: AbortSignal | undefined;
+    const state = tailHub({
+      collectors: {
+        sessions: async (...args: unknown[]) => {
+          if (!first) return empty();
+          first = false;
+          receivedSignal = args.find((value): value is AbortSignal => value instanceof AbortSignal);
+          return new Promise<SessionsResult>((_resolve, reject) => {
+            receivedSignal?.addEventListener("abort", () => {
+              cancelled = true;
+              reject(new Error("superseded collection cancelled"));
+            }, { once: true });
+          });
+        },
+        cmux: async () => ({ value: [], errors: [] }),
+        notifications: async () => ({ value: [], errors: [] }),
+        enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+      },
+      refreshAggregateTimeoutMs: 600_000,
+    });
+    try {
+      const abandoned = state.refresh();
+      for (let turn = 0; turn < 5; turn += 1) await Promise.resolve();
+      nowMs += 13_000;
+
+      const replacement = await state.refresh();
+      await abandoned;
+
+      expect(receivedSignal).toBeDefined();
+      expect(receivedSignal?.aborted).toBeTrue();
+      expect(cancelled).toBeTrue();
+      expect(replacement.controlHealth.errors.join(" ")).not.toContain("superseded collection cancelled");
+    } finally {
+      clock.mockRestore();
+    }
+  });
+});
+
+describe("the derived control deadline is the collector container", () => {
+  test("the dead provider allowance cannot inflate a 10 second provider budget past its 10 second container", async () => {
+    let sidebarDeadlineMs: number | undefined;
+    const state = tailHub({
+      collectors: {
+        sessions: async () => empty(),
+        cmux: async () => ({ value: [], errors: [] }),
+        sidebar: async (...args: unknown[]) => {
+          const options = args.find((value) => value && typeof value === "object" && "deadlineMs" in value) as
+            | { deadlineMs: number }
+            | undefined;
+          sidebarDeadlineMs = options?.deadlineMs;
+          return { value: [], errors: [] };
+        },
+        notifications: async () => ({ value: [], errors: [] }),
+        enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+      },
+      refreshAggregateTimeoutMs: undefined,
+      settingsReader: () => ({ ...normalizeSettings(undefined), providerWaitMs: 10_000 }),
+    });
+
+    await refresh(state);
+
+    expect(sidebarDeadlineMs).toBe(10_000);
   });
 });

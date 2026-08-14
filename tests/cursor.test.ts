@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   collectCursorSessions,
+  cursorCacheEntryCountsForTests,
   fillCursorOccupancy,
   parseComposerHeaders,
   parseCursorChildSession,
@@ -675,6 +676,61 @@ describe("Cursor Agent persisted session truth", () => {
     expect(readCursorStoreEvidence(path).model).toBe("model-a");
     await utimes(path, new Date(), new Date(fixedTime.getTime() + 1_000));
     expect(readCursorStoreEvidence(path).model).toBe("model-b");
+  });
+
+  test("prunes retained Cursor cache entries that are outside the current scan", async () => {
+    const home = await setupGuiComposerHome({
+      composerData: { modelName: "composer-2.5-fast" },
+      trackingModel: "cursor-grok-4.6-high",
+    });
+    const globalStorage = join(home, "Library", "Application Support", "Cursor", "User", "globalStorage");
+    const staleComposerId = "b3e8c4d6-9d15-43e2-8b7e-0cb5dff5ae81";
+    const state = new Database(join(globalStorage, "state.vscdb"));
+    state.run("insert into cursorDiskKV(key, value) values (?, ?)", [
+      `composerData:${staleComposerId}`,
+      JSON.stringify({ modelConfig: { modelName: "stale-model" } }),
+    ]);
+    state.close();
+
+    const projectDirectory = join(home, ".cursor", "projects", "Users-me-elio-intelligence-suite");
+    const sessionDirectory = join(home, ".cursor", "chats", "workspace-hash", SESSION_ID);
+    const transcriptDirectory = join(projectDirectory, "agent-transcripts", SESSION_ID);
+    await mkdir(sessionDirectory, { recursive: true });
+    await mkdir(transcriptDirectory, { recursive: true });
+    await writeFile(join(sessionDirectory, "meta.json"), JSON.stringify({
+      createdAtMs: 1784691200000,
+      updatedAtMs: 1784691238958,
+      cwd: "/Users/me/elio-intelligence-suite",
+      hasConversation: true,
+    }));
+    const store = new Database(join(sessionDirectory, "store.db"));
+    store.run("create table meta (key text primary key, value text)");
+    store.run("create table blobs (id text primary key, data blob)");
+    store.run("insert into meta(key, value) values ('0', ?)", [
+      Buffer.from(JSON.stringify({ agentId: SESSION_ID, lastUsedModel: "composer-2.5-fast" })).toString("hex"),
+    ]);
+    store.close();
+    await writeFile(join(transcriptDirectory, `${SESSION_ID}.jsonl`), JSON.stringify({
+      role: "user",
+      message: { content: "Keep current Cursor evidence." },
+    }));
+
+    await collectCursorSessions(home, 1784692000000);
+    expect(cursorCacheEntryCountsForTests().composerData).toBe(1);
+
+    await rm(join(home, ".cursor", "ai-tracking", "ai-code-tracking.db"));
+    await collectCursorSessions(home, 1784692000000 + 48 * 60 * 60 * 1_000);
+
+    expect(cursorCacheEntryCountsForTests()).toEqual({
+      stores: 0,
+      texts: 0,
+      transcripts: 0,
+      tracking: 0,
+      composerData: 0,
+    });
+
+    const reactivated = await collectCursorSessions(home, 1784692000000);
+    expect(reactivated.value.find((agent) => agent.id === `cursor:${GUI_SESSION_ID}`)?.model).toBe("composer-2.5-fast");
   });
 
   test("bounds fallback blob inspection to the newest 200 records", async () => {

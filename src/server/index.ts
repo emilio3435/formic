@@ -61,8 +61,6 @@ const state = new HubState(runner, archiveStore, programHints, {
   witnessStore: processWitnessStore,
   ackStore,
 });
-await state.refresh({ cmux: true });
-state.startCmuxEvents();
 
 const mountainFetch = createMountainFetch({
   state,
@@ -104,6 +102,8 @@ const server = Bun.serve({
   idleTimeout: 120,
   fetch: fetchWithAgentLinks,
 });
+await state.refresh({ cmux: true });
+state.startCmuxEvents();
 
 let stopping = false;
 let refreshNumber = 0;

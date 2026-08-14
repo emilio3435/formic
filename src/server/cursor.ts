@@ -49,6 +49,22 @@ let cursorStateCache: {
   composers: Map<string, CursorStoreEvidence>;
 } | undefined;
 
+export function cursorCacheEntryCountsForTests(): {
+  stores: number;
+  texts: number;
+  transcripts: number;
+  tracking: number;
+  composerData: number;
+} {
+  return {
+    stores: cursorStoreCache.size,
+    texts: cursorTextCache.size,
+    transcripts: cursorTranscriptCache.size,
+    tracking: cursorTrackingCache.size,
+    composerData: cursorStateCache?.composerData.size ?? 0,
+  };
+}
+
 interface CursorMeta {
   schemaVersion?: number;
   createdAtMs?: number;
@@ -1215,6 +1231,8 @@ export async function collectCursorSessions(
 ): Promise<CollectionResult<CollectedAgent[]>> {
   const errors: string[] = [];
   const agents: CollectedAgent[] = [];
+  const currentMetaPaths = new Set<string>();
+  const currentStorePaths = new Set<string>();
   const [workspaceDirectories, projectDirectories] = await Promise.all([
     directories(join(home, ".cursor/chats")),
     directories(join(home, ".cursor/projects")),
@@ -1247,8 +1265,10 @@ export async function collectCursorSessions(
       if (meta.hasConversation === false) return;
       const updatedAtMs = Number(meta.updatedAtMs);
       if (!Number.isFinite(updatedAtMs) || nowMs - updatedAtMs > windowMs) return;
+      currentMetaPaths.add(metaPath);
 
       const storePath = join(sessionDirectory, "store.db");
+      currentStorePaths.add(storePath);
       let store: CursorStoreEvidence | undefined;
       try {
         store = readCursorStoreEvidence(storePath);
@@ -1321,6 +1341,49 @@ export async function collectCursorSessions(
   }
   await fillMissingCursorModels(state, agents, errors);
   fillCursorOccupancy(state, agents);
+
+  const currentTranscriptPaths = new Set(
+    agents.flatMap((agent) => agent.artifacts
+      .filter((artifact) => artifact.kind === "transcript")
+      .map((artifact) => artifact.path)),
+  );
+  const currentTextPaths = new Set([...currentMetaPaths, ...currentTranscriptPaths]);
+  for (const path of cursorStoreCache.keys()) {
+    if (!currentStorePaths.has(path)) cursorStoreCache.delete(path);
+  }
+  for (const path of cursorTextCache.keys()) {
+    if (!currentTextPaths.has(path)) cursorTextCache.delete(path);
+  }
+  for (const path of cursorTranscriptCache.keys()) {
+    if (!currentTranscriptPaths.has(path)) cursorTranscriptCache.delete(path);
+  }
+  const trackingPath = join(home, ".cursor", "ai-tracking", "ai-code-tracking.db");
+  const currentTrackingPath = guiStoragePresent && await readableFile(trackingPath)
+    ? trackingPath
+    : undefined;
+  for (const path of cursorTrackingCache.keys()) {
+    if (path !== currentTrackingPath) cursorTrackingCache.delete(path);
+  }
+  const statePath = join(globalStorage, "state.vscdb");
+  if (cursorStateCache?.path !== statePath) {
+    cursorStateCache = undefined;
+  } else {
+    const currentSessionIds = new Set(agents.map((agent) => agent.sourceSessionId));
+    let composerDataPruned = false;
+    for (const sessionId of cursorStateCache.composerData.keys()) {
+      if (!currentSessionIds.has(sessionId)) {
+        cursorStateCache.composerData.delete(sessionId);
+        composerDataPruned = true;
+      }
+    }
+    for (const sessionId of cursorStateCache.composers.keys()) {
+      if (!currentSessionIds.has(sessionId)) cursorStateCache.composers.delete(sessionId);
+    }
+    // A reduced composerData map is complete only for this scan. Force the next
+    // scan to reread an unchanged store so a wider time window can restore a
+    // session's authoritative model instead of treating the pruned row as absent.
+    if (composerDataPruned) cursorStateCache.fingerprint = "";
+  }
   return { value: agents, errors, ...(cursorAbsent ? { absent: true } : {}) };
 }
 

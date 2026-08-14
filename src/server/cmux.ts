@@ -17,6 +17,36 @@ export const DEFAULT_CMUX_EXECUTABLE =
   "/Applications/cmux.app/Contents/Resources/bin/cmux";
 export const ATTENTION_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
 export const MAX_ATTENTION_RECORDS = 500;
+const DEFAULT_COLLECTOR_DEADLINE_MS = 10_000;
+
+export interface CmuxCollectorBudget {
+  deadlineMs?: number;
+  signal?: AbortSignal;
+}
+
+function rpcTimeoutFor(deadlineMs: number | undefined, sequentialStages: number): number {
+  const parentMs = Number.isFinite(deadlineMs) && (deadlineMs ?? 0) > 0
+    ? Math.floor(deadlineMs as number)
+    : DEFAULT_COLLECTOR_DEADLINE_MS;
+  return Math.max(1, Math.floor(parentMs / sequentialStages));
+}
+
+function runWithinSignal(
+  runner: CommandRunner,
+  command: readonly string[],
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<CommandResult> {
+  if (!signal) return runner.run(command, timeoutMs);
+  if (signal.aborted) return Promise.reject(signal.reason ?? new Error("cmux collection cancelled"));
+  return new Promise<CommandResult>((resolve, reject) => {
+    const onAbort = (): void => reject(signal.reason ?? new Error("cmux collection cancelled"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    runner.run(command, timeoutMs).then(resolve, reject).finally(() => {
+      signal.removeEventListener("abort", onAbort);
+    });
+  });
+}
 
 export type AttentionAction = "acknowledge" | "dismiss" | "snooze";
 
@@ -574,10 +604,14 @@ export function parseCmuxAnchorWorkspaceIds(output: string): string[] {
 export async function collectCmuxNotificationSummaries(
   runner: CommandRunner,
   executable = DEFAULT_CMUX_EXECUTABLE,
+  budget: CmuxCollectorBudget = {},
 ): Promise<CollectionResult<CmuxNotificationSummary[]>> {
-  const listed = await runner.run(
+  const rpcTimeoutMs = rpcTimeoutFor(budget.deadlineMs, 3);
+  const listed = await runWithinSignal(
+    runner,
     cmuxCommand(executable, ["rpc", "notification.list", "{}"]),
-    10_000,
+    rpcTimeoutMs,
+    budget.signal,
   );
   if (executableMissing(listed)) return { value: [], errors: [], absent: true };
   if (listed.timedOut) return { value: [], errors: ["cmux notification.list timed out"] };
@@ -597,9 +631,11 @@ export async function collectCmuxNotificationSummaries(
     };
   }
 
-  const windows = await runner.run(
+  const windows = await runWithinSignal(
+    runner,
     cmuxCommand(executable, ["rpc", "window.list", "{}"]),
-    10_000,
+    rpcTimeoutMs,
+    budget.signal,
   );
   if (executableMissing(windows)) return { value: [], errors: [], absent: true };
   if (windows.timedOut) return { value: [], errors: ["cmux window discovery timed out"] };
@@ -621,11 +657,16 @@ export async function collectCmuxNotificationSummaries(
 
   const errors: string[] = [];
   const anchors = await Promise.all(windowIds.map(async (windowId): Promise<string[]> => {
-    const result = await runner.run(cmuxCommand(executable, [
-      "rpc",
-      "workspace.group.list",
-      JSON.stringify({ window_id: windowId }),
-    ]), 10_000);
+    const result = await runWithinSignal(
+      runner,
+      cmuxCommand(executable, [
+        "rpc",
+        "workspace.group.list",
+        JSON.stringify({ window_id: windowId }),
+      ]),
+      rpcTimeoutMs,
+      budget.signal,
+    );
     if (result.timedOut) {
       errors.push(`cmux workspace group discovery for window ${windowId} timed out`);
       return [];
@@ -656,10 +697,14 @@ export async function collectCmuxNotificationSummaries(
 export async function collectCmuxSidebar(
   runner: CommandRunner,
   executable = DEFAULT_CMUX_EXECUTABLE,
+  budget: CmuxCollectorBudget = {},
 ): Promise<CollectionResult<CmuxWorkspaceSnapshot[]>> {
-  const windows = await runner.run(
+  const rpcTimeoutMs = rpcTimeoutFor(budget.deadlineMs, 2);
+  const windows = await runWithinSignal(
+    runner,
     cmuxCommand(executable, ["rpc", "window.list", "{}"]),
-    10_000,
+    rpcTimeoutMs,
+    budget.signal,
   );
   if (executableMissing(windows)) return { value: [], errors: [], absent: true };
   if (windows.timedOut) return { value: [], errors: ["cmux window discovery timed out"] };
@@ -681,11 +726,16 @@ export async function collectCmuxSidebar(
 
   const errors: string[] = [];
   const perWindow = await Promise.all(windowIds.map(async (windowId) => {
-    const result = await runner.run(cmuxCommand(executable, [
-      "rpc",
-      "workspace.list",
-      JSON.stringify({ window_id: windowId }),
-    ]), 10_000);
+    const result = await runWithinSignal(
+      runner,
+      cmuxCommand(executable, [
+        "rpc",
+        "workspace.list",
+        JSON.stringify({ window_id: windowId }),
+      ]),
+      rpcTimeoutMs,
+      budget.signal,
+    );
     if (result.timedOut) {
       errors.push(`cmux workspace discovery for window ${windowId} timed out`);
       return [];

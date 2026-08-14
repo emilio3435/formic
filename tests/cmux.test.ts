@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, spyOn, test } from "bun:test";
 import {
   collectCmux,
+  collectCmuxNotificationSummaries,
   collectCmuxNotifications,
   collectCmuxSidebar,
   DEFAULT_CMUX_EXECUTABLE,
@@ -362,5 +363,71 @@ describe("cmux sidebar repository facts", () => {
       ["cmux", "rpc", "workspace.list", '{"window_id":"WINDOW-A"}'],
       ["cmux", "rpc", "workspace.list", '{"window_id":"WINDOW-B"}'],
     ]);
+  });
+});
+
+describe("cmux collector budgets fit their parent deadline", () => {
+  test("notification summary RPCs divide one parent deadline across three sequential stages", async () => {
+    const timeouts: number[] = [];
+    const runner: CommandRunner = {
+      run: async (command, timeoutMs) => {
+        timeouts.push(timeoutMs ?? 0);
+        const method = command[2];
+        return {
+          exitCode: 0,
+          stdout: method === "notification.list"
+            ? JSON.stringify({ notifications: [] })
+            : method === "window.list"
+              ? JSON.stringify({ windows: [{ id: "WINDOW-1" }] })
+              : JSON.stringify({ groups: [] }),
+          stderr: "",
+          timedOut: false,
+        };
+      },
+    };
+    await collectCmuxNotificationSummaries(runner, "cmux", { deadlineMs: 900 });
+
+    expect(timeouts).toEqual([300, 300, 300]);
+  });
+
+  test("sidebar RPCs divide one parent deadline across its two sequential stages", async () => {
+    const timeouts: number[] = [];
+    const runner: CommandRunner = {
+      run: async (command, timeoutMs) => {
+        timeouts.push(timeoutMs ?? 0);
+        return {
+          exitCode: 0,
+          stdout: command[2] === "window.list"
+            ? JSON.stringify({ windows: [{ id: "WINDOW-1" }] })
+            : JSON.stringify({ workspaces: [] }),
+          stderr: "",
+          timedOut: false,
+        };
+      },
+    };
+    await collectCmuxSidebar(runner, "cmux", { deadlineMs: 600 });
+
+    expect(timeouts).toEqual([300, 300]);
+  });
+
+  test("aborting notification summaries stops before another sequential RPC starts", async () => {
+    const calls: string[] = [];
+    const controller = new AbortController();
+    const runner: CommandRunner = {
+      run: (command) => {
+        calls.push(command[2] ?? "");
+        return new Promise(() => {});
+      },
+    };
+
+    const collecting = collectCmuxNotificationSummaries(runner, "cmux", {
+      deadlineMs: 900,
+      signal: controller.signal,
+    });
+    await Promise.resolve();
+    controller.abort(new Error("test cancellation"));
+
+    await expect(collecting).rejects.toThrow("test cancellation");
+    expect(calls).toEqual(["notification.list"]);
   });
 });

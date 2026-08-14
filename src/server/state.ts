@@ -71,23 +71,29 @@ import {
 } from "./session-names";
 import { readRunManifests, type RunManifest } from "./run-manifests";
 import {
+  senderClaimFor,
   senderTranscriptTailsFor,
   type SenderTranscriptEvidence,
+  type SenderTranscriptTailReader,
 } from "./sender-verification";
 import { ProviderSettlementCoordinator } from "./provider-settlement";
 import { taskStateWantsHuman } from "./task-state";
 
+type Abortable<T extends (...args: any[]) => any> = (
+  ...args: [...Parameters<T>, signal?: AbortSignal]
+) => ReturnType<T>;
+
 export interface HubCollectors {
-  sessions: typeof collectSessions;
-  sessionProvider?: typeof collectSessionProvider;
+  sessions: Abortable<typeof collectSessions>;
+  sessionProvider?: Abortable<typeof collectSessionProvider>;
   finalizeSessions?: typeof finalizeSessionProviders;
-  cmux: typeof collectCmux;
+  cmux: Abortable<typeof collectCmux>;
   sidebar?: typeof collectCmuxSidebar;
   workspaceEnv?: typeof collectCmuxWorkspaceEnvs;
   manifests?: typeof readRunManifests;
-  notifications: typeof collectCmuxNotifications;
+  notifications: Abortable<typeof collectCmuxNotifications>;
   syncNotifications?: typeof collectCmuxNotificationSummaries;
-  enrichIdentity: typeof enrichCmuxIdentity;
+  enrichIdentity: Abortable<typeof enrichCmuxIdentity>;
 }
 
 const DEFAULT_COLLECTORS: HubCollectors = {
@@ -105,7 +111,21 @@ const DEFAULT_COLLECTORS: HubCollectors = {
 
 const MIN_REFRESH_WATCHDOG_MS = 12_000;
 const MIN_CONTROL_AGGREGATE_TIMEOUT_MS = 10_000;
-const PROVIDER_FINALIZATION_ALLOWANCE_MS = 1_000;
+/* Collection and publication have separate budgets. Five seconds keeps the
+   production worst case near the spec's 15-second ceiling while still letting
+   completed provider truth reach persistence after a 10-second cutoff. */
+const PUBLISHING_TAIL_TIMEOUT_MS = 5_000;
+
+function waitWithAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason ?? new Error("refresh cancelled"));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(signal.reason ?? new Error("refresh cancelled"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(resolve, reject).finally(() => {
+      signal.removeEventListener("abort", onAbort);
+    });
+  });
+}
 
 function syncEventRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -182,6 +202,7 @@ export interface HubStateOptions {
   cmuxExecutable?: string;
   bindingStore?: IdentityBindingStore;
   refreshAggregateTimeoutMs?: number;
+  transcriptTailReader?: SenderTranscriptTailReader;
   sessionNames?: JsonSessionNameStore;
   witnessStore?: ProcessWitnessStore;
   ackStore?: AckStore;
@@ -220,6 +241,7 @@ export class HubState {
      passes in flight at once, and when it does, the abandoned one must stop
      writing — see #superseded. */
   #refreshGeneration = 0;
+  #refreshAbort?: AbortController;
   #cmuxRequested = false;
   #refreshingCmux = false;
   #cmuxEvents?: CmuxEventsSupervisor;
@@ -253,6 +275,7 @@ export class HubState {
   private readonly cmuxExecutable: string;
   private readonly bindingStore?: IdentityBindingStore;
   private readonly refreshAggregateTimeoutMs?: number;
+  private readonly transcriptTailReader: SenderTranscriptTailReader;
   /* Optional so every existing construction — and the tests are full of them —
      keeps the derived names rather than requiring a naming store. */
   private readonly sessionNames?: JsonSessionNameStore;
@@ -272,6 +295,7 @@ export class HubState {
     this.cmuxExecutable = options.cmuxExecutable ?? DEFAULT_CMUX_EXECUTABLE;
     this.bindingStore = options.bindingStore;
     this.refreshAggregateTimeoutMs = options.refreshAggregateTimeoutMs;
+    this.transcriptTailReader = options.transcriptTailReader ?? readBoundedTranscriptTail;
     this.sessionNames = options.sessionNames;
     this.witnessStore = options.witnessStore;
     this.ackStore = options.ackStore ?? new MemoryAckStore();
@@ -719,20 +743,25 @@ export class HubState {
         return this.#refreshing;
       }
       console.error(`[HubState] refresh watchdog dropped a pass pending for ${pendingMs}ms`);
+      this.#refreshAbort?.abort(new Error("refresh superseded by watchdog"));
       this.#refreshing = undefined;
+      this.#refreshAbort = undefined;
       this.#refreshStartedAtMs = undefined;
       this.#refreshWatchdogMs = undefined;
       this.#refreshingCmux = false;
     }
     if (options.cmux) this.#cmuxRequested = true;
     const generation = ++this.#refreshGeneration;
-    const refresh = this.#drainRefreshes(generation).finally(() => {
+    const abort = new AbortController();
+    const refresh = this.#drainRefreshes(generation, abort.signal).finally(() => {
       if (this.#refreshing !== refresh) return;
       this.#refreshing = undefined;
+      this.#refreshAbort = undefined;
       this.#refreshStartedAtMs = undefined;
       this.#refreshWatchdogMs = undefined;
     });
     this.#refreshing = refresh;
+    this.#refreshAbort = abort;
     return refresh;
   }
 
@@ -746,7 +775,7 @@ export class HubState {
     return generation !== this.#refreshGeneration;
   }
 
-  async #drainRefreshes(generation: number): Promise<HubSnapshot> {
+  async #drainRefreshes(generation: number, signal: AbortSignal): Promise<HubSnapshot> {
     let snapshot = this.#snapshot;
     do {
       if (this.#superseded(generation)) return this.#snapshot;
@@ -758,7 +787,7 @@ export class HubState {
       this.#refreshStartedAtMs = Date.now();
       this.#refreshWatchdogMs = Math.max(MIN_REFRESH_WATCHDOG_MS, providerWaitMs + 2_000);
       try {
-        snapshot = await this.#performRefresh({ cmux }, generation, providerWaitMs, settings);
+        snapshot = await this.#performRefresh({ cmux }, generation, providerWaitMs, settings, signal);
       } finally {
         // Never clear a flag the pass that replaced this one is relying on.
         if (!this.#superseded(generation)) this.#refreshingCmux = false;
@@ -799,6 +828,7 @@ export class HubState {
     generation: number,
     providerWaitMs: number,
     settings: HubSettings | undefined,
+    signal: AbortSignal,
   ): Promise<HubSnapshot> {
     const cmuxAttemptAt = options.cmux ? new Date().toISOString() : undefined;
     /* From the union, not a second list. This WAS a literal, and the literal
@@ -875,14 +905,18 @@ export class HubState {
         const value = await track(label, work);
         if (!controlDeadlineExpired) assign(value);
       } catch (error) {
-        if (!controlDeadlineExpired) {
+        if (!controlDeadlineExpired && !signal.aborted) {
           collectionErrors.push(`${label}: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
     };
     const providerTimeoutMs = this.refreshAggregateTimeoutMs ?? providerWaitMs;
     const controlTimeoutMs = this.refreshAggregateTimeoutMs
-      ?? Math.max(MIN_CONTROL_AGGREGATE_TIMEOUT_MS, providerWaitMs + PROVIDER_FINALIZATION_ALLOWANCE_MS);
+      ?? Math.max(MIN_CONTROL_AGGREGATE_TIMEOUT_MS, providerWaitMs);
+    const tailTimeoutMs = Math.min(
+      PUBLISHING_TAIL_TIMEOUT_MS,
+      this.refreshAggregateTimeoutMs ?? PUBLISHING_TAIL_TIMEOUT_MS,
+    );
     let providerDeadlineTimer: ReturnType<typeof setTimeout> | undefined;
     const providerDeadlineReached = new Promise<void>((resolve) => {
       providerDeadlineTimer = setTimeout(resolve, providerTimeoutMs);
@@ -894,14 +928,14 @@ export class HubState {
         resolve();
       }, controlTimeoutMs);
     });
-    const providerCollection = this.collectors.sessionProvider && this.collectors.finalizeSessions
+    const providerCollection = (this.collectors.sessionProvider && this.collectors.finalizeSessions
       ? track("providers", (async () => {
           const configKey = `${windowMs}:${thresholds?.freshMs ?? "default"}:${thresholds?.quietMs ?? "default"}`;
           const selection = await this.#providerSettlement.settle(
             providers,
             async (provider) => {
               try {
-                return await this.collectors.sessionProvider!(provider, homedir(), windowMs, thresholds);
+                return await this.collectors.sessionProvider!(provider, homedir(), windowMs, thresholds, signal);
               } catch (error) {
                 return {
                   value: [],
@@ -933,21 +967,30 @@ export class HubState {
             );
           }
         })())
-      : capture("session collection failed", this.collectors.sessions(homedir(), windowMs, thresholds), (value) => {
+      : capture("session collection failed", this.collectors.sessions(homedir(), windowMs, thresholds, {}, signal), (value) => {
           sessionsResult = value;
+        })).catch((error) => {
+          if (!signal.aborted) {
+            collectionErrors.push(
+              `session collection failed: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
         });
     let aggregateSettled = false;
     const aggregate = Promise.all([
       providerCollection,
       ...(options.cmux
         ? [
-            capture("cmux discovery failed", this.collectors.cmux(this.runner, this.cmuxExecutable), (value) => {
+            capture("cmux discovery failed", this.collectors.cmux(this.runner, this.cmuxExecutable, signal), (value) => {
               cmuxResult = value;
             }),
             ...(this.collectors.sidebar
               ? [capture(
                   "cmux sidebar discovery failed",
-                  this.collectors.sidebar(this.runner, this.cmuxExecutable),
+                  this.collectors.sidebar(this.runner, this.cmuxExecutable, {
+                    deadlineMs: controlTimeoutMs,
+                    signal,
+                  }),
                   (value) => {
                     sidebarResult = value;
                   },
@@ -964,7 +1007,7 @@ export class HubState {
               : []),
             capture(
               "cmux notification collection failed",
-              this.collectors.notifications(this.runner, this.cmuxExecutable),
+              this.collectors.notifications(this.runner, this.cmuxExecutable, undefined, signal),
               (value) => {
                 notificationsResult = value;
               },
@@ -972,7 +1015,10 @@ export class HubState {
             ...(this.collectors.syncNotifications
               ? [capture(
                   "cmux sync notification collection failed",
-                  this.collectors.syncNotifications(this.runner, this.cmuxExecutable),
+                  this.collectors.syncNotifications(this.runner, this.cmuxExecutable, {
+                    deadlineMs: controlTimeoutMs,
+                    signal,
+                  }),
                   (value) => {
                     syncNotificationsResult = value;
                   },
@@ -981,6 +1027,7 @@ export class HubState {
           ]
         : []),
     ]).then(async () => {
+      if (signal.aborted) return;
       const agents = sessionsResult
         ? providers.flatMap((provider) => sessionsResult![provider].value)
         : [];
@@ -990,7 +1037,7 @@ export class HubState {
         await Promise.all([
           capture(
             "cmux identity enrichment failed",
-            this.collectors.enrichIdentity(cmuxResult.value, agents, this.runner),
+            this.collectors.enrichIdentity(cmuxResult.value, agents, this.runner, signal),
             (value) => {
               identityResult = value;
             },
@@ -1010,20 +1057,34 @@ export class HubState {
            fire-and-forget like the naming pass — a sidebar is an improvement on
            a board that already works, so it must never delay or fail a refresh.
            A no-op until TINT-F registers the repo assignments. */
-        void repoGroupReconcileTick(this.runner, this.cmuxExecutable);
+        if (!signal.aborted) void repoGroupReconcileTick(this.runner, this.cmuxExecutable);
       }
       aggregateSettled = true;
     });
-    await Promise.race([
-      aggregate,
-      controlDeadlineReached,
-    ]);
+    try {
+      await Promise.race([
+        waitWithAbort(aggregate, signal),
+        controlDeadlineReached,
+      ]);
+    } catch (error) {
+      if (providerDeadlineTimer) clearTimeout(providerDeadlineTimer);
+      if (controlDeadlineTimer) clearTimeout(controlDeadlineTimer);
+      if (signal.aborted) return this.#snapshot;
+      throw error;
+    }
     if (this.collectors.sessionProvider && this.collectors.finalizeSessions) {
       /* Coordinator settlement is independently bounded by the earlier
          provider deadline, which is never longer than this control deadline.
          Awaiting it here therefore cannot turn a hung provider into an
          unbounded control pass; it only lets the selected fleet finalizer run. */
-      await providerCollection;
+      try {
+        await waitWithAbort(providerCollection, signal);
+      } catch (error) {
+        if (providerDeadlineTimer) clearTimeout(providerDeadlineTimer);
+        if (controlDeadlineTimer) clearTimeout(controlDeadlineTimer);
+        if (signal.aborted) return this.#snapshot;
+        throw error;
+      }
       /* Let the aggregate's completion continuation run when providers were
          the only work. A provider timeout is already reported by that source;
          it is not also an aggregate failure. */
@@ -1033,7 +1094,7 @@ export class HubState {
     if (aggregateSettled && controlDeadlineTimer) clearTimeout(controlDeadlineTimer);
     /* Collection is done; from here every line writes. If the watchdog gave up
        on this pass while it was collecting, stop before the first write. */
-    if (this.#superseded(generation)) return this.#snapshot;
+    if (signal.aborted || this.#superseded(generation)) return this.#snapshot;
     const deadlineError = `collector aggregate exceeded ${controlTimeoutMs}ms deadline`;
     if (!aggregateSettled) {
       collectionErrors.push(deadlineError);
@@ -1042,6 +1103,78 @@ export class HubState {
          next wall of noise the last one hid behind. */
       console.error(`[HubState] pass timings: ${passBreakdown()}`);
     }
+    type TailStepResult<T> = { completed: true; value: T } | { completed: false };
+    const tailPending = new Set<string>();
+    let tailDeadlineExpired = false;
+    let tailOverrunLogged = false;
+    let tailDeadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    let resolveTailDeadline!: () => void;
+    const tailDeadline = Symbol("tail deadline");
+    const tailAborted = Symbol("tail aborted");
+    const tailDeadlineReached = new Promise<void>((resolve) => {
+      resolveTailDeadline = resolve;
+      tailDeadlineTimer = setTimeout(() => {
+        tailDeadlineExpired = true;
+        resolve();
+      }, tailTimeoutMs);
+    });
+    let removeTailAbortListener = (): void => {};
+    const tailAbortReached = new Promise<typeof tailAborted>((resolve) => {
+      const onAbort = (): void => resolve(tailAborted);
+      signal.addEventListener("abort", onAbort, { once: true });
+      removeTailAbortListener = () => signal.removeEventListener("abort", onAbort);
+    });
+    const clearTailDeadline = (): void => {
+      if (tailDeadlineTimer) clearTimeout(tailDeadlineTimer);
+      removeTailAbortListener();
+      resolveTailDeadline();
+    };
+    const logTailOverrun = (): void => {
+      if (tailOverrunLogged) return;
+      tailOverrunLogged = true;
+      const outstanding = [...tailPending].sort().join(",");
+      console.error(
+        `[HubState] publishing tail exceeded ${tailTimeoutMs}ms deadline; `
+          + `PENDING=[${outstanding || "none"}]`,
+      );
+    };
+    const tailStep = async <T>(
+      label: string,
+      work: () => Promise<T>,
+    ): Promise<TailStepResult<T>> => {
+      if (signal.aborted) return { completed: false };
+      tailPending.add(label);
+      if (tailDeadlineExpired) {
+        logTailOverrun();
+        tailPending.delete(label);
+        return { completed: false };
+      }
+      let promise: Promise<T>;
+      try {
+        promise = work();
+      } catch (error) {
+        tailPending.delete(label);
+        throw error;
+      }
+      try {
+        const outcome = await Promise.race([
+          promise,
+          tailDeadlineReached.then(() => tailDeadline),
+          tailAbortReached,
+        ]);
+        if (outcome === tailDeadline) {
+          logTailOverrun();
+          return { completed: false };
+        }
+        if (outcome === tailAborted) {
+          clearTailDeadline();
+          return { completed: false };
+        }
+        return { completed: true, value: outcome as T };
+      } finally {
+        tailPending.delete(label);
+      }
+    };
     /* A result missing because the DEADLINE fired did not fail for some other
        collector's reason. This published `collectionErrors[0]` — whichever
        error happened to land first — so a machine where cmux is not installed
@@ -1145,9 +1278,13 @@ export class HubState {
           });
           // Only completed identity scans confirm bindings; a failed write is
           // an operator-visible error, never a silent skip or broken refresh.
-          bindingErrors = this.bindingStore
-            ? (await updateBindingsFromScan(this.bindingStore, this.#surfaces, collectedAt)).errors
-            : [];
+          if (this.bindingStore) {
+            const bindingWrite = await tailStep(
+              "identity binding persistence",
+              () => updateBindingsFromScan(this.bindingStore!, this.#surfaces, collectedAt),
+            );
+            bindingErrors = bindingWrite.completed ? bindingWrite.value.errors : [];
+          }
         } else if (cmux.errors.length === 0) {
           identityErrors = [
             collectionErrors.find((error) => error.startsWith("cmux identity enrichment failed")) ?? deadlineError,
@@ -1155,7 +1292,10 @@ export class HubState {
           this.#quarantineRetainedIdentityEvidence();
           routingEvidenceQuarantined = true;
         }
-        if (this.#superseded(generation)) return this.#snapshot;
+        if (signal.aborted || this.#superseded(generation)) {
+          clearTailDeadline();
+          return this.#snapshot;
+        }
       } else {
         this.#quarantineRetainedIdentityEvidence();
         routingEvidenceQuarantined = true;
@@ -1213,27 +1353,43 @@ export class HubState {
       processRosterComplete: this.#rosterComplete,
       thresholds,
     });
-    const senderTranscriptTailsPromise = senderTranscriptTailsFor(
-      [...(this.archiveStore.archivedAgents?.() ?? []), ...publishedAgents],
-      readBoundedTranscriptTail,
-    );
+    const transcriptSources = [...(this.archiveStore.archivedAgents?.() ?? []), ...publishedAgents];
+    const senderTranscriptTailsPromise = transcriptSources.some((source) => senderClaimFor(source))
+      ? tailStep(
+          "sender transcript tails",
+          () => senderTranscriptTailsFor(transcriptSources, this.transcriptTailReader),
+        )
+      : undefined;
     if (this.witnessStore && this.#rosterComplete) {
       /* Only a completed scan may write witnesses: a partial one would record
          "nothing was running" for sessions it simply never looked at, and that
-         lie would then outlive the restart it was meant to survive. */
+      lie would then outlive the restart it was meant to survive. */
       try {
-        await this.witnessStore.record(witnessesFromScan(publishedAgents, this.#bootId, collectedAt));
+        await tailStep(
+          "process witness persistence",
+          () => this.witnessStore!.record(witnessesFromScan(publishedAgents, this.#bootId, collectedAt)),
+        );
       } catch (error) {
         console.error(`[HubState] process witness persistence failed: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
     try {
-      await this.archiveStore.record?.(publishedAgents);
+      if (this.archiveStore.record) {
+        await tailStep(
+          "session history persistence",
+          () => this.archiveStore.record!(publishedAgents),
+        );
+      }
     } catch (error) {
       historyError = `session history persistence failed: ${error instanceof Error ? error.message : String(error)}`;
       console.error(`[HubState] ${historyError}`);
     }
-    const senderTranscriptTails = await senderTranscriptTailsPromise;
+    const senderTranscriptTailsResult = senderTranscriptTailsPromise
+      ? await senderTranscriptTailsPromise
+      : undefined;
+    const senderTranscriptTails = senderTranscriptTailsResult?.completed
+      ? senderTranscriptTailsResult.value
+      : senderTranscriptTailsResult === undefined ? new Map<string, SenderTranscriptEvidence>() : undefined;
     const sourceErrors = Object.fromEntries(
       providers.map((provider) => [
         provider,
@@ -1247,7 +1403,10 @@ export class HubState {
     /* The witness, archive and bounded transcript reads above are the last
        awaits before this pass publishes. A pass superseded during them would
        otherwise replace a newer board with readings taken before it. */
-    if (this.#superseded(generation)) return this.#snapshot;
+    if (signal.aborted || this.#superseded(generation)) {
+      clearTailDeadline();
+      return this.#snapshot;
+    }
     this.#sourceAbsent = Object.fromEntries(
       providers.map((provider) => [provider, sessions[provider].absent === true]),
     ) as Record<Provider, boolean>;
@@ -1296,8 +1455,14 @@ export class HubState {
       const fingerprint = alertFingerprintFor(agent);
       if (fingerprint) currentAlerts.set(agent.id, fingerprint);
     }
-    await this.ackStore.reconcile(currentAlerts);
-    if (this.#superseded(generation)) return this.#snapshot;
+    await tailStep(
+      "acknowledgement reconciliation",
+      () => this.ackStore.reconcile(currentAlerts),
+    );
+    if (signal.aborted || this.#superseded(generation)) {
+      clearTailDeadline();
+      return this.#snapshot;
+    }
     const published = { ...classified, acks: [...this.ackStore.list()] };
     const pulseNowMs = Date.now();
     this.#pulse.observe(published, pulseNowMs);
@@ -1305,6 +1470,7 @@ export class HubState {
     this.#snapshot = withPulse(published, this.#pulse.report(pulseNowMs));
     for (const listener of this.#listeners) listener(this.#snapshot);
     this.#nameNewSessions(publishedAgents);
+    clearTailDeadline();
     return this.#snapshot;
   }
 }

@@ -45,6 +45,10 @@ const CURSOR_VERSIONED_WRAPPER = new RegExp(
    a single transient failure costs every write control until the next scan. */
 const ATTRIBUTION_ATTEMPTS = 2;
 const ATTRIBUTION_TIMEOUT_MS = 4_000;
+/* Hand probes for all three calls total about 1.4s. A single call at or above
+   this threshold has spent at least 20% of the enclosing 10s control deadline
+   by itself, while a healthy pass stays below the logging floor. */
+const IDENTITY_PROBE_OVERRUN_MS = 2_000;
 
 const CMUX_PROCESS_ATTRIBUTION_PARAMS = JSON.stringify({
   all_windows: true,
@@ -375,6 +379,15 @@ export async function enrichCmuxIdentity(
   agents: readonly CollectedAgent[],
   runner: CommandRunner,
 ): Promise<IdentityCollectionResult> {
+  const probeStartedMs = Date.now();
+  const probeTimings: Array<{ label: string; elapsedMs: number; input: string }> = [];
+  const reportProbeOverrun = (): void => {
+    if (!probeTimings.some(({ elapsedMs }) => elapsedMs >= IDENTITY_PROBE_OVERRUN_MS)) return;
+    const breakdown = probeTimings
+      .map(({ label, elapsedMs, input }) => `${label}=${elapsedMs}ms(${input})`)
+      .join(" ");
+    console.error(`[identity] probe timings: total=${Date.now() - probeStartedMs}ms ${breakdown}`);
+  };
   const errors: string[] = [];
   const readySurfaces = surfaces.filter((surface) => surface.runtimeSurfaceReady !== false);
   const ttyNames = new Set(
@@ -421,8 +434,11 @@ export async function enrichCmuxIdentity(
        Shorter deadline WITH a retry, not instead of one: two 4s attempts fail
        faster than one 10s attempt, so a wedged cmux costs less than it did
        while a merely slow one now gets a second chance it never had. */
+    const attributionStartedMs = Date.now();
     const attempts: string[] = [];
+    let attributionAttemptCount = 0;
     for (let attempt = 1; attempt <= ATTRIBUTION_ATTEMPTS; attempt += 1) {
+      attributionAttemptCount += 1;
       const attributionResult = await runner.run(
         cmuxCommand(runtimeCmuxExecutable(), ["rpc", "system.top", CMUX_PROCESS_ATTRIBUTION_PARAMS]),
         ATTRIBUTION_TIMEOUT_MS,
@@ -441,6 +457,11 @@ export async function enrichCmuxIdentity(
         }
       }
     }
+    probeTimings.push({
+      label: "cmux_system_top",
+      elapsedMs: Date.now() - attributionStartedMs,
+      input: `attempts=${attributionAttemptCount},surfaces=${readySurfaces.length}`,
+    });
     if (attempts.length > 0) {
       /* Named as what it is. "cmux process attribution" alone read as a
          configuration problem; this says a probe failed, how many times, and
@@ -451,11 +472,13 @@ export async function enrichCmuxIdentity(
         + " Session identity for panes without a tty is unavailable this scan,"
         + " so Focus, Send and Interrupt stay off until it answers.";
       errors.push(attributionError);
+      console.error(`[identity] ${attributionError}`);
     }
   }
 
   const allAttributedPids = new Set([...attributedPids.values()].flatMap((pids) => [...pids]));
   if (ttyNames.size === 0 && allAttributedPids.size === 0) {
+    reportProbeOverrun();
     return {
       value: surfaces.map((surface) =>
         surface.runtimeSurfaceReady === false
@@ -476,21 +499,31 @@ export async function enrichCmuxIdentity(
      one `parseProcessTable` is written against rather than the operator's
      locale. Still one `ps`, not two: adding a call would shift every positional
      expectation in the test runners that feed this function. */
+  const processStartedMs = Date.now();
   const processResult = await runner.run(
     ["env", "LC_ALL=C", "ps", "-axo", "pid=,tty=,lstart=,command="],
     8_000,
   );
+  const processElapsedMs = Date.now() - processStartedMs;
   if (processResult.timedOut || processResult.exitCode !== 0) {
     const error = processResult.timedOut
       ? "process identity lookup timed out"
       : `process identity lookup exited ${processResult.exitCode}: ${processResult.stderr.trim() || "no stderr"}`;
+    probeTimings.push({ label: "process_table", elapsedMs: processElapsedMs, input: "rows=unavailable" });
     errors.push(error);
+    console.error(`[identity] ${error}`);
+    reportProbeOverrun();
     return {
       value: failedProbeSurfaces(surfaces, error),
       errors,
     };
   }
   const allProcesses = parseProcessTable(processResult.stdout);
+  probeTimings.push({
+    label: "process_table",
+    elapsedMs: processElapsedMs,
+    input: `rows=${allProcesses.length}`,
+  });
   /* Liveness, so every pid in the table counts — recognition is a question
      about ATTRIBUTION and answers a different one.
 
@@ -556,7 +589,13 @@ export async function enrichCmuxIdentity(
   if (pids.length > 0) {
     // Absolute path: Bun/server PATH can omit /usr/sbin, which made identity
     // enrichment fail-closed and left agents partially/quarantined.
+    const openFileStartedMs = Date.now();
     const openFileResult = await runner.run(["/usr/sbin/lsof", "-a", "-p", pids.join(","), "-Fn"], 10_000);
+    probeTimings.push({
+      label: "lsof",
+      elapsedMs: Date.now() - openFileStartedMs,
+      input: `pids=${pids.length}`,
+    });
     openFiles = parseOpenFiles(openFileResult.stdout);
     const hasUsableIdentityOutput = [...openFiles.values()]
       .flat()
@@ -566,6 +605,8 @@ export async function enrichCmuxIdentity(
         ? "open-session identity lookup timed out"
         : `open-session identity lookup exited ${openFileResult.exitCode}: ${openFileResult.stderr.trim() || "no stderr"}`;
       errors.push(error);
+      console.error(`[identity] ${error}`);
+      reportProbeOverrun();
       return {
         value: failedProbeSurfaces(surfaces, error),
         errors,
@@ -676,6 +717,7 @@ export async function enrichCmuxIdentity(
     }
   }
 
+  reportProbeOverrun();
   return {
     value: surfaces.map((surface) => {
       if (surface.runtimeSurfaceReady === false) {
