@@ -149,6 +149,7 @@ import {
 } from "./cleaner.js";
 import {
   alerting,
+  alertFirst,
   buildClusters,
   contextUsage,
   deriveActivity,
@@ -1499,7 +1500,7 @@ globalThis.TheAntHill = {
   lifecycleOf, provenanceOf, scopeOf, isTerminal, isLive, isUnverified, wantsHuman,
   declaredQuiet, declaredDone,
   controlUnavailableText,
-  totalsOf, issuesOf, alerting, viewMatches, matchesQuery, buildClusters, tokenSummary,
+  totalsOf, issuesOf, alerting, alertFirst, viewMatches, matchesQuery, buildClusters, tokenSummary,
   issueLifecycle, issueStateLabel, recentlyResolvedOf,
   contextUsage, contextDisplayValue, typicalRequestOf,
   roleView, formatLastHumanMessage, rowSummary, NO_READABLE_MESSAGE,
@@ -1512,6 +1513,7 @@ globalThis.TheAntHill = {
   preferredRenameTarget, terminalSourceName, stripSpinnerFrame, terminalIdentity, terminalBreadcrumb, focusDestinationHint, focusButtonLabel,
   quietSourceLine, fullSourceDetail, verdictGate, conciseText,
   renderAgentRow, renderAgentColumnHeader, renderSummaryWidget,
+  captureRowFlights, playRowFlights,
   renderProgramDrawer, programRollupLine, programRollupCells, programHeadRollup,
   ACTIVITY_LABELS, OUTCOME_LABELS, CONTROL_LABELS, VIEWS, OPS_VIEWS,
   withinLookback, parseLookbackHours, lookbackApplies, lookbackLabel, rowStalenessText, rowStateWords,
@@ -8409,6 +8411,110 @@ function emptyListMessage(ui = state) {
     : "Nothing matches the current " + parts.join(" and ") + " in this view.";
 }
 
+/* ---------- the float: FLIP across one keyed reconcile ----------
+   Capture BEFORE syncProgramList, play AFTER. Keys are dataset.fkey, not node
+   identity, so a row that re-homes across containers — a group row pinned into
+   the strip, or released from it — flies too, which is exactly when the
+   operator most needs to follow it. Flights play only when some row's alert
+   membership flipped in this paint: routine repaints (tokens ticking, summaries
+   updating) must stay motionless. Spec §4 carries the tuned values verbatim. */
+const ROW_FLIGHT_CURVE = "cubic-bezier(0.5, 0.05, 0.12, 1)";
+const ROW_FLIGHT_TIMING = { duration: 900, delay: 40, fill: "backwards", easing: ROW_FLIGHT_CURVE };
+const ROW_SLIDE_TIMING = { duration: 700, delay: 120, fill: "backwards", easing: ROW_FLIGHT_CURVE };
+const ROW_LANDING_FADE_MS = 540;
+
+/* Mover detection reads the data-hot stamp renderAgentRow writes from
+   stripAlerting — the SAME predicate the sort reads — never the alert
+   classes: is-alerting is inline-mode only, presentedOutcome mutes only
+   needs-you, and a presented-ink flip without a membership change (a
+   declaredQuiet row gaining a failed outcome) must not fly. */
+function rowAlertMarked(row) {
+  return Boolean(row.dataset) && row.dataset.hot === "true";
+}
+
+function captureRowFlights(root) {
+  /* Null is the no-motion answer, and it must be reachable from every guard:
+     render correctness can never depend on the float running. */
+  if (!root || typeof root.querySelectorAll !== "function") return null;
+  if (typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches) return null;
+  const before = new Map();
+  for (const row of root.querySelectorAll(".agent-row")) {
+    if (typeof row.animate !== "function" || typeof row.getBoundingClientRect !== "function") return null;
+    const key = row.dataset && row.dataset.fkey;
+    if (!key) continue;
+    before.set(key, { top: row.getBoundingClientRect().top, alerted: rowAlertMarked(row) });
+  }
+  return before.size ? before : null;
+}
+
+/* The LATEST mover flight owns a row's lift classes (spec §4: one lift, one
+   settle — the mover wears the lift for the whole flight). A re-fly cancels
+   the previous animation synchronously, but the canceled flight's rejection
+   handler is a microtask that runs AFTER the new lift is applied — and a
+   landed flight's fade timer can fire mid-second-landing. Both are stale
+   hands on a row a newer flight now owns: every handler checks ownership
+   first and stands down when it lost the row. */
+const rowFlightOwner = new WeakMap(); // row -> { flight, landingTimer }
+
+function playRowFlights(root, before) {
+  if (!before || !root || typeof root.querySelectorAll !== "function") return;
+  /* Movers are decided from the marks alone, with NOTHING measured or
+     canceled yet: a mover-less repaint must return through the gate below
+     with every in-flight animation untouched. */
+  const candidates = [];
+  let hasMover = false;
+  for (const row of root.querySelectorAll(".agent-row")) {
+    const key = row.dataset && row.dataset.fkey;
+    const prior = key ? before.get(key) : undefined;
+    if (!prior || typeof row.animate !== "function") continue;
+    const mover = prior.alerted !== rowAlertMarked(row);
+    if (mover) hasMover = true;
+    candidates.push({ row, prior, mover });
+  }
+  /* No membership flip → no flights: a paint that merely refreshed content
+     does not move the operator's eye. */
+  if (!hasMover) return;
+  for (const { row, prior, mover } of candidates) {
+    /* Cancel BEFORE measuring. getBoundingClientRect includes a superseded
+       flight's transform, and a delta taken through that transform starts the
+       new flight at the OLD flight's destination instead of where the eye
+       currently sees the row. Canceling first also settles a membership-
+       flipped row whose delta lands at 0: its stale flight ends now instead
+       of playing out under a verdict that no longer holds. */
+    if (typeof row.getAnimations === "function") for (const a of row.getAnimations()) a.cancel();
+    const delta = prior.top - row.getBoundingClientRect().top;
+    if (!delta) continue;
+    if (mover) {
+      const stale = rowFlightOwner.get(row);
+      if (stale && stale.landingTimer !== undefined) clearTimeout(stale.landingTimer);
+      // A re-lifting row is not landing: the fade state clears NOW, not when
+      // a stale timer gets around to it.
+      row.classList.remove("is-landing");
+      row.classList.add("is-floating");
+    }
+    const flight = row.animate(
+      [{ transform: `translateY(${delta}px)` }, { transform: "translateY(0)" }],
+      mover ? ROW_FLIGHT_TIMING : ROW_SLIDE_TIMING);
+    if (mover) {
+      const owner = { flight };
+      rowFlightOwner.set(row, owner);
+      flight.finished.then(() => {
+        if (rowFlightOwner.get(row) !== owner) return;
+        row.classList.remove("is-floating");
+        row.classList.add("is-landing");
+        owner.landingTimer = setTimeout(() => {
+          if (rowFlightOwner.get(row) !== owner) return;
+          row.classList.remove("is-landing");
+        }, ROW_LANDING_FADE_MS);
+      }).catch(() => {
+        if (rowFlightOwner.get(row) !== owner) return;
+        row.classList.remove("is-floating");
+        row.classList.remove("is-landing");
+      });
+    }
+  }
+}
+
 function renderPrograms() {
   const root = $("programs");
   const usage = $("usage-panel");
@@ -8457,7 +8563,9 @@ function renderPrograms() {
     return;
   }
 
+  const flights = captureRowFlights(root);
   const shown = syncProgramList(root, visible, presentationState);
+  playRowFlights(root, flights);
   renderScopeNote(shown);
 
   const tracked = programs.reduce((total, program) => total + program.agents.length, 0);
@@ -8957,6 +9065,8 @@ function agentRowPlan(program, agents, ui = state, board = boardIndex(ui), opts 
      program IS a worktree; a program it could not resolve a repo for keeps the
      server's agentSortRank order exactly, which is what makes that section a
      true regression gate rather than one that merely looks unchanged.
+     Alert-first ordering (below) is the one licensed exception; calm rows
+     still hold the server's order.
 
      A stable sort by role alone is the whole implementation — the server
      already sorted the program by agentSortRank, so ties keep that order and
@@ -8966,6 +9076,22 @@ function agentRowPlan(program, agents, ui = state, board = boardIndex(ui), opts 
     byRole(unsectioned);
     for (const bucket of buckets.values()) byRole(bucket);
   }
+
+  /* Alert-first, stable, WITHIN each section — never across one: the heading
+     states what its rows are doing, and an alerting Waiting row that climbed
+     into Active would make that sentence a lie. Runs AFTER byRole so the later
+     stable sort is the primary key: an alerting worker outranks a calm
+     orchestrator. Applies to EVERY program, which means a non-worktree section
+     no longer keeps the server's agentSortRank byte-for-byte when it contains
+     an alerting row — that reordering is the feature: it does the deleted
+     wash's findability job. Ties keep the server's order (stability), so alert
+     order is the server's order, not recency. Membership is the PRESENTED
+     membership — stripAlerting, the same predicate the strip and the row's
+     is-alerting class read — so an acknowledged row never rises with a muted
+     word. */
+  const sectionHot = (a) => stripAlerting(a, ui.snap);
+  alertFirst(unsectioned, sectionHot);
+  for (const bucket of buckets.values()) alertFirst(bucket, sectionHot);
 
   /* Exactly what appendTree will put on screen for this root: its own row, or
      an anchor holding children that are still drawn. Mirroring the walk rather
@@ -9787,7 +9913,20 @@ function renderAgentRow(agent, program, opts = {}) {
        terminal destination, staleness and the history provenance each get a
        clause, in the order a sighted operator would have read them. */
     "aria-label": `${displayName}.${nameTag ? ` Session ${nameTag}.` : ""}${opts.programChip ? ` Program: ${stripChipLabel(opts.programChip)}.` : ""} Status: ${stateText}.${liveness ? ` Process: ${liveness.label}.` : ""}${history ? ` ${history.label}.` : ""}${lineageContradicted ? " Parent disputed: the declared parent is contradicted by the observed process chain." : ""}${agent.taskState && agent.taskStateSource ? ` Declared ${agent.taskState}.` : ""} Agent/message: ${summary || "No message reported"}. Model: ${modelText}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Span, first to last activity: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}.${role.key !== "agent" ? ` Role: ${role.label}.` : ""}${terminalCrumb ? ` Terminal: ${terminalCrumb}.` : ""}${staleFact ? ` Quiet: ${staleFact}.` : ""} ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants, ${opts.swarmOpen ? "shown" : "collapsed"}. ` : ""} Select to open the full message and session details in the inspector.`,
-    dataset: { fkey: "agent:" + agent.id, depth: String(opts.depth || 0) },
+    dataset: {
+      fkey: "agent:" + agent.id,
+      depth: String(opts.depth || 0),
+      /* Alert-LIST membership, stamped for the float's mover detection. The
+         sort reads stripAlerting, so the flight must read the SAME predicate
+         or the two disagree and the row teleports: classes cannot carry it —
+         is-alerting is inline-mode only, and presentedOutcome mutes only
+         needs-you, so an acked blocked/failed row and a hook-shaped strip
+         entry both flip membership with no class moving. Freshness is already
+         guaranteed by agentRowSig: the record body covers every alerting()
+         input and the "acked" fragment covers the veto, so a membership flip
+         always rebuilds the node that carries this stamp. */
+      hot: stripAlerting(agent, state.snap) ? "true" : "false",
+    },
     onclick: (e) => {
       if (e.target.closest(".agent-rename, .rename-form, .swarm-chip")) return;
       activate();

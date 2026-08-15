@@ -3143,6 +3143,26 @@ describe("calm program and agent list rendering", () => {
   });
 });
 
+test("SORT-INK-1 no alert state paints a row background, rail, or summary recolor — in any token family, grouped or not", () => {
+  // The wash owned the row's only background surface and overpainted :hover on
+  // exactly the rows an operator reaches for; the rails demanded four
+  // focus-visible composites to keep the keyboard ring visible. Identification
+  // moved to the status cell, findability to section order (alertFirst).
+  // Two generations of this paint exist (an --ember block and a --color-*
+  // themed block with GROUPED selectors), so the guard is a regex over any
+  // rule whose selector starts an alert state on .agent-row — a plain
+  // toContain would go green while the grouped block still painted.
+  const alertState = String.raw`\.agent-row\.(is-needs-you|is-blocked|is-failed|is-alerting)`;
+  expect(styles).not.toMatch(new RegExp(`${alertState}[^{}]*\\{[^}]*background`));
+  expect(styles).not.toMatch(new RegExp(`${alertState}[^{}]*\\{[^}]*inset 4px 0`));
+  expect(styles).not.toMatch(new RegExp(`${alertState}[^{}]*:focus-visible`));
+  // The row's message is not the alert; the status cell is.
+  expect(styles).not.toContain(".agent-row.is-needs-you .row-summary");
+  expect(styles).not.toContain(".agent-row.is-failed .row-summary");
+  // The base ring is the whole focus story now, and it must still exist.
+  expect(styles).toMatch(/\.agent-row:focus-visible \{[^}]*var\(--color-focus-ring\)/);
+});
+
 describe("agent rows: instrument cluster + de-noise (C1)", () => {
   /* Same DOM-less execution trick B2/B3/B4 used: a minimal fake document lets
      renderAgentRow build real nodes via el()/icon(), so these assert on what the
@@ -3382,20 +3402,10 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
     }
   });
 
-  test("(e) alert washes pair their tint with a state-colored edge rail (Rule 1 — indicator inks, not flood fills)", () => {
-    // WS-C audit finding: is-needs-you / is-blocked / is-failed carried a soft tint
-    // but NO colored rail. Codified open-q2 threshold: a ≤10% tint must always ride
-    // WITH a status-colored edge mark. Assert each alert modifier now sets one.
-    for (const mod of ["is-needs-you", "is-blocked", "is-failed"]) {
-      const rail = styles.match(
-        new RegExp(`\\.agent-row\\.${mod}[^\\n{]*\\{[^}]*box-shadow:[^;}]*inset[^;}]*var\\(--color-status-danger\\)`),
-      );
-      expect(rail).not.toBeNull();
-      // And the tint it rides with is still present (paired, not replaced).
-      const tint = styles.match(new RegExp(`\\.agent-row\\.${mod}\\b[^\\n{]*\\{[^}]*background:[^;}]*color-mix`));
-      expect(tint).not.toBeNull();
-    }
-  });
+  /* (e) — "alert washes pair their tint with a state-colored edge rail" retired
+     with the wash itself: the invariant (Rule 1 — indicator inks, not flood
+     fills) now holds by absence, and SORT-INK-1 (top level) pins that absence
+     across both token generations. Identification lives in the status cell. */
 
   test("(f) the CSS the removed row-fact / control-access helpers owned is gone and can't return", () => {
     // rowFact / contextFact / controlFact were deleted with the instrument-cluster
@@ -3412,23 +3422,16 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
     expect(styles).toContain(".drawer-session-process");                    // drawer ribbon status, distinct selector
   });
 
-  test("(g) keyboard focus survives the alert rails — each alert state combines its rail with the focus ring", () => {
-    // The alert rails `.agent-row.is-needs-you:not(.is-selected)` (and -blocked /
-    // -failed) sit at (0,3,0) on the SAME box-shadow property as the (0,2,0)
-    // :focus-visible ring, so on exactly the alert rows the rail clobbered the ring
-    // and keyboard focus went invisible. The fix is a :focus-visible variant per
-    // alert state (0,4,0) that combines BOTH shadow layers — rail + inset ring.
-    for (const [mod, ink] of [["is-needs-you", "--needs"], ["is-blocked", "--blocked"], ["is-failed", "--failed"]]) {
-      const rule = styles.match(
-        new RegExp(`\\.agent-row\\.${mod}:not\\(\\.is-selected\\):focus-visible\\s*\\{[^}]*\\}`),
-      )?.[0] ?? "";
-      expect(rule).not.toBe("");
-      // Both components present: the semantic danger 4px rail AND the named
-      // Formic focus ring. The rail remains the first shadow layer so state is
-      // not erased when keyboard focus arrives.
-      expect(rule).toContain("inset 4px 0 var(--color-status-danger)");
-      expect(rule).toContain("var(--color-focus-ring)");
+  test("(g) keyboard focus on alert rows rides the base ring alone — no composites, no rails to punch through", () => {
+    // The rails died with the wash (SORT-INK-1); with nothing else writing
+    // box-shadow on an alert row, the base .agent-row:focus-visible ring wins
+    // by itself, and per-state composites would be dead weight that silently
+    // diverges from the base ring.
+    for (const mod of ["is-needs-you", "is-blocked", "is-failed", "is-alerting"]) {
+      expect(styles).not.toContain(`.agent-row.${mod}:not(.is-selected):focus-visible`);
     }
+    // The named Formic ring, exactly as the base rule carries it today.
+    expect(styles).toMatch(/\.agent-row:focus-visible \{[^}]*inset 0 0 0 2px var\(--color-interactive\), var\(--color-focus-ring\)/);
   });
 
   /* ROW DIET. The terminal breadcrumb used to ride .row-identity-tags on every
@@ -9960,8 +9963,9 @@ describe("FE-B: harness-backed client behavior", () => {
       // No strip node at all — not even the calm empty state.
       expect(allByClass(inlineRoot, "needs-strip")).toHaveLength(0);
       expect(inlineRoot.children.length).toBe(2);
-      // The alerting rows are ordinary rows in their own groups, still wearing
-      // the inline alert treatment (ember rail, tinted background)...
+      // The alerting rows are ordinary rows in their own groups, still carrying
+      // their membership classes (paint died with SORT-INK-1; the status cell
+      // is the mark)...
       const alphaBody = inlineRoot.children[0].children[inlineRoot.children[0].children.length - 1];
       const alertRow = byFkey(alphaBody, "agent:codex:a-alert");
       expect(alertRow).not.toBe(null);
@@ -10105,6 +10109,111 @@ describe("FE-B: harness-backed client behavior", () => {
         snap: { schemaVersion: 1, programs: [loud] },
       })));
       expect(textOf(byClass(root, "repo-head"))).toContain("1alert");
+    });
+  });
+
+  describe("alert-first section order", () => {
+    const inlineUi = (over: Record<string, unknown> = {}) =>
+      listUi({ view: "board", lookbackHours: null, needsYouDisplay: "inline", ...over });
+    const byFkey = (node: any, key: string): any =>
+      findAll(node, (n: any) => n.dataset?.fkey === key)[0] ?? null;
+    const fkeysInOrder = (node: any): string[] =>
+      findAll(node, (n: any) => Boolean(n.dataset?.fkey?.startsWith("agent:"))).map((n: any) => n.dataset.fkey);
+
+    test("an alerting row rises to the top of its own section and no further", () => {
+      // Inline mode, one program, both sections populated. The waiting alert
+      // must lead Waiting while every Active row — calm or not — stays above
+      // it: the section heading states what its rows are doing, and the sort
+      // keeping inside the heading is what keeps that sentence true.
+      const program = {
+        id: "p", name: "P", agents: [
+          agent({ id: "codex:w1", status: "running" }),
+          agent({ id: "codex:w2", status: "running" }),
+          agent({ id: "codex:idle", status: "waiting", lifecycle: "waiting" }),
+          agent({ id: "codex:ask", status: "attention", outcome: "needs-you", lifecycle: "waiting" }),
+        ],
+      };
+      const root = newNode("div");
+      withDom(() => M.syncProgramList(root, [{ program, agents: program.agents }], inlineUi({
+        snap: { schemaVersion: 1, programs: [program] },
+      })));
+      const order = fkeysInOrder(root);
+      // Waiting alert leads Waiting…
+      expect(order.indexOf("agent:codex:ask")).toBeLessThan(order.indexOf("agent:codex:idle"));
+      // …and never enters Active: every Active row still precedes it.
+      expect(order.indexOf("agent:codex:w2")).toBeLessThan(order.indexOf("agent:codex:ask"));
+    });
+
+    test("two alerting rows keep the server's order — the sort is stable, not recency", () => {
+      const program = {
+        id: "p2", name: "P2", agents: [
+          agent({ id: "codex:first-ask", status: "attention", outcome: "needs-you", lifecycle: "waiting" }),
+          agent({ id: "codex:calm", status: "waiting", lifecycle: "waiting" }),
+          agent({ id: "codex:second-ask", status: "attention", outcome: "needs-you", lifecycle: "waiting" }),
+        ],
+      };
+      const root = newNode("div");
+      withDom(() => M.syncProgramList(root, [{ program, agents: program.agents }], inlineUi({
+        snap: { schemaVersion: 1, programs: [program] },
+      })));
+      const order = fkeysInOrder(root);
+      expect(order.indexOf("agent:codex:first-ask")).toBeLessThan(order.indexOf("agent:codex:second-ask"));
+      expect(order.indexOf("agent:codex:second-ask")).toBeLessThan(order.indexOf("agent:codex:calm"));
+    });
+
+    test("an acknowledged alert does not rise — the sort shares the strip's presented membership", () => {
+      // stripAlerting = alerting && !acked. An acked row's word is muted
+      // (rowStateWords alertMuted) and the strip drops it; a sort that still
+      // floated it would put a calm-reading row at the section's top, which is
+      // exactly the ink/order disagreement this design forbids.
+      // ackedAgent (app.js) reads `snap.acks[].agentId`, so the ack marker is
+      // an acks record naming this agent — shaped from that code, and the
+      // guard below proves the fixture is truly acked before the ordering is
+      // trusted.
+      const askedThenAcked = agent({ id: "codex:acked", status: "attention", outcome: "needs-you", lifecycle: "waiting" });
+      const calm = agent({ id: "codex:calm2", status: "waiting", lifecycle: "waiting" });
+      const program = { id: "p3", name: "P3", agents: [calm, askedThenAcked] };
+      const snap = { schemaVersion: 1, programs: [program], acks: [{ agentId: "codex:acked" }] };
+      expect(M.ackedAgent(askedThenAcked, snap)).toBe(true); // fixture guard — fix the fixture, never this line
+      const root = newNode("div");
+      withDom(() => M.syncProgramList(root, [{ program, agents: program.agents }], inlineUi({ snap })));
+      const order = fkeysInOrder(root);
+      expect(order.indexOf("agent:codex:calm2")).toBeLessThan(order.indexOf("agent:codex:acked"));
+    });
+
+    test("alertFirst runs after byRole in the builder, so alert outranks role in worktree programs", () => {
+      // Composed stable sorts: the LAST sort is the primary key. byRole must
+      // run first and alertFirst after it, or a worktree program's role order
+      // would bury an alerting worker under a calm orchestrator.
+      const src = source.replace(/\s+/g, " ");
+      const role = src.indexOf("for (const bucket of buckets.values()) byRole(bucket);");
+      const alert = src.indexOf("for (const bucket of buckets.values()) alertFirst(bucket, sectionHot);");
+      expect(role).toBeGreaterThan(-1);
+      expect(alert).toBeGreaterThan(-1);
+      expect(role).toBeLessThan(alert);
+    });
+
+    test("SORT-INK-2 the status cell is the row's only in-row alert mark — and it cannot be dieted away", () => {
+      // With the wash and rails gone (SORT-INK-1), this cell is the whole
+      // in-row identification story. A hook-shaped alert has a HEALTHY outcome,
+      // so the word AND the alert ink class both have to be asserted.
+      const hookShaped = agent({ id: "codex:hook", status: "waiting", lifecycle: "waiting", hookLifecycle: "needsInput" });
+      const program = { id: "sp", name: "SP", agents: [hookShaped] };
+      const root = newNode("div");
+      withDom(() => M.syncProgramList(root, [{ program, agents: program.agents }], inlineUi({
+        snap: { schemaVersion: 1, programs: [program] },
+      })));
+      const row = byFkey(root, "agent:codex:hook");
+      expect(row).not.toBe(null);
+      // app.js nests the ink (.row-state cell > span.row-state-alert), so the
+      // wrapper is matches[0] and the alert class rides the word span inside
+      // it — assert the class across the cell's own subtree, where the DOM
+      // actually carries it.
+      const cells = findAll(row, (n: any) => String(n.className ?? "").includes("row-state"));
+      expect(cells[0]).not.toBe(undefined);
+      expect(cells.map((n: any) => String(n.className)).join(" ")).toContain("row-state-alert");
+      // And the ink that class carries still exists in the sheet.
+      expect(styles).toContain(".row-state-alert { color: var(--needs); }");
     });
   });
 

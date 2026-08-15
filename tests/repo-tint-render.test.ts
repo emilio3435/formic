@@ -570,9 +570,14 @@ describe("status outranks identity (authority rule 5)", () => {
     }
   });
 
-  test("the attention rows keep the ember rail and the ember wash they already had", () => {
-    expect(styles).toMatch(/\.agent-row\.is-alerting\s*\{[^}]*color-mix\(in srgb, var\(--ember\) 6%/);
-    expect(styles).toMatch(/\.agent-row\.is-alerting:not\(\.is-selected\)\s*\{[^}]*inset 4px 0 var\(--needs\)/);
+  test("the retired attention paint stays retired — no ember wash or rail returns to the row", () => {
+    /* The wash and rail this test pinned died with SORT-INK-1
+       (web-client.test.ts): identification moved to the status cell,
+       findability to section order. Rule 5 still holds — the :not()
+       exclusions above keep repo paint off attention rows, and the alert
+       paint's exit must not quietly hand those rows the repo wash back. */
+    expect(styles).not.toMatch(/\.agent-row\.is-alerting\s*\{[^}]*color-mix\(in srgb, var\(--ember\) 6%/);
+    expect(styles).not.toMatch(/\.agent-row\.is-alerting:not\(\.is-selected\)\s*\{[^}]*inset 4px 0/);
   });
 
   test("the approved mix percentages are what shipped", () => {

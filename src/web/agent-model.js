@@ -381,6 +381,17 @@ export function alerting(agent) {
   return livenessState(agent) === "running";
 }
 
+/* Alert-first, stable, and nothing else: the caller hands in one lifecycle
+   section's rows and the members its predicate marks hot rise to the top.
+   Stability is the contract — alert order is the server's order, not
+   recency — and the sort is in place to match byRole's convention in the
+   section builder. The predicate is REQUIRED: membership (including the
+   ack veto — see stripAlerting in app.js) is presentation-state the pure
+   model must not guess at. */
+export function alertFirst(list, isAlerting) {
+  return list.sort((left, right) => (isAlerting(left) ? 0 : 1) - (isAlerting(right) ? 0 : 1));
+}
+
 export function deriveRollup(agents) {
   const state = (a) => lifecycleOf(a);
   const out = (a) => deriveOutcome(a);

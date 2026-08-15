@@ -1894,28 +1894,6 @@ body.feed-frozen .programs { opacity: 0.62; }
    winner was whichever rule the cascade reached last. Role keeps its chip
    (drawer) and its --role-color vocabulary above. */
 
-/* Alert washes must ride WITH a status-colored edge mark, never a standalone
-   flood (Rule 1 — indicator inks, not flood fills; codified soft-wash threshold:
-   a ≤10% tint always paired with an edge rail). The provider/role left border is
-   orthogonal to the alert, so the alert gets its own inset rail; selection keeps
-   its ink treatment, so the rail defers there. */
-.agent-row.is-needs-you { background: color-mix(in srgb, var(--ember) 6%, transparent); }
-.agent-row.is-blocked { background: color-mix(in srgb, var(--blocked) 6%, transparent); }
-.agent-row.is-failed { background: color-mix(in srgb, var(--failed) 7%, transparent); }
-/* Needs-you MEMBERSHIP (inline display mode) — same treatment as is-needs-you,
-   different fact: a hook-needsInput row is in the set with a healthy outcome. */
-.agent-row.is-alerting { background: color-mix(in srgb, var(--ember) 6%, transparent); }
-.agent-row.is-needs-you:not(.is-selected) { box-shadow: inset 4px 0 var(--needs); }
-.agent-row.is-blocked:not(.is-selected) { box-shadow: inset 4px 0 var(--blocked); }
-.agent-row.is-failed:not(.is-selected) { box-shadow: inset 4px 0 var(--failed); }
-.agent-row.is-alerting:not(.is-selected) { box-shadow: inset 4px 0 var(--needs); }
-/* The alert rails above ride the same box-shadow property as the :focus-visible
-   ring. Keep the status rail as the first inset layer and the named Formic focus
-   ring as the second layer so both remain visible on alert rows. */
-.agent-row.is-needs-you:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--color-status-danger), var(--color-focus-ring); }
-.agent-row.is-blocked:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--color-status-danger), var(--color-focus-ring); }
-.agent-row.is-failed:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--color-status-danger), var(--color-focus-ring); }
-.agent-row.is-alerting:not(.is-selected):focus-visible { box-shadow: inset 4px 0 var(--color-status-danger), var(--color-focus-ring); }
 .agent-row.is-ended { opacity: 0.66; }
 
 /* One shared 5-track template — identity (wide, left) + the right-aligned
@@ -2404,8 +2382,6 @@ body.feed-frozen .programs { opacity: 0.62; }
   -webkit-line-clamp: 3;
   max-height: calc(1.35em * 3);
 }
-.agent-row.is-needs-you .row-summary { color: color-mix(in srgb, var(--ember) 65%, var(--ink)); }
-.agent-row.is-failed .row-summary { color: color-mix(in srgb, var(--failed) 65%, var(--ink)); }
 
 /* swarm tree connectors + depth accents */
 /* One neutral tree ink, no per-depth hues: the old palette (green, rust,
@@ -4117,6 +4093,62 @@ body.feed-frozen .programs { opacity: 0.62; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
 
+/* ---------- the float: alert reorders are flown, not teleported ----------
+   The rank change is computed, reconcileKeyed moves the nodes, and every row
+   that moved travels old→new position via element.animate() — WAAPI, because
+   style-src 'self' blocks inline style but not programmatic animations. The
+   row that CAUSED the reorder wears is-floating for the flight: raised
+   ground, one two-layer shadow (wide ambient throw for altitude, close
+   contact shadow so it still reads attached), z-index above the rows it
+   passes. On arrival is-landing fades the lift out instead of blinking it
+   off. One lift, one settle, no residue — nothing loops, breathes, or
+   pulses. */
+.agent-row.is-floating {
+  position: relative;
+  z-index: 3;
+  background: var(--raise);
+  box-shadow:
+    0 18px 40px -14px color-mix(in srgb, var(--ink) 30%, transparent),
+    0 5px 12px -6px color-mix(in srgb, var(--ink) 20%, transparent),
+    inset 0 0 0 1px var(--line);
+}
+.agent-row.is-landing {
+  position: relative;
+  transition: box-shadow 0.5s ease, background-color 0.5s ease;
+  box-shadow: none;
+}
+/* Landing clears the lift's raised ground — but never the selection or hover
+   tint. Those are about the operator's choice and pointer, not the flight,
+   and blanking them here read as a 540ms blink on exactly the row the
+   operator was touching. */
+.agent-row.is-landing:not(.is-selected):not(:hover) {
+  background: transparent;
+}
+/* The keyboard ring is a guarded invariant and rides ABOVE the flight: the
+   lift's box-shadow and the landing's `box-shadow: none` both sit later in
+   the sheet at the base ring's own (0,2,0), so without these composites a
+   focused row goes ringless for the whole flight and the fade after it.
+   Same two ring layers as .agent-row:focus-visible. */
+.agent-row.is-floating:focus-visible {
+  box-shadow:
+    0 18px 40px -14px color-mix(in srgb, var(--ink) 30%, transparent),
+    0 5px 12px -6px color-mix(in srgb, var(--ink) 20%, transparent),
+    inset 0 0 0 1px var(--line),
+    inset 0 0 0 2px var(--color-interactive),
+    var(--color-focus-ring);
+}
+.agent-row.is-landing:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--color-interactive), var(--color-focus-ring);
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-row.is-floating,
+  .agent-row.is-landing {
+    transition: none;
+    box-shadow: none;
+    background: transparent;
+  }
+}
+
 /* ---------- settings ---------- */
 /* The board's timing thresholds, which decide what every session on it is
    called.
@@ -5341,14 +5373,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 
 /* Status is operational state. Role chips are classification and keep their
    own tag palette; neither channel borrows the other's hue. */
-.agent-row.is-needs-you,
-.agent-row.is-blocked,
-.agent-row.is-failed,
-.agent-row.is-alerting { background: color-mix(in srgb, var(--color-status-danger) 6%, var(--color-surface-card)); }
-.agent-row.is-needs-you:not(.is-selected),
-.agent-row.is-blocked:not(.is-selected),
-.agent-row.is-failed:not(.is-selected),
-.agent-row.is-alerting:not(.is-selected) { box-shadow: inset 4px 0 var(--color-status-danger); }
 .needs-strip { border-left-color: var(--color-status-danger); }
 .needs-strip-title,
 .needs-strip-count,
@@ -5914,26 +5938,34 @@ a.artifact-path:hover { text-decoration: underline; }
   border-radius: 50%;
   background: var(--repo-tint);
 }
-.repo-section.has-repo-tint .agent-row:not(.is-needs-you):not(.is-blocked):not(.is-failed):not(.is-alerting):not(.is-selected) {
+/* The flight outranks the band the same way it outranks the tick below: a
+   mover wears .is-floating's raised ground for the whole glide, and this
+   rule's specificity would out-vote it without the exclusion. Landing is
+   deliberately NOT excluded — identity is the right ground to fade back
+   onto. */
+.repo-section.has-repo-tint .agent-row:not(.is-needs-you):not(.is-blocked):not(.is-failed):not(.is-alerting):not(.is-selected):not(.is-floating) {
   background: color-mix(in srgb, var(--repo-tint) 4%, var(--surface));
 }
-.repo-section.has-repo-tint .agent-row:not(.is-needs-you):not(.is-blocked):not(.is-failed):not(.is-alerting):not(.is-selected):hover {
+.repo-section.has-repo-tint .agent-row:not(.is-needs-you):not(.is-blocked):not(.is-failed):not(.is-alerting):not(.is-selected):not(.is-floating):hover {
   background: color-mix(in srgb, var(--repo-tint) 7%, var(--surface));
 }
 
 /* Signal — the flat Needs-you strip, where a row's repository is not written
    above it. A 3px tick rather than the band's 2px spine: it is carrying on one
    line what the band carries over a whole card. */
-.agent-row.has-repo-tick:not(.is-needs-you):not(.is-blocked):not(.is-failed):not(.is-alerting):not(.is-selected) {
+.agent-row.has-repo-tick:not(.is-needs-you):not(.is-blocked):not(.is-failed):not(.is-alerting):not(.is-selected):not(.is-floating) {
   background: color-mix(in srgb, var(--repo-tint) 4%, var(--surface));
   box-shadow: inset 3px 0 color-mix(in srgb, var(--repo-tint) 55%, transparent);
 }
-.agent-row.has-repo-tick:not(.is-needs-you):not(.is-blocked):not(.is-failed):not(.is-alerting):not(.is-selected):hover {
+.agent-row.has-repo-tick:not(.is-needs-you):not(.is-blocked):not(.is-failed):not(.is-alerting):not(.is-selected):not(.is-floating):hover {
   background: color-mix(in srgb, var(--repo-tint) 7%, var(--surface));
 }
 /* The focus ring is a navigation cue and outranks the tick, the same way it
    already outranks the alert rails a few hundred lines above. */
-.agent-row.has-repo-tick:not(.is-needs-you):not(.is-blocked):not(.is-failed):not(.is-alerting):not(.is-selected):focus-visible {
+/* The flight outranks the tick the same way: a newly-calm row sinking home
+   must wear the lift shadow, and the tick chain's specificity would out-rank
+   .is-floating without this exclusion. */
+.agent-row.has-repo-tick:not(.is-needs-you):not(.is-blocked):not(.is-failed):not(.is-alerting):not(.is-selected):not(.is-floating):focus-visible {
   box-shadow: inset 3px 0 color-mix(in srgb, var(--repo-tint) 55%, transparent), var(--color-focus-ring);
 }
 .strip-repo-pill {

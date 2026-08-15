@@ -210,11 +210,14 @@ describe("Formic reskin RED contracts", () => {
     }
     const chip = cssRule(styles, ".role-chip");
     expect(chip, "FORMIC-ROLE-STATUS-RED: role chips must carry role aliases").toMatch(/var\(--role-(?:color|ink|surface)/);
-    const needsRail = cssRule(styles, ".agent-row.is-needs-you:not(.is-selected)");
-    expect(needsRail, "FORMIC-ROLE-STATUS-RED: board blocker rails must remain danger status").toMatch(
+    // The row alert rail died with SORT-INK-1 (web-client.test.ts); the pinned
+    // Needs-you strip is the surviving board-level blocker mark, and the
+    // invariant is unchanged: status marks stay operational, never role tags.
+    const needsStrip = cssRule(styles, ".needs-strip");
+    expect(needsStrip, "FORMIC-ROLE-STATUS-RED: board blocker marks must remain danger status").toMatch(
       /var\(--color-status-danger(?:-text|-tint)?\)|var\(--needs\)/,
     );
-    expect(needsRail, "FORMIC-ROLE-STATUS-RED: status rails must not consume role tags").not.toMatch(/var\(--tag-/);
+    expect(needsStrip, "FORMIC-ROLE-STATUS-RED: status marks must not consume role tags").not.toMatch(/var\(--tag-/);
   });
 
   test("[FORMIC-ACTIONS-RED] primary and ghost actions retain distinct semantic roles", () => {
