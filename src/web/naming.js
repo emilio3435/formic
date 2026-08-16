@@ -36,6 +36,8 @@ export const PROVIDER_DISPLAY_NAMES = {
   prime: "Prime",
   grok: "Grok",
   hermes: "Hermes",
+  muse: "Muse",
+  antigravity: "Antigravity",
 };
 
 /* Strings that arrive in a name-shaped field but are not names: OMP's periodic

@@ -9,6 +9,7 @@ import type { SettingsFileOperations } from "./settings";
 export type CollectorKind =
   | "cursor-gui" | "cursor-cli" | "codex" | "claude" | "factory"
   | "prime" | "omp" | "grok-cli" | "hermes" | "grok-bot"
+  | "muse" | "antigravity-cli" | "antigravity-desktop" | "antigravity-ide"
   | "burnbar" | "cmux-hooks" | "unknown";
 
 export type CollectorReason = "needs-parser" | "needs-home-list";
@@ -42,14 +43,18 @@ const PROVIDER_FOR = {
   "omp": "omp",
   "grok-cli": "grok",
   "hermes": "hermes",
+  "muse": "muse",
+  "antigravity-cli": "antigravity",
+  "antigravity-desktop": "antigravity",
+  "antigravity-ide": "antigravity",
   "grok-bot": null,
   "burnbar": null,
   "cmux-hooks": null,
   "unknown": null,
 } as const satisfies Record<CollectorKind, Provider | null>;
 
-const NAME_TOKEN_RE = /^(claude|codex|cursor|grok|hermes|factory|prime|omp|droid|aider|continue|opencode|gemini|windsurf|copilot|crush|amp)/i;
-const AGENT_MENTION_RE = /(claude|codex|cursor|grok|hermes|factory|prime|omp|droid|aider|continue|opencode|gemini|windsurf|copilot|crush|amp)/i;
+const NAME_TOKEN_RE = /^(claude|codex|cursor|grok|hermes|factory|prime|omp|droid|aider|continue|opencode|gemini|muse|antigravity|windsurf|copilot|crush|amp)/i;
+const AGENT_MENTION_RE = /(claude|codex|cursor|grok|hermes|factory|prime|omp|droid|aider|continue|opencode|gemini|muse|antigravity|windsurf|copilot|crush|amp)/i;
 const SESSION_DIR_NAMES = new Set(["sessions", "projects", "chats", "conversations"]);
 const SKIP_WALK_NAMES = new Set(["node_modules", "Caches", "Logs"]);
 
@@ -64,6 +69,10 @@ export function defaultHomes(home: string): ReadonlyArray<{ kind: CollectorKind;
     { kind: "omp", dataDir: join(home, ".omp") },
     { kind: "grok-cli", dataDir: join(home, ".grok") },
     { kind: "hermes", dataDir: join(home, ".hermes") },
+    { kind: "muse", dataDir: join(home, ".local/share/muse") },
+    { kind: "antigravity-cli", dataDir: join(home, ".gemini/antigravity-cli") },
+    { kind: "antigravity-desktop", dataDir: join(home, ".gemini/antigravity") },
+    { kind: "antigravity-ide", dataDir: join(home, ".gemini/antigravity-ide") },
     { kind: "cmux-hooks", dataDir: join(home, ".cmuxterm") },
     { kind: "burnbar", dataDir: join(home, "Library/Application Support/OpenBurnBar") },
   ];
@@ -290,6 +299,18 @@ export function classifyDataDir(dataDir: string, fs: ScanFs, deadline?: number):
   }
   if (isDotFamily(base, "hermes") && (fs.isDirectory(join(dataDir, "sessions")) || fs.isDirectory(join(dataDir, "cron")))) {
     return candidate("hermes", dataDir, fs);
+  }
+  if (isDotFamily(base, "muse") && (fs.isDirectory(join(dataDir, "sessions")) || base.replace(/^\./, "").toLowerCase() === "muse")) {
+    return candidate("muse", dataDir, fs);
+  }
+  if (base === "antigravity-cli" || dataDir.endsWith("/.gemini/antigravity-cli")) {
+    return candidate("antigravity-cli", dataDir, fs);
+  }
+  if (base === "antigravity-ide" || dataDir.endsWith("/.gemini/antigravity-ide")) {
+    return candidate("antigravity-ide", dataDir, fs);
+  }
+  if (base === "antigravity" || dataDir.endsWith("/.gemini/antigravity")) {
+    return candidate("antigravity-desktop", dataDir, fs);
   }
   if (base.startsWith("Grok Bot") && fs.isDirectory(join(dataDir, "sand-client-persistence"))) {
     return candidate("grok-bot", dataDir, fs);

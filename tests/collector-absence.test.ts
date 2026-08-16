@@ -81,6 +81,26 @@ describe("a provider that was never installed is absent, not degraded", () => {
       .toEqual({ value: [], errors: [] });
   });
 
+  test("Muse is absent only when its data dir is missing", async () => {
+    const home = emptyHome();
+    expect(await collectSessionProvider("muse", home))
+      .toEqual({ value: [], errors: [], absent: true });
+    mkdirSync(join(home, ".local/share/muse"), { recursive: true });
+    expect(await collectSessionProvider("muse", home))
+      .toEqual({ value: [], errors: [] });
+  });
+
+  test("Antigravity is absent only when all three trees are missing", async () => {
+    for (const tree of [".gemini/antigravity-cli", ".gemini/antigravity", ".gemini/antigravity-ide"]) {
+      const home = emptyHome();
+      expect(await collectSessionProvider("antigravity", home))
+        .toEqual({ value: [], errors: [], absent: true });
+      mkdirSync(join(home, tree), { recursive: true });
+      expect(await collectSessionProvider("antigravity", home))
+        .toEqual({ value: [], errors: [] });
+    }
+  });
+
   test("Hermes is absent only when its home is missing", async () => {
     const home = emptyHome();
     expect(await collectSessionProvider("hermes", home))
@@ -135,13 +155,13 @@ describe("a provider that was never installed is absent, not degraded", () => {
          HOME reports every provider absent", which iterates the shared union. The old
          fixture left omp unstated and the accounting silently read it as
          installed-and-healthy, which is the bug this file now covers. */
-      sourceAbsent: { cursor: true, omp: true, factory: true, prime: true, grok: true, hermes: true },
+      sourceAbsent: { cursor: true, omp: true, factory: true, prime: true, grok: true, hermes: true, muse: true, antigravity: true },
       cmuxAbsent: true,
       cmuxReachable: false,
     });
 
     // "2 of 2 collectors healthy" — calm, and true.
-    expect(summary).toMatchObject({ healthy: 2, degraded: 0, absent: 6, total: 2 });
+    expect(summary).toMatchObject({ healthy: 2, degraded: 0, absent: 8, total: 2 });
   });
 });
 

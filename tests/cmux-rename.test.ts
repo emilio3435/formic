@@ -214,6 +214,8 @@ async function renameState(): Promise<HubState> {
     prime: { value: [], errors: [] },
     grok: { value: [], errors: [] },
     hermes: { value: [], errors: [] },
+    muse: { value: [], errors: [] },
+    antigravity: { value: [], errors: [] },
   });
   const collectors: HubCollectors = {
     sessions: async () => sessions(),
