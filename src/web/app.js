@@ -32,7 +32,6 @@ import {
   transcriptLineNode,
   transcriptWindow,
   TRANSCRIPT_RENDER_CAP,
-  TRANSCRIPT_ROLE_LABELS,
 } from "./transcript.js";
 import {
   applyNotifications,
@@ -1570,6 +1569,7 @@ globalThis.TheAntHill = {
   transcriptUrl, clampTranscriptLimit, nextTranscriptLimit, normalizeTranscript,
   transcriptFailureText, transcriptWindow, renderTranscriptFeedLead,
   chatBubbleNode, renderChatFeedBody, shouldAutoLoadTranscript, chatScrollPlan, saveChatScrollFrom,
+  chatSpeechNeedsCollapse, isCollectorWindowText,
   captureDrawerScroll, restoreDrawerScroll,
   actionsUrl, clampActionsLimit, normalizeActions, actionsFailureText,
   controlOutcome,
@@ -11640,7 +11640,7 @@ function singleLineInstructionDraft(draft) {
 function resizeComposer(input) {
   if (!input || !input.style || !Number.isFinite(input.scrollHeight)) return;
   input.style.height = "auto";
-  const height = Math.max(44, Math.min(input.scrollHeight, 128));
+  const height = Math.max(72, Math.min(input.scrollHeight, 128));
   input.style.height = height + "px";
   input.style.overflowY = input.scrollHeight > 128 ? "auto" : "hidden";
 }
@@ -11767,7 +11767,7 @@ function renderCommandDock(agent, control = deriveControlState(agent), alarm = f
       sendButton.classList.toggle("primary", ready);
     };
     const input = el("textarea", {
-      rows: "1",
+      rows: "3",
       placeholder: held
         ? "Waiting for a fresh snapshot…"
         : instructCap.enabled
@@ -12342,39 +12342,58 @@ function transcriptArtifact(agent) {
    "No operate digest yet" placeholder — a tab whose only remaining content was an
    apology for having none. */
 
-const TURN_ROLE_LABELS = { user: "You", assistant: "Agent", task: "Task" };
+/* Collector front windows are 240 characters, word-broken, then a dead-end
+   ellipsis. Chat may paint that window while the transcript is missing — common
+   on Grok rows — but the bubble itself is never a dead end: a trailing chevron
+   opens the turn. Long loaded speech uses the same control to collapse to about
+   six lines. Side and fill say who spoke; run ids stay in Evidence. */
+const CHAT_COLLAPSE_LINES = 6;
+const CHAT_COLLAPSE_CHARS = 240;
+const expandedChatSpeech = new Set();
 
-/* "You" is a claim, and for every lane in every swarm it was a false one: the
-   message came from an orchestrator through the producer helper, which stamps
-   `[from <agent.id> run <runId>]` on the front of it. When that envelope is
-   there the turn is attributed to whoever actually sent it, resolved against the
-   board so the operator reads a name rather than a provider session id, and the
-   run rides underneath as the other half of the provenance.
+function isCollectorWindowText(text) {
+  return /…$/.test(String(text || "").trim());
+}
 
-   When it is absent the label stays "You" — which is now worth something,
-   because an agent-sent instruction can no longer wear it. */
-function renderChatTurn(role, text, sender = null) {
-  return el("div", { class: "chat-turn chat-turn--" + role },
-    el("div", { class: "chat-turn-role", text: sender ? sender.name : (TURN_ROLE_LABELS[role] || role) }),
-    sender ? el("div", { class: "chat-turn-sender", text: "sent in run " + sender.runId }) : null,
-    /* T5's verdict, said as the evidence it is and not as the conclusion it is
-       not. The server reports whether the claimed sender's own transcript
-       contains this message; whether a mismatch is a forgery or a scan that
-       could not see far enough is not something this client can know, and a
-       board that prints "forged" is making an accusation out of a search
-       result. So the mark states the finding and names the action.
+function chatSpeechNeedsCollapse(text, opts = {}) {
+  const value = String(text || "");
+  if (!value) return false;
+  if (opts.preview && isCollectorWindowText(value)) return true;
+  if (value.split(/\r?\n/).length > CHAT_COLLAPSE_LINES) return true;
+  return value.length > CHAT_COLLAPSE_CHARS;
+}
 
-       Same rule the rest of this file already follows for server-derived
-       verdicts — actionOutcomeView reads an unknown outcome as "the server's own
-       word rather than a confident wrong label". An ABSENT verdict marks
-       nothing at all: unverifiable evidence must never become an accusation. */
-    sender && sender.unconfirmed
-      ? el("div", {
-        class: "sender-unconfirmed",
-        title: "The claimed sender's own transcript does not contain this message. Treat the attribution as unproven and check the sender before acting on it.",
-      }, icon("warning"), el("span", { text: "Sender unconfirmed" }))
-      : null,
-    el("p", { class: "chat-turn-body", text }));
+function chatSpeakerName(role, sender) {
+  if (sender && sender.name) return sender.name;
+  if (role === "user" || role === "task") return "You";
+  return "Agent";
+}
+
+function chatSpeechKey(agentId, role, text) {
+  const value = String(text || "");
+  let hash = 0;
+  for (let i = 0; i < value.length; i++) hash = ((hash << 5) - hash + value.charCodeAt(i)) | 0;
+  return String(agentId || "") + ":" + String(role || "") + ":" + hash.toString(36);
+}
+
+function chatSpeechProse(line, ui) {
+  if (line && line.sender) return String(line.text || "");
+  const text = String((line && line.text) || "");
+  return senderView(text, ui) ? withoutSenderHeader(text) : text;
+}
+
+function chatSpeechMoreLabel(expanded, preview, prose) {
+  if (expanded) return "Show less";
+  return preview && isCollectorWindowText(prose) ? "Open full turn" : "Show more";
+}
+
+function revealChatSpeech(agent, key, opts = {}) {
+  if (expandedChatSpeech.has(key)) expandedChatSpeech.delete(key);
+  else expandedChatSpeech.add(key);
+  if (!opts.preview || !isCollectorWindowText(opts.prose)) return;
+  const view = state.transcript || {};
+  if (view.agentId === agent.id && (view.loading || view.error || view.data)) return;
+  void loadTranscript(agent.id);
 }
 
 /* The sender as a NAME. `agent.id` is `provider:sourceSessionId` — durable, and
@@ -12433,112 +12452,126 @@ function dedupeTurns(candidates) {
   return kept;
 }
 
-/* Thread — the drawer's one reading surface, and the only place a message is
-   printed. Operate is gone: its "Last human message" was the SAME string as this
-   panel's user turn on 37% of the board, and on active agents it was actually the
-   ASSISTANT's prose under a label claiming a human wrote it. Its provider task
-   remains a fallback turn, its outcome note moved to the status line, and its
-   role/model chips were the third printing of facts the row and head already carry.
+/* Thread — the drawer's one reading surface. Preview collector windows and the
+   loaded transcript share one bubble. The provider task is a fallback only when
+   no real speech is on screen; once a user or assistant turn is present, kickoff
+   stays out of the feed. `lastHumanMessage` is deliberately not a fallback:
+   the server documents it as mixed assistant-or-user prose. */
+function decorateChatTurn(turn, agent, ui) {
+  const sender = senderView(turn.text, ui);
+  if (!sender) return turn;
+  /* The verdict belongs to ONE turn: the field the server actually checked.
+     `senderClaimText` is the mirror of the server's own candidate choice, so
+     marking any other headed turn — `task`, which keeps its kickoff envelope
+     forever — would flag a message nobody verified. */
+  const unconfirmed = agent.senderVerified === false && turn.text === senderClaimText(agent);
+  return {
+    ...turn,
+    text: withoutSenderHeader(turn.text),
+    sender: unconfirmed ? { ...sender, unconfirmed: true } : sender,
+  };
+}
 
-   `lastHumanMessage` is deliberately NOT a fallback here. The server documents it
-   as "the latest provider-shaped assistant OR user prose", so using it to fill a
-   turn labelled "You" is how the mislabel got in. When there is no user message,
-   the honest stand-in is the task the operator actually set. */
-function renderChat(agent, ui = state, opts = {}) {
-  const panel = el("div", { class: "inspector-panel", role: "tabpanel" });
-  /* The provider task is the final candidate: it keeps a turn-less drawer useful,
-     while dedupeTurns removes it whenever a recorded turn already carries the
-     same prose. The header does not render task content. */
-  /* The agent's reply leads. An operator opens this to find out what the AGENT
-     said; their own message is the one thing in the drawer they already know.
-     Reading order was user-first, and with the panel's head, banner and vitals
-     above it the reply began 821px down a 720px viewport — off-screen, with the
-     dock covering what little showed. Nothing here can raise the block itself,
-     so what it can do is put the payload at the top of it.
-
-     Safe against the dedup rule, which keeps whichever candidate comes first:
-     measured on 719 agents, 551 carry both fields and NONE of them say the same
-     prose, so no turn changes label or disappears because of this order. The two
-     fields are attributed by the server (`lastUserMessage` is the user's
-     request, `lastAgentMessage` the agent's reply), unlike `lastHumanMessage`,
-     which is why they can be trusted to differ rather than merely observed to. */
-  /* The envelope is read off each candidate and taken OFF its text before
-     dedupe, not after: dedupeTurns compares prose to decide what repeats, and
-     two turns carrying the same message under different addressing are the same
-     message. Stripping first is what lets that comparison see it. */
-  // B2: transcriptTail carries the [TL;DR] heartbeat for Prime (humanMessages=[]), and for
-  // other harnesses it is still the freshest tail. Include it as an assistant candidate
-  // when it carries the B2 marker so the drawer Chat proves the same wire→pixel path as the row.
+function previewChatTurns(agent, ui = state) {
   const tldrTail = typeof agent.transcriptTail === "string" && agent.transcriptTail.includes("[TL;DR")
     ? agent.transcriptTail.trim()
     : "";
-  const candidates = [
+  /* The agent's reply leads. An operator opens this to find out what the AGENT
+     said; their own message is the one thing in the drawer they already know.
+     The envelope is stripped before dedupe so two addressed copies of the same
+     prose collapse to one bubble. */
+  const speech = dedupeTurns([
     { role: "assistant", text: agent.lastAgentMessage },
     { role: "assistant", text: tldrTail },
     { role: "user", text: agent.lastUserMessage },
-    { role: "task", text: agent.task },
-  ].map((turn) => {
-    const sender = senderView(turn.text, ui);
-    if (!sender) return turn;
-    /* The verdict belongs to ONE turn: the field the server actually checked.
-       `senderClaimText` is the mirror of the server's own candidate choice, so
-       marking any other headed turn — `task`, which keeps its kickoff envelope
-       forever — would flag a message nobody verified. */
-    const unconfirmed = agent.senderVerified === false && turn.text === senderClaimText(agent);
-    return {
-      ...turn,
-      text: withoutSenderHeader(turn.text),
-      sender: unconfirmed ? { ...sender, unconfirmed: true } : sender,
-    };
-  });
-  const turns = dedupeTurns(candidates);
-  for (const turn of turns) panel.append(renderChatTurn(turn.role, turn.text, turn.sender));
+  ].map((turn) => decorateChatTurn(turn, agent, ui)));
+  if (speech.length) return speech;
+  return dedupeTurns([{ role: "task", text: agent.task }].map((turn) => decorateChatTurn(turn, agent, ui)));
+}
 
-  /* The transcript path is not here. Evidence's artifact list already renders the
-     same path with its own Copy button, and raw paths are exactly what "evidence
-     stays collapsed as the place for raw detail" means. */
-
-  if (!panel.childNodes.length && !opts.suppressEmptyState) {
-    panel.append(chatFeedStateNode(
+function renderChat(agent, ui = state, opts = {}) {
+  const feed = el("div", { class: "chat-feed" });
+  for (const turn of previewChatTurns(agent, ui)) {
+    feed.append(chatMessageGroupNode(
+      [{ at: null, role: turn.role, text: turn.text, sender: turn.sender || null }],
+      agent,
+      ui,
+      { preview: true },
+    ));
+  }
+  if (!feed.childNodes.length && !opts.suppressEmptyState) {
+    feed.append(chatFeedStateNode(
       "empty", "scroll-text", "No readable turns yet",
       "No readable turns recorded for this session yet.",
     ));
   }
-  return panel;
+  return feed;
 }
 
-/* Consecutive transcript speech from one role/sender as a chat bubble. The meta line is the 12px mono strip:
-   who spoke — the resolved sender when the line carries a producer envelope,
-   the role label otherwise — and when, relative. The sender-verdict semantics
-   are renderChatTurn's, unchanged: the mark states the server's finding on the
-   ONE text it actually checked (senderClaimText), and an absent verdict marks
-   nothing at all. */
+/* Consecutive transcript speech from one role/sender as a chat bubble. Side and
+   fill say who spoke; time can stay quiet. The sender-verdict mark states the
+   server's finding on the ONE text it actually checked (senderClaimText), and
+   an absent verdict marks nothing at all. */
 function chatMessageGroupKey(line) {
   const sender = parseSenderHeader(line.text);
   return line.role + ":" + (sender ? sender.agentId + ":" + sender.runId : "direct");
 }
 
-function chatMessageGroupNode(lines, agent, ui = state) {
+function chatMessageGroupNode(lines, agent, ui = state, opts = {}) {
+  const preview = opts.preview === true;
   const first = lines[0];
-  const sender = senderView(first.text, ui);
-  const unconfirmed = sender && agent.senderVerified === false
-    && lines.some((line) => line.text === senderClaimText(agent));
-  const bubble = el("div", { class: "chat-msg", dataset: { role: first.role } },
-    el("div", { class: "chat-msg-meta" },
-      el("span", { class: "chat-msg-role", text: sender ? sender.name : (TRANSCRIPT_ROLE_LABELS[first.role] || first.role) }),
-      sender ? el("span", { class: "chat-msg-run", text: "run " + sender.runId }) : null),
-    unconfirmed
-      ? el("div", {
-        class: "sender-unconfirmed",
-        title: "The claimed sender's own transcript does not contain this message. Treat the attribution as unproven and check the sender before acting on it.",
-      }, icon("warning"), el("span", { text: "Sender unconfirmed" }))
-      : null);
+  const sender = first.sender || senderView(first.text, ui);
+  const unconfirmed = Boolean(sender && (
+    sender.unconfirmed
+    || (agent.senderVerified === false && lines.some((line) => line.text === senderClaimText(agent)))
+  ));
+  const bubble = el("div", {
+    class: "chat-msg",
+    dataset: { role: first.role },
+    role: "group",
+    "aria-label": chatSpeakerName(first.role, sender),
+  });
+  if (unconfirmed) {
+    bubble.append(el("div", {
+      class: "sender-unconfirmed",
+      title: "The claimed sender's own transcript does not contain this message. Treat the attribution as unproven and check the sender before acting on it.",
+    }, icon("warning"), el("span", { text: "Sender unconfirmed" })));
+  }
   for (const line of lines) {
-    const lineSender = senderView(line.text, ui);
-    bubble.append(el("div", { class: "chat-msg-content" },
-      // UNTRUSTED. textContent via el({ text }) — never innerHTML.
-      el("p", { class: "chat-msg-body", text: lineSender ? withoutSenderHeader(line.text) : line.text }),
-      line.at ? el("time", { class: "chat-msg-at", datetime: line.at, title: line.at, text: agoText(line.at) }) : null));
+    const prose = chatSpeechProse(line, ui);
+    const key = chatSpeechKey(agent.id, line.role, prose);
+    const needs = chatSpeechNeedsCollapse(prose, { preview });
+    const expanded = expandedChatSpeech.has(key);
+    const body = el("p", {
+      class: "chat-msg-body" + (needs && !expanded ? " is-collapsed" : ""),
+      text: prose,
+    });
+    let more = null;
+    if (needs) {
+      more = el("button", {
+        type: "button",
+        class: "chat-msg-more" + (expanded ? " is-open" : ""),
+        "aria-expanded": expanded ? "true" : "false",
+        "aria-label": chatSpeechMoreLabel(expanded, preview, prose),
+        dataset: { fkey: "chat-more:" + key },
+        onclick: (event) => {
+          if (event && typeof event.preventDefault === "function") event.preventDefault();
+          if (event && typeof event.stopPropagation === "function") event.stopPropagation();
+          revealChatSpeech(agent, key, { preview, prose });
+          const open = expandedChatSpeech.has(key);
+          body.classList.toggle("is-collapsed", !open);
+          more.classList.toggle("is-open", open);
+          more.setAttribute("aria-expanded", String(open));
+          more.setAttribute("aria-label", chatSpeechMoreLabel(open, preview, prose));
+        },
+      }, icon("chevron"));
+    }
+    const at = line.at
+      ? el("time", { class: "chat-msg-at", datetime: line.at, title: line.at, text: agoText(line.at) })
+      : null;
+    const content = el("div", { class: "chat-msg-content" }, body);
+    if (at || more) content.append(el("div", { class: "chat-msg-foot" }, at, more));
+    bubble.append(content);
   }
   return bubble;
 }
@@ -12554,10 +12587,9 @@ const enteredTranscriptPayloads = new WeakSet();
 
 /* The feed's one body. The transcript, when it is held for THIS agent, rendered
    as grouped speech bubbles and grouped tool activity; system and unknown turns
-   stay quiet .tr-line rows between them. Otherwise the preview thread (renderChat) stands
-   in: loading, errored, or a session with no record yet. renderChat survives
-   ONLY as that fallback, which is what makes "every message appears exactly
-   once" true by construction — the drawer never holds both renderers' output. */
+   stay quiet .tr-line rows between them. Otherwise the preview thread stands
+   in: loading, errored, or a session with no record yet. Preview and loaded
+   speech share chatMessageGroupNode, so the pane never swaps visual languages. */
 function renderChatFeedBody(agent, ui = state, opts = {}) {
   const view = (ui && ui.transcript) || {};
   const held = view.agentId === agent.id;
@@ -12599,28 +12631,26 @@ function renderChatFeedBody(agent, ui = state, opts = {}) {
     body.append(transcriptLineNode(line));
     i += 1;
   }
-  /* Loaded transcripts replace the preview renderer, but they must not replace
-     its provider-task floor. Append the task only when no loaded line already
-     carries the same prose; this keeps turn-less and assistant-only records
-     identifiable without restoring a separate Task card. */
-  const loadedTurns = lines.map((line) => ({
-    role: line.role,
-    text: withoutSenderHeader(line.text),
-  }));
-  const taskFloor = dedupeTurns([
-    ...loadedTurns,
-    { role: "task", text: withoutSenderHeader(agent.task) },
-  ]).at(-1);
-  if (taskFloor?.role === "task") {
-    body.append(chatMessageGroupNode(
-      [{ at: null, role: taskFloor.role, text: agent.task }],
-      agent,
-      ui,
-    ));
+  /* Kickoff is not a fake last bubble. Once user or assistant speech is on
+     screen, the provider task stays out of the feed. Tool-only or empty
+     records can still use it as the one readable turn. */
+  const hasSpeech = lines.some((line) => line.role === "user" || line.role === "assistant");
+  if (!hasSpeech) {
+    const taskFloor = dedupeTurns([
+      ...lines.map((line) => ({ role: line.role, text: withoutSenderHeader(line.text) })),
+      { role: "task", text: withoutSenderHeader(agent.task) },
+    ]).at(-1);
+    if (taskFloor?.role === "task") {
+      const headed = decorateChatTurn({ role: "task", text: agent.task }, agent, ui);
+      body.append(chatMessageGroupNode(
+        [{ at: null, role: "task", text: headed.text, sender: headed.sender || null }],
+        agent,
+        ui,
+      ));
+    }
   }
   if (shouldAnimateEntry) {
-    const taskOffset = taskFloor?.role === "task" ? 2 : 1;
-    const entry = body.childNodes[body.childNodes.length - taskOffset];
+    const entry = body.childNodes[body.childNodes.length - 1];
     entry?.classList?.add("chat-entry");
     enteredTranscriptPayloads.add(view.data);
   }

@@ -266,10 +266,10 @@ describe("Formic reskin RED contracts", () => {
     expect(cssRule(styles, '.chat-msg[data-role="user"] .chat-msg-body'), "FORMIC-INVERSE-TEXT-RED: user body must use inverse text").toMatch(
       /color\s*:\s*var\(--color-text-on-inverse\)/,
     );
-    expect(cssRule(styles, '.chat-msg[data-role="user"] .chat-msg-role'), "FORMIC-INVERSE-TEXT-RED: user role must use strong inverse text").toMatch(
-      /color\s*:\s*var\(--color-text-on-inverse-strong\)/,
+    expect(cssRule(styles, '.chat-msg[data-role="user"] .chat-msg-at'), "FORMIC-INVERSE-TEXT-RED: user time must use muted inverse text").toMatch(
+      /color\s*:\s*var\(--color-text-on-inverse-muted\)/,
     );
-    expect(cssRule(styles, '.chat-msg[data-role="user"] .chat-msg-meta'), "FORMIC-INVERSE-TEXT-RED: user metadata must use muted inverse text").toMatch(
+    expect(cssRule(styles, '.chat-msg[data-role="user"] .chat-msg-more'), "FORMIC-INVERSE-TEXT-RED: user disclosure must use muted inverse text").toMatch(
       /color\s*:\s*var\(--color-text-on-inverse-muted\)/,
     );
     expect(styles, "FORMIC-INVERSE-TEXT-RED: component CSS must not use raw white literals for chat text").not.toMatch(
