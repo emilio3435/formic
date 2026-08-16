@@ -7712,21 +7712,23 @@ describe("FE-B: harness-backed client behavior", () => {
     // A loaded transcript with real speech must not append kickoff as a fake
     // last bubble. An exact loaded duplicate still renders once.
     const loaded = transcriptUi({
-      ok: true,
       agentId: both.id,
-      source: "/tmp/session.jsonl",
-      truncated: false,
-      lines: [{ at: null, role: "assistant", text: "done" }],
+      data: {
+        source: "/tmp/session.jsonl",
+        truncated: false,
+        lines: [{ at: null, role: "assistant", text: "done" }],
+      },
     });
     const loadedText = textOf(withDom(() => M.renderChatFeedBody(both, loaded)));
     expect(loadedText).toContain("done");
     expect(loadedText.match(/Port the SEM forecast/g)).toBeNull();
     const loadedDuplicate = transcriptUi({
-      ok: true,
       agentId: both.id,
-      source: "/tmp/session.jsonl",
-      truncated: false,
-      lines: [{ at: null, role: "assistant", text: "Port the SEM forecast rate limiter" }],
+      data: {
+        source: "/tmp/session.jsonl",
+        truncated: false,
+        lines: [{ at: null, role: "assistant", text: "Port the SEM forecast rate limiter" }],
+      },
     });
     expect(textOf(withDom(() => M.renderChatFeedBody(both, loadedDuplicate))).match(/Port the SEM forecast/g)).toHaveLength(1);
   });
@@ -10754,13 +10756,14 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(byClass(pane, "drawer-grid")).not.toBeNull();
     expect(text).not.toContain("Operate");
     expect(text).toContain("Evidence");
-    // Both turns survive, each exactly once, under honest role labels.
+    // Both turns survive, each exactly once. Side and fill say who spoke.
     expect(text).toContain("rebase onto main");
     expect(text).toContain("rebased, 412 tests green");
-    expect(text).toContain("You");
-    expect(text).toContain("Agent");
-    // The objective rides the head, not a second panel heading.
-    expect(text).toContain("Port the SEM forecast rate limiter");
+    expect(allByClass(pane, "chat-msg-role")).toHaveLength(0);
+    // Kickoff is not a fake last bubble once real speech is on screen, and it
+    // is not a second panel heading either.
+    expect(allByClass(pane, "drawer-task-objective")).toHaveLength(0);
+    expect(allByClass(pane, "chat-msg").map((node: any) => textOf(byClass(node, "chat-msg-body")))).not.toContain("Port the SEM forecast rate limiter");
     expect(text).not.toContain("Last human message");
   });
 
@@ -11592,7 +11595,8 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
     expect(titles.filter((t: string) => /task/i.test(t))).toHaveLength(0);
     expect(titles.filter((t: string) => /transcript/i.test(t))).toHaveLength(0);
     expect(allByClass(drawer, "drawer-task-objective")).toHaveLength(0);
-    expect(textOf(byClass(drawer, "drawer-chat-scroll"))).toContain("Ship the feed height fix");
+    expect(textOf(byClass(drawer, "drawer-chat-scroll"))).toContain("One short reply.");
+    expect(textOf(byClass(drawer, "drawer-chat-scroll"))).not.toContain("Ship the feed height fix");
   });
 
   test("RHSP-A: a turn-less cursor drawer still paints a quiet feed and dock", () => {
