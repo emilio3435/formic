@@ -204,6 +204,14 @@ SVG meters), `text-formatters.js`, `api-client.js` (fetch + envelope handling),
 an allowlist tokenizer — transcript text is untrusted and never meets
 `innerHTML`), and `action-log.js`.
 
+`settings-panel.js` is the Settings dialog pulled out of `app.js`: one modal,
+Collectors first, then Time, This browser, and Advanced. Collectors and colours
+apply immediately; Save posts Time and Advanced only. `app.js` still opens and
+closes the dialog and injects the functions that remain in the entry point.
+`settings-collectors.js` owns the Collectors block and talks to
+`/api/collector-instances`. Import and Ignore write that store at once and
+never go through Save.
+
 `cleaner.js` is the Cleaner chip's derivation, out of `app.js` for the same
 reason `notification-center.js` is: every state the chip shows is read from the
 launched Cleaner's own observable session in the snapshot — never a timer,
