@@ -169,6 +169,7 @@ describe("durable archive state", () => {
       lastUserMessage: "Please review the final routing diff.",
       lastAgentMessage: "PASS with exact identity evidence.",
       lastAgentClosing: "Everything checks out, but publishing is your call.",
+      lastAgentChatBody: "PASS with exact identity evidence.\n\n- keep the table\n- then ask",
       transcriptTail: "PASS with exact identity evidence.",
       artifacts: [{ label: "Cursor transcript", path: "/Users/me/transcript.jsonl" }],
       gates: ["review passed"],
@@ -208,6 +209,7 @@ describe("durable archive state", () => {
        the attention layer — reported honestly as "could not read", but
        avoidably so. The round trip has to carry it. */
     expect(archived.lastAgentClosing).toBe(source.lastAgentClosing);
+    expect(archived.lastAgentChatBody).toBe(source.lastAgentChatBody);
     /* The closing line survives as EVIDENCE a human can read in the drawer, not
        as a signal. An archived row carries no attentionSignal at all now: its
        controls are disabled, so any instruction on it would be one nobody could

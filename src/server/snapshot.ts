@@ -625,6 +625,8 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
       ...(senderVerified === undefined ? {} : { senderVerified }),
       lastAgentMessage: source.lastAgentMessage,
       lastAgentClosing: source.lastAgentClosing,
+      lastUserChatBody: source.lastUserChatBody,
+      lastAgentChatBody: source.lastAgentChatBody,
       lastHumanMessage: source.lastHumanMessage !== undefined
         ? source.lastHumanMessage === source.statusReason
           ? snapshotStatusReason

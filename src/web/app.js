@@ -9080,6 +9080,20 @@ function rowClosingText(agent) {
   return "";
 }
 
+function previewChatBody(value) {
+  if (typeof value !== "string") return "";
+  const text = value.replace(/^\n+|\n+$/g, "");
+  return text.trim() ? text : "";
+}
+
+function previewAssistantText(agent) {
+  return previewChatBody(agent.lastAgentChatBody) || rowClosingText(agent) || agent.lastAgentMessage;
+}
+
+function previewUserText(agent) {
+  return previewChatBody(agent.lastUserChatBody) || agent.lastUserMessage;
+}
+
 function rowSummaryParts(agent) {
   const closing = rowClosingText(agent);
   if (closing) return { primary: conciseText(closing, 160), kickoff: "" };
@@ -12485,9 +12499,9 @@ function previewChatTurns(agent, ui = state) {
      The envelope is stripped before dedupe so two addressed copies of the same
      prose collapse to one bubble. */
   const speech = dedupeTurns([
-    { role: "assistant", text: rowClosingText(agent) || agent.lastAgentMessage },
+    { role: "assistant", text: previewAssistantText(agent) },
     { role: "assistant", text: tldrTail },
-    { role: "user", text: agent.lastUserMessage },
+    { role: "user", text: previewUserText(agent) },
   ].map((turn) => decorateChatTurn(turn, agent, ui)));
   if (speech.length) return speech;
   return dedupeTurns([{ role: "task", text: agent.task }].map((turn) => decorateChatTurn(turn, agent, ui)));

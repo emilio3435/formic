@@ -310,6 +310,8 @@ function archiveCopy(
     lastHumanFacingAt: agent.lastHumanFacingAt,
     lastUserMessage: agent.lastUserMessage,
     lastAgentMessage: agent.lastAgentMessage,
+    lastUserChatBody: agent.lastUserChatBody,
+    lastAgentChatBody: agent.lastAgentChatBody,
     /* Measured on the live board after the restart: 362 agents, 269 of them
        unreadable by the attention layer, and 133 of those were archived records
        carrying lastAgentMessage but not this. An archived session that ended by

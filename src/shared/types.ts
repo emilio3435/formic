@@ -486,6 +486,10 @@ export interface AgentSnapshot {
      rather than inferred from the transcript tail (whose final line may be the
      operator's). This is what the attention detectors read. */
   lastAgentClosing?: string | null;
+  /* Layout-preserving last turns for the inspector chat body. The row fields
+     above stay one line; these keep newlines, lists, and table rows. */
+  lastUserChatBody?: string | null;
+  lastAgentChatBody?: string | null;
   startedAt?: string;
   updatedAt: string;
   elapsedMs?: number;

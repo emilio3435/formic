@@ -6,6 +6,7 @@ import type { Database } from "bun:sqlite";
 import {
   stripTimestampMarkup,
   extractLastHumanMessage,
+  extractChatBodyByRole,
   extractClosingByRole,
   extractLastHumanFacingAt,
   extractLastMessageByRole,
@@ -336,6 +337,8 @@ export function parseCursorSession(input: CursorSessionInput): CollectedAgent | 
     lastUserMessage: extractLastMessageByRole("cursor", humanMessages, "user"),
     lastAgentMessage: extractLastMessageByRole("cursor", humanMessages, "assistant"),
     lastAgentClosing: extractClosingByRole("cursor", humanMessages, "assistant"),
+    lastUserChatBody: extractChatBodyByRole("cursor", humanMessages, "user"),
+    lastAgentChatBody: extractChatBodyByRole("cursor", humanMessages, "assistant"),
     transcriptTail: transcriptTail?.slice(-MAX_TRANSCRIPT_TAIL_CHARS),
     artifacts: input.transcriptPath
       ? [{ label: "Cursor transcript", path: input.transcriptPath, kind: "transcript" }]
@@ -432,6 +435,8 @@ export function parseCursorChildSession(input: CursorChildSessionInput): Collect
     lastUserMessage: extractLastMessageByRole("cursor", humanMessages, "user"),
     lastAgentMessage: extractLastMessageByRole("cursor", humanMessages, "assistant"),
     lastAgentClosing: extractClosingByRole("cursor", humanMessages, "assistant"),
+    lastUserChatBody: extractChatBodyByRole("cursor", humanMessages, "user"),
+    lastAgentChatBody: extractChatBodyByRole("cursor", humanMessages, "assistant"),
     transcriptTail: transcriptTail?.slice(-MAX_TRANSCRIPT_TAIL_CHARS),
     artifacts: [{ label: "Cursor child transcript", path: input.transcriptPath, kind: "transcript" }],
     gates: turnStatus && turnStatus !== "success" ? [`Cursor child turn: ${turnStatus}`] : [],

@@ -12208,6 +12208,44 @@ describe("inspector chat is one messenger, not a clipped log", () => {
     expect(more.classList.contains("is-open")).toBe(false);
   });
 
+  test("preview prefers a layout-preserving chat body over the flattened row window", () => {
+    const body = [
+      "Here is the plan:",
+      "",
+      "- fix the parser",
+      "- add tests",
+      "",
+      "| field | row |",
+      "| close | keep |",
+    ].join("\n");
+    const a = agent({
+      id: "claude:layout-123",
+      lastAgentMessage: "Here is the plan: - fix the parser - add tests | field | row | | close | keep |",
+      lastAgentClosing: "Here is the plan: - fix the parser - add tests | field | row | | close | keep |",
+      lastAgentChatBody: body,
+    });
+    const preview = withDom(() => M.renderChat(a));
+    const spoken = textOf(byClass(preview, "chat-msg-body"));
+    expect(spoken).toBe(body);
+    expect(spoken.split("\n")).toEqual(body.split("\n"));
+    expect(byClass(preview, "chat-msg-body").textContent).toBe(body);
+
+    const row = M.rowSummaryParts(a);
+    expect(row.primary).not.toContain("\n");
+    expect(row.primary).toContain("Here is the plan");
+  });
+
+  test("a short loaded list keeps its line breaks without a chevron", () => {
+    const body = "- fix the parser\n- add tests\n\nShould I land this?";
+    const a = agent({ id: "claude:short-list-123" });
+    const bubble = withDom(() => M.chatBubbleNode({ at: null, role: "assistant", text: body }, a));
+    const spoken = byClass(bubble, "chat-msg-body");
+    expect(textOf(spoken)).toBe(body);
+    expect(spoken.textContent).toBe(body);
+    expect(spoken.classList.contains("is-collapsed")).toBe(false);
+    expect(byClass(bubble, "chat-msg-more")).toBeNull();
+  });
+
   test("bubbles drop uppercase ROLE and run ids; Evidence stays the CLI", () => {
     const claimed = "[from codex:a2 run 0runX] board is green";
     const a = agent({ senderVerified: false, lastUserMessage: claimed });

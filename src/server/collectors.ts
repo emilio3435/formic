@@ -11,6 +11,7 @@ import {
 } from "./lifecycle";
 import {
   extractLastHumanMessage,
+  extractChatBodyByRole,
   extractClosingByRole,
   extractLastHumanFacingAt,
   extractLastMessageByRole,
@@ -471,6 +472,8 @@ export function makeAgent(input: {
     lastAgentMessage: extractLastMessageByRole(input.provider, input.humanMessages ?? [], "assistant"),
     // End-anchored and role-attributed: what the agent actually stopped on.
     lastAgentClosing: extractClosingByRole(input.provider, input.humanMessages ?? [], "assistant"),
+    lastUserChatBody: extractChatBodyByRole(input.provider, input.humanMessages ?? [], "user"),
+    lastAgentChatBody: extractChatBodyByRole(input.provider, input.humanMessages ?? [], "assistant"),
     startedAt: input.startedAt,
     updatedAt: input.updatedAt,
     tokens: input.tokens,
