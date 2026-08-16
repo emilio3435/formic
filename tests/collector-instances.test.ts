@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { classifyDataDir, instanceIdFor, JsonCollectorInstanceStore, readTextCappedSync, scanAgentHomes, type ScanFs } from "../src/server/collector-instances";
+import { classifyDataDir, handleCollectorInstancesRequest, instanceIdFor, JsonCollectorInstanceStore, readTextCappedSync, scanAgentHomes, type ScanFs } from "../src/server/collector-instances";
 
 function underRoot(root: string, path: string): boolean {
   return path === root || path.startsWith(`${root}/`);
@@ -252,5 +252,189 @@ describe("JsonCollectorInstanceStore", () => {
     const store = await JsonCollectorInstanceStore.open(path);
     expect(store.get()).toEqual([]);
     expect(store.loadError).toContain("collector-instances.json");
+  });
+
+  test("mergeScan during update does not lose scanned ids", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ah-store-"));
+    const path = join(dir, "collector-instances.json");
+    let enteredWrite!: () => void;
+    const writeEntered = new Promise<void>((resolve) => {
+      enteredWrite = resolve;
+    });
+    let releaseWrite!: () => void;
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    const store = await JsonCollectorInstanceStore.open(path, {
+      readText: async () => {
+        const error = new Error("missing") as NodeJS.ErrnoException;
+        error.code = "ENOENT";
+        throw error;
+      },
+      makeDirectory: async () => {},
+      writeText: async () => {
+        enteredWrite();
+        await writeGate;
+      },
+      rename: async () => {},
+    });
+    store.mergeScan([{
+      kind: "cursor-gui", provider: "cursor",
+      dataDir: "/Users/me/Library/Application Support/Cursor-2",
+      label: "Cursor-2", default: false,
+    }], "2026-08-16T00:00:00.000Z");
+    const updating = store.update({ ids: ["cursor-gui:cursor-2"], onboarded: true });
+    await writeEntered;
+    store.mergeScan([{
+      kind: "codex", provider: "codex",
+      dataDir: "/Users/me/.codex-2",
+      label: ".codex-2", default: false,
+    }], "2026-08-16T00:00:01.000Z");
+    releaseWrite();
+    await updating;
+    const ids = store.get().map((row) => row.id);
+    expect(ids).toContain("cursor-gui:cursor-2");
+    expect(ids).toContain("codex:dot-codex-2");
+    expect(store.get().find((row) => row.id === "cursor-gui:cursor-2")?.onboarded).toBe(true);
+  });
+});
+
+describe("handleCollectorInstancesRequest", () => {
+  test("GET is loopback-only", async () => {
+    const store = await JsonCollectorInstanceStore.open(join(mkdtempSync(join(tmpdir(), "ah-http-")), "c.json"));
+    const res = await handleCollectorInstancesRequest(
+      new Request("http://example.com/api/collector-instances"),
+      store,
+      { scan: () => [] },
+    );
+    expect(res.status).toBe(403);
+  });
+
+  test("POST import selected marks extras onboarded", async () => {
+    const store = await JsonCollectorInstanceStore.open(join(mkdtempSync(join(tmpdir(), "ah-http-")), "c.json"));
+    store.mergeScan([{
+      kind: "cursor-gui", provider: "cursor",
+      dataDir: "/Users/me/Library/Application Support/Cursor-2",
+      label: "Cursor-2", default: false,
+    }], new Date().toISOString());
+    const res = await handleCollectorInstancesRequest(
+      new Request("http://127.0.0.1/api/collector-instances", {
+        method: "POST",
+        headers: { origin: "http://127.0.0.1", "content-type": "application/json" },
+        body: JSON.stringify({ ids: ["cursor-gui:cursor-2"], onboarded: true }),
+      }),
+      store,
+      { scan: () => [] },
+    );
+    expect(res.status).toBe(200);
+    expect(store.onboardedGuiRoots()[0]).toContain("Cursor-2");
+  });
+
+  test("POST /etc/passwd as a new dataDir is 400", async () => {
+    const store = await JsonCollectorInstanceStore.open(join(mkdtempSync(join(tmpdir(), "ah-http-")), "c.json"));
+    const res = await handleCollectorInstancesRequest(
+      new Request("http://127.0.0.1/api/collector-instances", {
+        method: "POST",
+        headers: { origin: "http://127.0.0.1", "content-type": "application/json" },
+        body: JSON.stringify({ id: "unknown:passwd", dataDir: "/etc/passwd", onboarded: true }),
+      }),
+      store,
+      { scan: () => [] },
+    );
+    expect(res.status).toBe(400);
+  });
+
+  test("POST missing Origin is 403", async () => {
+    const store = await JsonCollectorInstanceStore.open(join(mkdtempSync(join(tmpdir(), "ah-http-")), "c.json"));
+    const res = await handleCollectorInstancesRequest(
+      new Request("http://127.0.0.1/api/collector-instances", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ id: "cursor-gui:cursor-2", onboarded: true }),
+      }),
+      store,
+      { scan: () => [] },
+    );
+    expect(res.status).toBe(403);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe("ORIGIN_REJECTED");
+  });
+
+  test("POST not JSON is 415", async () => {
+    const store = await JsonCollectorInstanceStore.open(join(mkdtempSync(join(tmpdir(), "ah-http-")), "c.json"));
+    const res = await handleCollectorInstancesRequest(
+      new Request("http://127.0.0.1/api/collector-instances", {
+        method: "POST",
+        headers: { origin: "http://127.0.0.1", "content-type": "text/plain" },
+        body: "ids=cursor-gui:cursor-2",
+      }),
+      store,
+      { scan: () => [] },
+    );
+    expect(res.status).toBe(415);
+  });
+
+  test("POST unknown id is 400 UNKNOWN_INSTANCE", async () => {
+    const store = await JsonCollectorInstanceStore.open(join(mkdtempSync(join(tmpdir(), "ah-http-")), "c.json"));
+    const res = await handleCollectorInstancesRequest(
+      new Request("http://127.0.0.1/api/collector-instances", {
+        method: "POST",
+        headers: { origin: "http://127.0.0.1", "content-type": "application/json" },
+        body: JSON.stringify({ id: "unknown:passwd", onboarded: true }),
+      }),
+      store,
+      { scan: () => [] },
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe("UNKNOWN_INSTANCE");
+  });
+
+  test("POST cannot turn off a default", async () => {
+    const store = await JsonCollectorInstanceStore.open(join(mkdtempSync(join(tmpdir(), "ah-http-")), "c.json"));
+    store.mergeScan([{
+      kind: "cursor-gui", provider: "cursor",
+      dataDir: "/Users/me/Library/Application Support/Cursor",
+      label: "Cursor", default: true,
+    }], new Date().toISOString());
+    const res = await handleCollectorInstancesRequest(
+      new Request("http://127.0.0.1/api/collector-instances", {
+        method: "POST",
+        headers: { origin: "http://127.0.0.1", "content-type": "application/json" },
+        body: JSON.stringify({ id: "cursor-gui:cursor", onboarded: false }),
+      }),
+      store,
+      { scan: () => [] },
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error: { code: string } };
+    expect(body.error.code).toBe("DEFAULT_LOCKED");
+  });
+
+  test("GET persists last-seen so POST ids survive reopen", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ah-http-"));
+    const path = join(dir, "c.json");
+    const store = await JsonCollectorInstanceStore.open(path);
+    const res = await handleCollectorInstancesRequest(
+      new Request("http://127.0.0.1/api/collector-instances"),
+      store,
+      {
+        scan: () => [{
+          kind: "cursor-gui",
+          provider: "cursor",
+          dataDir: "/Users/me/Library/Application Support/Cursor-2",
+          label: "Cursor-2",
+          default: false,
+        }],
+      },
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as { ok: boolean; instances: { id: string; onboarded: boolean }[] };
+    expect(body.ok).toBe(true);
+    expect(body.instances[0]?.id).toBe("cursor-gui:cursor-2");
+    expect(body.instances[0]?.onboarded).toBe(false);
+    const again = await JsonCollectorInstanceStore.open(path);
+    expect(again.get().find((row) => row.id === "cursor-gui:cursor-2")).toBeDefined();
+    expect(again.get()[0]?.onboarded).toBe(false);
   });
 });

@@ -1,5 +1,7 @@
-import { closeSync, openSync, readSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { basename, dirname, join, normalize } from "node:path";
 import { PROVIDERS, type Provider } from "../shared/types";
 import type { SettingsFileOperations } from "./settings";
@@ -358,6 +360,51 @@ export function scanAgentHomes(fs: ScanFs): CollectorCandidate[] {
   return hits;
 }
 
+function plistString(text: string, key: string): string | undefined {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return text.match(new RegExp(`<key>${escaped}</key>\\s*<string>([^<]*)</string>`))?.[1];
+}
+
+export function nodeScanFs(): ScanFs {
+  return {
+    home: () => homedir(),
+    readdir: (path) => {
+      try {
+        return readdirSync(path);
+      } catch {
+        return [];
+      }
+    },
+    isDirectory: (path) => {
+      try {
+        return statSync(path).isDirectory();
+      } catch {
+        return false;
+      }
+    },
+    exists: (path) => existsSync(path),
+    readTextCapped: (path, maxBytes) => readTextCappedSync(path, maxBytes),
+    readAppIdentity: (appPath) => {
+      const text = readTextCappedSync(join(appPath, "Contents/Info.plist"), 16_384);
+      if (text === undefined) return undefined;
+      const name = plistString(text, "CFBundleName");
+      const identifier = plistString(text, "CFBundleIdentifier");
+      if (name === undefined && identifier === undefined) return undefined;
+      return { name, identifier };
+    },
+    processArgv: () => {
+      try {
+        return execFileSync("ps", ["-x", "-o", "command="], {
+          encoding: "utf8",
+          timeout: 500,
+        }).split("\n").filter(Boolean);
+      } catch {
+        return [];
+      }
+    },
+  };
+}
+
 export interface CollectorInstance {
   id: string;
   kind: CollectorKind;
@@ -447,6 +494,24 @@ function copyInstance(instance: CollectorInstance): CollectorInstance {
   return { ...instance };
 }
 
+function applyInstancePatch(
+  instances: CollectorInstance[],
+  patch: { ids: string[]; onboarded?: boolean; ignored?: boolean; label?: string },
+  rejectDefaultOff: boolean,
+): void {
+  for (const id of patch.ids) {
+    const instance = instances.find((row) => row.id === id);
+    if (!instance) continue;
+    if (instance.default && patch.onboarded === false) {
+      if (rejectDefaultOff) throw new Error("default collector instances cannot be turned off");
+      continue;
+    }
+    if (patch.onboarded !== undefined) instance.onboarded = patch.onboarded;
+    if (patch.ignored !== undefined) instance.ignored = patch.ignored;
+    if (patch.label !== undefined) instance.label = patch.label;
+  }
+}
+
 /* Import/ignore is its own file because HubSettings rejects unknown keys.
    Vanished extras stay so Ignore still has a row. Writes are temp-then-rename. */
 export class JsonCollectorInstanceStore {
@@ -524,6 +589,23 @@ export class JsonCollectorInstanceStore {
     return this.get();
   }
 
+  async #atomicWrite(instances: CollectorInstance[]): Promise<void> {
+    await this.files.makeDirectory(dirname(this.path));
+    const temp = `${this.path}.${process.pid}.${Date.now()}.tmp`;
+    const record = { version: COLLECTOR_INSTANCES_VERSION, instances };
+    await this.files.writeText(temp, `${JSON.stringify(record, null, 2)}\n`);
+    await this.files.rename(temp, this.path);
+  }
+
+  async persistLastSeen(): Promise<CollectorInstance[]> {
+    const write = this.#writeQueue.then(async () => {
+      await this.#atomicWrite(this.#instances.map(copyInstance));
+    });
+    this.#writeQueue = write.catch(() => {});
+    await write;
+    return this.get();
+  }
+
   async update(patch: {
     ids: string[];
     onboarded?: boolean;
@@ -531,23 +613,10 @@ export class JsonCollectorInstanceStore {
     label?: string;
   }): Promise<CollectorInstance[]> {
     const write = this.#writeQueue.then(async () => {
-      const next = this.#instances.map(copyInstance);
-      for (const id of patch.ids) {
-        const instance = next.find((row) => row.id === id);
-        if (!instance) continue;
-        if (instance.default && patch.onboarded === false) {
-          throw new Error("default collector instances cannot be turned off");
-        }
-        if (patch.onboarded !== undefined) instance.onboarded = patch.onboarded;
-        if (patch.ignored !== undefined) instance.ignored = patch.ignored;
-        if (patch.label !== undefined) instance.label = patch.label;
-      }
-      await this.files.makeDirectory(dirname(this.path));
-      const temp = `${this.path}.${process.pid}.${Date.now()}.tmp`;
-      const record = { version: COLLECTOR_INSTANCES_VERSION, instances: next };
-      await this.files.writeText(temp, `${JSON.stringify(record, null, 2)}\n`);
-      await this.files.rename(temp, this.path);
-      this.#instances = next;
+      const snapshot = this.#instances.map(copyInstance);
+      applyInstancePatch(snapshot, patch, true);
+      await this.#atomicWrite(snapshot);
+      applyInstancePatch(this.#instances, patch, false);
     });
     this.#writeQueue = write.catch(() => {});
     await write;
@@ -558,5 +627,115 @@ export class JsonCollectorInstanceStore {
     return this.#instances
       .filter((row) => row.kind === "cursor-gui" && row.onboarded && !row.default)
       .map((row) => row.dataDir);
+  }
+}
+
+function json(value: unknown, status = 200): Response {
+  return Response.json(value, {
+    status,
+    headers: { "cache-control": "no-store", "x-content-type-options": "nosniff" },
+  });
+}
+
+function requestError(status: number, code: string, message: string): Response {
+  return json({ ok: false, error: { code, message } }, status);
+}
+
+function isLoopback(hostname: string): boolean {
+  return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "[::1]";
+}
+
+function collectorIdsFrom(record: Record<string, unknown>): string[] | undefined {
+  if (Array.isArray(record.ids)) {
+    if (record.ids.length === 0) return undefined;
+    if (!record.ids.every((id): id is string => typeof id === "string" && id.length > 0)) {
+      return undefined;
+    }
+    return record.ids;
+  }
+  if (typeof record.id === "string" && record.id.length > 0) return [record.id];
+  return undefined;
+}
+
+export async function handleCollectorInstancesRequest(
+  request: Request,
+  store: JsonCollectorInstanceStore,
+  options: { scan?: () => CollectorCandidate[]; afterUpdate?: () => void | Promise<void> } = {},
+): Promise<Response> {
+  const url = new URL(request.url);
+  if (!isLoopback(url.hostname)) {
+    return requestError(403, "ORIGIN_REJECTED", "Collector instances are only available on loopback.");
+  }
+  if (request.method === "GET") {
+    const scan = options.scan ?? (() => scanAgentHomes(nodeScanFs()));
+    const instances = store.mergeScan(scan(), new Date().toISOString());
+    try {
+      await store.persistLastSeen();
+    } catch (error) {
+      return requestError(500, "INSTANCE_WRITE_FAILED", error instanceof Error ? error.message : String(error));
+    }
+    return json({ ok: true, instances });
+  }
+  if (request.method !== "POST") {
+    return requestError(405, "METHOD_NOT_ALLOWED", "Use GET or POST for collector instances.");
+  }
+  const origin = request.headers.get("origin");
+  if (!origin || origin !== url.origin) {
+    return requestError(403, "ORIGIN_REJECTED", "Collector instance changes require an exact same-origin loopback Origin header.");
+  }
+  if (request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+    return requestError(415, "CONTENT_TYPE_REJECTED", "Collector instance changes require application/json.");
+  }
+  let raw: unknown;
+  try {
+    raw = await request.json();
+  } catch {
+    return requestError(400, "INVALID_JSON", "Collector instance body is not valid JSON.");
+  }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return requestError(400, "INVALID_INSTANCE", "Body must be a JSON object.");
+  }
+  const record = raw as Record<string, unknown>;
+  const ids = collectorIdsFrom(record);
+  if (!ids) {
+    return requestError(400, "INVALID_INSTANCE", "Body must include ids or id.");
+  }
+  const known = new Set(store.get().map((row) => row.id));
+  const unknown = ids.filter((id) => !known.has(id));
+  if (unknown.length) {
+    return requestError(400, "UNKNOWN_INSTANCE", `Unknown instance: ${unknown.join(", ")}.`);
+  }
+  const patch: { ids: string[]; onboarded?: boolean; ignored?: boolean; label?: string } = { ids };
+  if ("onboarded" in record) {
+    if (typeof record.onboarded !== "boolean") {
+      return requestError(400, "INVALID_INSTANCE", "onboarded must be a boolean.");
+    }
+    patch.onboarded = record.onboarded;
+  }
+  if ("ignored" in record) {
+    if (typeof record.ignored !== "boolean") {
+      return requestError(400, "INVALID_INSTANCE", "ignored must be a boolean.");
+    }
+    patch.ignored = record.ignored;
+  }
+  if ("label" in record) {
+    if (typeof record.label !== "string") {
+      return requestError(400, "INVALID_INSTANCE", "label must be a string.");
+    }
+    patch.label = record.label;
+  }
+  if (patch.onboarded === false && store.get().some((row) => ids.includes(row.id) && row.default)) {
+    return requestError(400, "DEFAULT_LOCKED", "Default collector instances cannot be turned off.");
+  }
+  try {
+    const instances = await store.update(patch);
+    await options.afterUpdate?.();
+    return json({ ok: true, instances });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/default/i.test(message)) {
+      return requestError(400, "DEFAULT_LOCKED", message);
+    }
+    return requestError(500, "INSTANCE_WRITE_FAILED", message);
   }
 }
