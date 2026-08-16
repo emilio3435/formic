@@ -1,3 +1,4 @@
+import { closeSync, openSync, readSync } from "node:fs";
 import { basename, join, normalize } from "node:path";
 import type { Provider } from "../shared/types";
 
@@ -69,6 +70,22 @@ export function instanceIdFor(kind: CollectorKind, dataDir: string): string {
   return `${kind}:${base || "home"}`;
 }
 
+/* Adapters must not slurp binaries. Open, read at most maxBytes, close. */
+export function readTextCappedSync(path: string, maxBytes: number): string | undefined {
+  try {
+    const fd = openSync(path, "r");
+    try {
+      const buf = Buffer.alloc(Math.max(0, maxBytes));
+      const n = readSync(fd, buf, 0, buf.length, 0);
+      return buf.subarray(0, n).toString("utf8");
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return undefined;
+  }
+}
+
 const SCAN_BUDGET_MS = 2_000;
 const SCRIPT_CAP_BYTES = 8_192;
 const DOTDIR_RE = /^\.[A-Za-z0-9._-]+$/;
@@ -131,14 +148,19 @@ function sessionNames(dataDir: string, fs: ScanFs): string[] {
   return fs.readdir(join(dataDir, "sessions"));
 }
 
-function hasSessionShapedChildren(dataDir: string, fs: ScanFs, depth = 0): boolean {
-  if (depth > 3) return false;
+function pastDeadline(deadline?: number): boolean {
+  return deadline !== undefined && Date.now() > deadline;
+}
+
+function hasSessionShapedChildren(dataDir: string, fs: ScanFs, depth = 0, deadline?: number): boolean {
+  if (depth > 3 || pastDeadline(deadline)) return false;
   for (const name of fs.readdir(dataDir)) {
+    if (pastDeadline(deadline)) return false;
     if (SKIP_WALK_NAMES.has(name)) continue;
     const child = join(dataDir, name);
     if (SESSION_DIR_NAMES.has(name) && fs.isDirectory(child)) return true;
     if (name.endsWith(".jsonl")) return true;
-    if (depth < 3 && fs.isDirectory(child) && hasSessionShapedChildren(child, fs, depth + 1)) {
+    if (depth < 3 && fs.isDirectory(child) && hasSessionShapedChildren(child, fs, depth + 1, deadline)) {
       return true;
     }
   }
@@ -171,12 +193,15 @@ function identityMentionsAgent(identity: { name?: string; identifier?: string } 
   return AGENT_MENTION_RE.test(`${identity.name ?? ""} ${identity.identifier ?? ""}`);
 }
 
-function appIdentityPointsAt(dataDir: string, fs: ScanFs): boolean {
+function appIdentityPointsAt(dataDir: string, fs: ScanFs, deadline?: number): boolean {
+  if (pastDeadline(deadline)) return false;
   if (dataDir.endsWith(".app") && identityMentionsAgent(fs.readAppIdentity(dataDir))) return true;
   const base = basename(dataDir);
   const home = fs.home();
   for (const appsRoot of [join(home, "Applications"), "/Applications"]) {
+    if (pastDeadline(deadline)) return false;
     for (const name of fs.readdir(appsRoot)) {
+      if (pastDeadline(deadline)) return false;
       if (!name.endsWith(".app")) continue;
       const appPath = join(appsRoot, name);
       if (!identityMentionsAgent(fs.readAppIdentity(appPath))) continue;
@@ -188,18 +213,18 @@ function appIdentityPointsAt(dataDir: string, fs: ScanFs): boolean {
   return false;
 }
 
-function unknownSignalCount(dataDir: string, fs: ScanFs): number {
+function unknownSignalCount(dataDir: string, fs: ScanFs, deadline?: number): number {
   const token = basename(dataDir).replace(/^\./, "");
   let count = 0;
   if (NAME_TOKEN_RE.test(token)) count += 1;
-  if (hasSessionShapedChildren(dataDir, fs)) count += 1;
   if (count < 2 && argvPointsAt(dataDir, fs)) count += 1;
-  if (count < 2 && appIdentityPointsAt(dataDir, fs)) count += 1;
+  if (count < 2 && appIdentityPointsAt(dataDir, fs, deadline)) count += 1;
+  if (count === 1 && hasSessionShapedChildren(dataDir, fs, 0, deadline)) count += 1;
   return count;
 }
 
 /* First match in the spec table wins. Existence only — never open sqlite or blobs. */
-export function classifyDataDir(dataDir: string, fs: ScanFs): CollectorCandidate | undefined {
+export function classifyDataDir(dataDir: string, fs: ScanFs, deadline?: number): CollectorCandidate | undefined {
   const base = basename(dataDir);
 
   if (base.startsWith("Cursor") && fs.exists(join(dataDir, "User/globalStorage/state.vscdb"))) {
@@ -244,7 +269,7 @@ export function classifyDataDir(dataDir: string, fs: ScanFs): CollectorCandidate
   if (base === ".cmuxterm" || dataDir.endsWith("/.cmuxterm")) {
     return candidate("cmux-hooks", dataDir, fs);
   }
-  if (unknownSignalCount(dataDir, fs) >= 2) {
+  if (unknownSignalCount(dataDir, fs, deadline) >= 2) {
     return candidate("unknown", dataDir, fs, "needs-parser");
   }
   return undefined;
@@ -283,7 +308,7 @@ export function scanAgentHomes(fs: ScanFs): CollectorCandidate[] {
     if (seen.has(dataDir) || !fs.isDirectory(dataDir)) return;
     let hit: CollectorCandidate | undefined;
     try {
-      hit = classifyDataDir(dataDir, fs);
+      hit = classifyDataDir(dataDir, fs, deadline);
     } catch {
       return;
     }
@@ -292,23 +317,20 @@ export function scanAgentHomes(fs: ScanFs): CollectorCandidate[] {
     hits.push({ ...hit, dataDir });
   };
 
-  const scanApps = (appsRoot: string, readScripts: boolean): void => {
+  const scanApps = (appsRoot: string): void => {
     for (const name of fs.readdir(appsRoot)) {
       if (Date.now() > deadline) return;
       if (!name.endsWith(".app") || SKIP_ROOT_NAMES.has(name)) continue;
       const appPath = join(appsRoot, name);
       if (!fs.isDirectory(appPath)) continue;
-      /* Official /Applications binaries are not scripts. Reading them through a
-         whole-file FS adapter would blow the 2s bound; extract --user-data-dir
-         only from user wrappers under $HOME/Applications. */
-      const extracted = readScripts ? extractScriptDataDir(appPath, fs) : undefined;
+      const extracted = extractScriptDataDir(appPath, fs);
       if (extracted) consider(extracted);
       else consider(bundleSupportDir(appPath, home, fs));
     }
   };
 
-  scanApps(join(home, "Applications"), true);
-  scanApps("/Applications", false);
+  scanApps(join(home, "Applications"));
+  scanApps("/Applications");
 
   for (const name of fs.readdir(join(home, "Library/Application Support"))) {
     if (Date.now() > deadline) break;

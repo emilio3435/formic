@@ -2,18 +2,26 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { classifyDataDir, instanceIdFor, scanAgentHomes, type ScanFs } from "../src/server/collector-instances";
+import { classifyDataDir, instanceIdFor, readTextCappedSync, scanAgentHomes, type ScanFs } from "../src/server/collector-instances";
+
+function underRoot(root: string, path: string): boolean {
+  return path === root || path.startsWith(`${root}/`);
+}
 
 function memFs(root: string, extra?: Partial<ScanFs>): ScanFs {
-  const { readdirSync, statSync, existsSync, readFileSync } = require("node:fs");
+  const { readdirSync, statSync, existsSync } = require("node:fs");
   return {
     home: () => root,
-    readdir: (p) => { try { return readdirSync(p); } catch { return []; } },
-    isDirectory: (p) => { try { return statSync(p).isDirectory(); } catch { return false; } },
-    exists: (p) => existsSync(p),
-    readTextCapped: (p, max) => {
-      try { return readFileSync(p, "utf8").slice(0, max); } catch { return undefined; }
+    readdir: (p) => {
+      if (!underRoot(root, p)) return [];
+      try { return readdirSync(p); } catch { return []; }
     },
+    isDirectory: (p) => {
+      if (!underRoot(root, p)) return false;
+      try { return statSync(p).isDirectory(); } catch { return false; }
+    },
+    exists: (p) => underRoot(root, p) && existsSync(p),
+    readTextCapped: (p, max) => underRoot(root, p) ? readTextCappedSync(p, max) : undefined,
     readAppIdentity: () => undefined,
     processArgv: () => [],
     ...extra,
@@ -128,5 +136,73 @@ describe("scanAgentHomes", () => {
     writeFileSync(join(root, "Downloads/secret/sessions.jsonl"), "");
     const hits = scanAgentHomes(memFs(root));
     expect(hits.some((h) => h.dataDir.includes("Downloads"))).toBe(false);
+  });
+
+  test("extracts --user-data-dir from a /Applications wrapper without reading the live disk", () => {
+    const root = mkdtempSync(join(tmpdir(), "ah-scan-"));
+    const dataDir = join(root, "Library/Application Support/Cursor-2");
+    mkdirSync(join(dataDir, "User/globalStorage"), { recursive: true });
+    writeFileSync(join(dataDir, "User/globalStorage/state.vscdb"), "");
+    const appPath = "/Applications/Cursor Extra.app";
+    const launch = `${appPath}/Contents/MacOS/launch`;
+    const reads: string[] = [];
+    const base = memFs(root);
+    const hits = scanAgentHomes({
+      ...base,
+      readdir: (p) => {
+        if (p === "/Applications") return ["Cursor Extra.app"];
+        if (p === appPath) return ["Contents"];
+        if (p === `${appPath}/Contents`) return ["MacOS"];
+        if (p === `${appPath}/Contents/MacOS`) return ["launch"];
+        return base.readdir(p);
+      },
+      isDirectory: (p) => {
+        if (p === appPath || p === `${appPath}/Contents` || p === `${appPath}/Contents/MacOS`) return true;
+        if (p === launch) return false;
+        return base.isDirectory(p);
+      },
+      readTextCapped: (p, _max) => {
+        reads.push(p);
+        if (p === launch) {
+          return `#!/bin/bash\nexec /Applications/Cursor.app/Contents/MacOS/Cursor --user-data-dir="${dataDir}"\n`;
+        }
+        return undefined;
+      },
+      readAppIdentity: (p) => p === appPath ? { name: "Cursor Extra", identifier: "com.todesktop.230313mzl4w4u92" } : undefined,
+    });
+    expect(reads.some((p) => p.startsWith("/Applications/") && p.endsWith("/launch"))).toBe(true);
+    expect(hits.some((h) => h.dataDir === dataDir && h.kind === "cursor-gui")).toBe(true);
+    expect(reads.some((p) => p.startsWith("/Applications/") && !p.startsWith(appPath))).toBe(false);
+  });
+});
+
+describe("readTextCappedSync", () => {
+  test("reads at most maxBytes from the fd", () => {
+    const root = mkdtempSync(join(tmpdir(), "ah-scan-"));
+    const path = join(root, "payload.bin");
+    writeFileSync(path, "x".repeat(20_000));
+    const text = readTextCappedSync(path, 8192);
+    expect(text).toHaveLength(8192);
+  });
+});
+
+describe("classify deadline", () => {
+  test("expired deadline skips identity and session walks", () => {
+    const root = mkdtempSync(join(tmpdir(), "ah-scan-"));
+    const dataDir = join(root, ".crush");
+    mkdirSync(join(dataDir, "sessions"), { recursive: true });
+    writeFileSync(join(dataDir, "sessions/a.jsonl"), "{}\n");
+    const listed: string[] = [];
+    const base = memFs(root);
+    const hit = classifyDataDir(dataDir, {
+      ...base,
+      readdir: (p) => {
+        listed.push(p);
+        return base.readdir(p);
+      },
+    }, Date.now() - 1);
+    expect(hit).toBeUndefined();
+    expect(listed.some((p) => p === "/Applications" || p.startsWith("/Applications/"))).toBe(false);
+    expect(listed.some((p) => p.includes("sessions"))).toBe(false);
   });
 });
