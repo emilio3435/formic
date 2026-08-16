@@ -47,6 +47,21 @@ describe("a Factory session becomes an agent", () => {
 
     expect(agent?.lastHumanFacingAt).toBe("2026-08-04T11:51:00.000Z");
     expect(agent?.updatedAt).toBe("2026-08-04T11:52:00.000Z");
+    expect(agent?.lastUserMessage).toBe("Please inspect Factory.");
+    expect(agent?.lastAgentClosing).toBeTruthy();
+    expect(agent?.status).toBe("waiting");
+    expect(agent?.statusReason).toMatch(/No source activity/);
+  });
+
+  test("an assistant question is the closing, not the kickoff", () => {
+    const agent = parseFactoryJsonl(transcript(
+      start(),
+      message("user", "Port the rate limiter.", "2026-08-04T11:50:00.000Z"),
+      message("assistant", "Should I land this now?", "2026-08-04T11:59:30.000Z"),
+    ), meta);
+    expect(agent?.lastAgentClosing).toBe("Should I land this now?");
+    expect(agent?.lastUserMessage).toBe("Port the rate limiter.");
+    expect(agent?.status).toBe("running");
   });
 
   test("qualifies an array text message through the shared sanitizer", () => {
@@ -163,16 +178,18 @@ describe("token usage is reported for what it is", () => {
     }
   };
 
-  test("input and output are summed, and the scope says session", () => {
+  test("input and output are session consumption, not occupancy total", () => {
     /* Factory's settings file accumulates over the whole session rather than
-       reporting the latest call. The board uses `scope` to decide whether a
-       number may be added to a rollup, so mislabelling it would make an
-       un-addable number look addable. */
+       reporting the latest call. Publishing that sum as `total` lets
+       contextPctFor treat lifetime spend as window fill. sessionTotal is
+       consumption; total stays unset so occupancy is not invented. */
     const agent = withSettings({
       model: "custom:GPT-5.4-XHigh-7",
       tokenUsage: { inputTokens: 175_384, outputTokens: 18_082, cacheReadTokens: 5_728_128 },
     });
-    expect(agent?.tokens.total).toBe(193_466);
+    expect(agent?.tokens.sessionTotal).toBe(193_466);
+    expect(agent?.tokens.total).toBeUndefined();
+    expect(agent?.tokens.sessionCachedInput).toBe(5_728_128);
     expect(agent?.tokens.scope).toBe("session");
     expect(agent?.tokens.provenance).toBe("observed");
     expect(agent?.model).toBe("custom:GPT-5.4-XHigh-7");
@@ -183,7 +200,8 @@ describe("token usage is reported for what it is", () => {
        calls. Zero spend is a measurement; "unknown" would be a claim that it was
        never read. */
     const agent = withSettings({ tokenUsage: { inputTokens: 0, outputTokens: 0 } });
-    expect(agent?.tokens.total).toBe(0);
+    expect(agent?.tokens.sessionTotal).toBe(0);
+    expect(agent?.tokens.total).toBeUndefined();
     expect(agent?.tokens.provenance).toBe("observed");
   });
 
