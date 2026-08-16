@@ -85,6 +85,7 @@ export const state = {
      only, so a snapshot tick cannot rebuild the form under a checkbox. */
   collectorInstances: [],
   collectorInstancesPending: false,
+  collectorImportNote: "",
   repoColorSettings: null,
   liveRepoKeys: [],
   /* The attention panel's disclosure state. A panel the operator opened stays

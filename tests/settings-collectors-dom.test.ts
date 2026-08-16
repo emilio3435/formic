@@ -118,6 +118,7 @@ function makeNode(tag: string): FakeNode {
       },
       contains(c: string) { return classes.has(c); },
     },
+    disabled: false,
     get childNodes() { return node.children; },
     get childElementCount() { return node.children.length; },
     get firstChild() { return node.children[0] || null; },
@@ -131,8 +132,12 @@ function makeNode(tag: string): FakeNode {
       attributes[k] = String(v);
       if (k === "id" && v) byId.set(String(v), node as unknown as FakeNode);
       if (k === "type") (node as { type?: string }).type = String(v);
+      if (k === "disabled") (node as { disabled?: boolean }).disabled = true;
     },
-    removeAttribute(k: string) { delete attributes[k]; },
+    removeAttribute(k: string) {
+      delete attributes[k];
+      if (k === "disabled") (node as { disabled?: boolean }).disabled = false;
+    },
     hasAttribute(k: string) { return k in attributes; },
     getAttribute(k: string) { return attributes[k]; },
     addEventListener(type: string, fn: (event: unknown) => unknown) {
@@ -193,7 +198,44 @@ describe("Settings Collectors inventory", () => {
       expect(document.getElementById("settings-collectors")).toBeTruthy();
       expect(document.querySelector("[data-instance='cursor-gui:cursor'] [data-fkey='instance-off']")).toBeNull();
       expect(document.querySelector("[data-instance='cursor-gui:cursor-2'] input[type='checkbox']")).toBeTruthy();
-      expect(document.querySelector("[data-instance='grok-bot:grok-bot-2']")?.textContent).toMatch(/parser/i);
+      expect(document.querySelector("[data-group='needs-parser'] [data-instance='grok-bot:grok-bot-2']")?.textContent)
+        .toMatch(/will not appear on the board/);
+    });
+  });
+
+  test("an imported parser home does not look collected and names the board consequence", () => {
+    const instances = [
+      { id: "cursor-gui:cursor", kind: "cursor-gui", label: "Cursor", dataDir: "/Users/me/Library/Application Support/Cursor", default: true, onboarded: true, ignored: false },
+      { id: "grok-bot:grok-bot-2", kind: "grok-bot", label: "Grok Bot 2", dataDir: "/Users/me/Library/Application Support/Grok Bot 2", default: false, onboarded: true, ignored: false, reason: "needs-parser" },
+    ];
+    withDom(() => {
+      web.state.collectorInstances = instances;
+      web.state.collectorInstancesPending = false;
+      web.state.settingsPanelOpen = true;
+      if (web.state.paintSig) web.state.paintSig.settings = "";
+      web.renderSettingsPanel();
+      expect(document.querySelector("[data-instance='cursor-gui:cursor'] input[type='checkbox']")).toBeNull();
+      expect(document.querySelector("[data-instance='cursor-gui:cursor']")?.textContent).toMatch(/Collecting/);
+      expect(document.querySelector("[data-group='imported-no-rows'] [data-instance='grok-bot:grok-bot-2']")?.textContent)
+        .toMatch(/No board rows/i);
+      expect(document.querySelector("[data-instance='grok-bot:grok-bot-2']")?.className).not.toMatch(/settings-field(?!-)/);
+    });
+  });
+
+  test("Import selected is primary and disabled until a box is checked", () => {
+    const instances = [
+      { id: "cursor-gui:cursor", kind: "cursor-gui", label: "Cursor", dataDir: "/Users/me/Library/Application Support/Cursor", default: true, onboarded: true, ignored: false },
+      { id: "cursor-gui:cursor-2", kind: "cursor-gui", label: "Cursor-2", dataDir: "/Users/me/Library/Application Support/Cursor-2", default: false, onboarded: false, ignored: false },
+    ];
+    withDom(() => {
+      web.state.collectorInstances = instances;
+      web.state.collectorInstancesPending = false;
+      web.state.settingsPanelOpen = true;
+      if (web.state.paintSig) web.state.paintSig.settings = "";
+      web.renderSettingsPanel();
+      const btn = document.querySelector("[data-fkey='collectors-import']") as HTMLButtonElement | null;
+      expect(btn?.className).toMatch(/primary/);
+      expect(btn?.disabled).toBe(true);
     });
   });
 });

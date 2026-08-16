@@ -124,6 +124,7 @@ function closeSettingsPanel() {
   state.settingsPanelOpen = false;
   state.settingsSavedAt = 0;
   state.settingsSaveError = "";
+  state.collectorImportNote = "";
   render();
   $("settings-toggle")?.focus();
 }
@@ -203,6 +204,7 @@ function renderSettingsPanel() {
     state.needsYouDisplay || "",
     JSON.stringify(state.collectorInstances),
     state.collectorInstancesPending ? "1" : "0",
+    state.collectorImportNote || "",
   ].join("\u001f");
   if (paintUnchanged("settings", sig)) {
     /* The two things that must follow the board without disturbing the form:

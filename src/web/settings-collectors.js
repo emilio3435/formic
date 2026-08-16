@@ -1,8 +1,7 @@
 /* Settings → Collectors.
 
    Agent homes the operator can Import or Ignore. Own store, own POST — not
-   part of Save. Extracted from app.js so the dialog can move without taking
-   the rest of the client with it. Paint is unchanged from the inlined block. */
+   part of Save. Rows say whether Import put chats on the board. */
 
 import { state } from "./client-state.js";
 import { $, el } from "./dom-primitives.js";
@@ -18,24 +17,51 @@ function shortCollectorDir(path) {
   return parts.slice(-2).join("/") || path || "";
 }
 
-function collectorPreviewText(instances) {
-  const on = instances.filter((row) => row.default || row.onboarded).length;
-  const waiting = instances.filter((row) => !row.onboarded && !row.ignored && !row.default).length;
-  return `${on} home${on === 1 ? "" : "s"} on. ${waiting} found, waiting on you.`;
-}
-
 function collectorGroups(instances) {
-  const onNow = [];
+  const onBoard = [];
+  const importedNoRows = [];
   const found = [];
   const needsParser = [];
   const ignored = [];
   for (const row of instances) {
     if (row.ignored) ignored.push(row);
     else if (row.reason === "needs-parser" && !row.default && !row.onboarded) needsParser.push(row);
-    else if (row.default || row.onboarded) onNow.push(row);
+    else if ((row.reason === "needs-parser" || row.reason === "needs-home-list") && row.onboarded) importedNoRows.push(row);
+    else if (row.default || row.onboarded) onBoard.push(row);
     else found.push(row);
   }
-  return { onNow, found, needsParser, ignored };
+  return { onBoard, importedNoRows, found, needsParser, ignored };
+}
+
+function collectorPreviewText(instances) {
+  const { onBoard, importedNoRows, found, needsParser } = collectorGroups(instances);
+  const on = onBoard.length;
+  const imported = importedNoRows.length;
+  const waiting = found.length + needsParser.length;
+  return `${on} home${on === 1 ? "" : "s"} on the board. ${imported} imported with no rows yet. ${waiting} waiting on you.`;
+}
+
+function collectorStatusLine(inst) {
+  const shortDir = shortCollectorDir(inst.dataDir);
+  const parserish = inst.reason === "needs-parser" || inst.reason === "needs-home-list";
+  if (inst.ignored) return "Ignored.";
+  if (inst.onboarded && parserish) return "Imported. No board rows — Formic cannot read this yet.";
+  if (inst.default || inst.onboarded) return `Collecting from ${shortDir}`;
+  if (inst.reason === "needs-parser") return "Found. Import records it; it will not appear on the board.";
+  return `Found. Import to collect from ${shortDir}.`;
+}
+
+function collectorImportNoteFor(ids) {
+  const instances = collectorInstanceList();
+  return ids.map((id) => {
+    const inst = instances.find((row) => row.id === id);
+    const label = (inst && inst.label) || id;
+    const reason = inst && inst.reason;
+    if (reason === "needs-parser" || reason === "needs-home-list") {
+      return `Imported ${label}. No new board rows — this home has no parser yet.`;
+    }
+    return `Imported ${label}. Its chats should appear on the board after refresh.`;
+  }).join(" ");
 }
 
 function selectedCollectorIds() {
@@ -75,7 +101,7 @@ async function fetchCollectorInstances() {
   }
 }
 
-async function postCollectorInstances(body) {
+async function postCollectorInstances(body, importNote) {
   state.collectorInstancesPending = true;
   if (state.settingsPanelOpen) renderSettingsPanel();
   try {
@@ -88,6 +114,7 @@ async function postCollectorInstances(body) {
     if (!res.ok || !payload || payload.ok !== true) {
       throw new Error((payload && payload.error && payload.error.message) || ("collector instances " + res.status));
     }
+    if (typeof importNote === "string") state.collectorImportNote = importNote;
     await fetchCollectorInstances();
   } catch (err) {
     console.warn("collector instances update failed:", err);
@@ -99,7 +126,13 @@ async function postCollectorInstances(body) {
 function importSelectedCollectors() {
   const ids = selectedCollectorIds();
   if (!ids.length) return;
-  void postCollectorInstances({ ids, onboarded: true });
+  void postCollectorInstances({ ids, onboarded: true }, collectorImportNoteFor(ids));
+}
+
+function syncImportSelectedState() {
+  const btn = document.querySelector("[data-fkey='collectors-import']");
+  if (!btn) return;
+  btn.disabled = selectedCollectorIds().length === 0;
 }
 
 function ignoreCollectorInstance(id) {
@@ -109,56 +142,72 @@ function ignoreCollectorInstance(id) {
 
 function collectorRow(inst) {
   const extra = !inst.default && !inst.onboarded && !inst.ignored;
-  const bits = [inst.kind, shortCollectorDir(inst.dataDir)].filter(Boolean);
-  if (inst.reason === "needs-parser") bits.push("Needs a parser");
-  else if (inst.reason === "needs-home-list") bits.push("Needs a home list");
-  if (inst.lastSeenAt) bits.push(inst.lastSeenAt);
   return el("div", {
-    class: "settings-field",
+    class: "settings-collectors-row",
     "data-instance": inst.id,
     dataset: { instance: inst.id },
   },
-    extra ? el("input", { type: "checkbox", dataset: { instance: inst.id } }) : null,
-    el("span", { class: "settings-field-label", text: inst.label || inst.id }),
-    el("span", { class: "settings-help", text: bits.join(" · ") }),
+    extra ? el("input", {
+      type: "checkbox",
+      dataset: { instance: inst.id },
+      onchange: syncImportSelectedState,
+    }) : null,
+    el("div", { class: "settings-collectors-copy" },
+      el("span", { class: "settings-field-label", text: inst.label || inst.id }),
+      el("span", { class: "settings-help", text: collectorStatusLine(inst) })),
     extra ? el("button", {
       type: "button",
-      class: "btn",
+      class: "settings-collectors-ignore",
       dataset: { fkey: "instance-ignore" },
       onclick: () => ignoreCollectorInstance(inst.id),
     }, "Ignore") : null);
 }
 
-function collectorGroup(title, rows) {
+function collectorGroup(title, rows, group) {
   if (!rows.length) return null;
-  return el("div", { class: "settings-collectors-group" },
+  return el("div", {
+    class: "settings-collectors-group",
+    "data-group": group,
+    dataset: { group },
+  },
     el("p", { class: "settings-field-label", text: title }),
     ...rows.map(collectorRow));
 }
 
 function renderCollectorsBlock() {
   const instances = collectorInstanceList();
-  const { onNow, found, needsParser, ignored } = collectorGroups(instances);
+  const { onBoard, importedNoRows, found, needsParser, ignored } = collectorGroups(instances);
   const importable = found.length + needsParser.length;
+  const importBtn = importable ? el("button", {
+    type: "button",
+    class: "btn primary",
+    disabled: "",
+    dataset: { fkey: "collectors-import" },
+    onclick: importSelectedCollectors,
+  }, "Import selected") : null;
+  if (importBtn) importBtn.disabled = true;
   return el("section", { id: "settings-collectors", class: "settings-collectors" },
     el("h3", { text: "Collectors" }),
     el("p", { class: "settings-help", text: collectorPreviewText(instances) }),
-    collectorGroup("On now", onNow),
-    collectorGroup("Found, not imported", found),
-    collectorGroup("Needs a parser", needsParser),
-    collectorGroup("Ignored", ignored),
-    importable ? el("button", {
-      type: "button", class: "btn",
-      dataset: { fkey: "collectors-import" },
-      onclick: importSelectedCollectors,
-    }, "Import selected") : null);
+    collectorGroup("On the board", onBoard, "on-board"),
+    collectorGroup("Imported, no rows yet", importedNoRows, "imported-no-rows"),
+    collectorGroup("Found, not imported", found, "found"),
+    collectorGroup("Needs a parser", needsParser, "needs-parser"),
+    collectorGroup("Ignored", ignored, "ignored"),
+    importable ? el("div", { class: "settings-collectors-actions" },
+      importBtn,
+      el("span", { class: "settings-help", text: "Select a home above." })) : null,
+    state.collectorImportNote
+      ? el("p", { class: "settings-preview", id: "collectors-import-note", role: "status", text: state.collectorImportNote })
+      : null);
 }
 
 export {
   collectorInstanceList,
   shortCollectorDir,
-  collectorPreviewText,
   collectorGroups,
+  collectorPreviewText,
+  collectorStatusLine,
   selectedCollectorIds,
   fetchCollectorInstances,
   postCollectorInstances,

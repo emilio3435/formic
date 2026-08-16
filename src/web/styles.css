@@ -4230,9 +4230,19 @@ body.feed-frozen .programs { opacity: 0.62; }
 .settings-local legend { float: left; font-weight: 600; font-size: 0.9rem; padding: 0; }
 /* Inventory of scanned agent homes. Ruled off from the time fields the same
    way the per-browser section is — same rule, same type, no new chrome. */
+.settings-section { display: grid; gap: 0.55rem; }
+.settings-section + .settings-section { border-top: 1px solid var(--rule); padding-top: 0.75rem; margin-top: 0.15rem; }
 .settings-collectors { border: 0; border-top: 1px solid var(--rule); margin: 0.25rem 0 0; padding: 0.75rem 0 0; display: grid; gap: 0.5rem; }
 .settings-collectors h3 { font-weight: 600; font-size: 0.9rem; margin: 0; }
 .settings-collectors-group { display: grid; gap: 0.5rem; }
+.settings-collectors-row { display: grid; grid-template-columns: auto 1fr auto; gap: 0.35rem 0.65rem; align-items: start; }
+.settings-collectors-copy { display: grid; gap: 0.12rem; }
+.settings-collectors-actions { display: flex; align-items: center; gap: 0.65rem; }
+.settings-collectors-ignore {
+  border: 0; background: none; color: var(--muted); font: inherit; font-size: 0.8rem;
+  padding: 0.15rem 0; min-height: 0; cursor: pointer;
+}
+.settings-collectors-ignore:hover { color: var(--ink); }
 .settings-radio { display: flex; align-items: baseline; gap: 0.5rem; cursor: pointer; }
 .settings-actions { display: flex; gap: 0.5rem; align-items: center; border-top: 1px solid var(--rule); padding-top: 0.75rem; margin-top: 0.15rem; }
 .settings-actions .settings-spacer { flex: 1; }
