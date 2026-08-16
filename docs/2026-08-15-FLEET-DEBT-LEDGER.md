@@ -10,7 +10,7 @@ Spec #1: `docs/superpowers/specs/2026-08-16-instance-discovery.md` · GitHub #67
 
 | # | Item | What it does | Status |
 |---|---|---|---|
-| 1 | Agent-home scan + confirm-to-import | Find any agent filesystem. Inventory. Import only what you confirm. Not Cursor/Grok-2 only. | **Specced** |
+| 1 | Agent-home scan + confirm-to-import | Find any agent filesystem. Inventory. Import only what you confirm. Not Cursor/Grok-2 only. | **This PR / in progress** |
 | 2 | Extra Grok CLI homes | Collect more than `$GROK_HOME` xor `~/.grok`. Uses onboarded `grok-cli` roots from #1. | **Tonight** |
 | 3 | Grok Bot blob parser | `sand-client-persistence/*.blob` under onboarded `grok-bot` roots from #1. | **Tonight** |
 

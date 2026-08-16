@@ -1086,6 +1086,17 @@ describe("day one on a machine without cmux", () => {
       .toMatch(/not installed/i);
     expect(quickstart, "QUICKSTART stopped telling the reader cmux is not a collector")
       .toMatch(/cmux is not one of the (?:four|five|six|eight)/i);
+    /* Extra copies stay the same provider. Deleting this sentence would send
+       a reader looking for a ninth collector instead of Settings. */
+    expect(quickstart, "QUICKSTART stopped saying extra homes opt in under Settings")
+      .toMatch(/Settings → Collectors/);
+    expect(quickstart, "QUICKSTART stopped saying extra homes are not new providers")
+      .toMatch(/not new providers/i);
+    const guide = read("ANT-GUIDE.md");
+    expect(guide, "ANT-GUIDE stopped saying extra homes opt in under Settings")
+      .toMatch(/Settings → Collectors/);
+    expect(guide, "ANT-GUIDE stopped saying extra homes are not new providers")
+      .toMatch(/not new providers/i);
   });
 
   /* The last wire, still open. state.ts sets #cmuxAbsent from cmux.absent, which

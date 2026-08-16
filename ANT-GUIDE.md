@@ -517,7 +517,7 @@ and only one of them has a button.
 **The same figure has a second boundary, and it is the one worth building a
 habit around.** The window narrows it in *time*; this narrows it in *which
 tools*. The board reads Claude Code, Codex, Cursor, OMP, Factory, Prime, Grok,
-and Hermes. Anything else you run that costs money — a scheduled job, a CLI
+and Hermes. Extra homes of those same tools opt in under **Settings → Collectors**; they are not new providers. Anything else you run that costs money — a scheduled job, a CLI
 added since, a provider someone set up on a Friday — spends real money and
 has no agent row or session. Usage names that gap under **Unmodelled billed
 providers**.
