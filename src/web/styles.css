@@ -2005,6 +2005,15 @@ body.feed-frozen .programs { opacity: 0.62; }
   background: var(--failed);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--failed) 22%, transparent);
 }
+/* Inline on the name line so a lone watch-only mark does not become its own row. */
+.agent-name-wrap .control-dot {
+  flex: none;
+  align-self: center;
+}
+.row-identity-tags:empty {
+  display: none;
+  margin: 0;
+}
 
 /* Status column shows the activity word, colored by state (no separate dot). */
 .row-state {
