@@ -9684,7 +9684,11 @@ function renderAgentRow(agent, program, opts = {}) {
        A row can be in the set with a healthy outcome (hook needsInput), so
        this mark and is-needs-you are two different facts. */
     (opts.alerting ? " is-alerting" : "") +
-    (opState === "needs-you" ? " is-needs-you" : "") +
+    /* Strip rows already sit inside the needs-you pane — the strip IS the
+       signal. Adding is-needs-you here would double-mark and let a healthy
+       hook-shaped alert wear identity paint the :not() selectors cannot catch
+       if we ever offered a tick. Board rows still take the class. */
+    (opState === "needs-you" && !opts.programChip ? " is-needs-you" : "") +
     (opState === "working" ? " is-working" : "") +
     (opState === "waiting" ? " is-waiting" : "") +
     (opState === "stalled" ? " is-stalled" : "") +

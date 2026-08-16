@@ -203,9 +203,9 @@ describe("a clean board reports clear, not empty", () => {
        sublabel path was exercised by nothing at all. */
     expect(String(burn.sublabel)).toContain(`${snap.pulse.burn.windowMs / 60_000}m`);
 
-    // And the withheld counter renders as withheld rather than as a number —
-    // the shipping count ahead of it is the board's own number, and allowed.
-    expect(String(momentum.sublabel).split(" shipping · ")[1]).not.toMatch(/\d/);
+    // Completions are not-observable: omit the clause rather than printing a
+    // number or a "not measured" filler. Shipping is the board's own count.
+    expect(String(momentum.sublabel)).toBe(`${snap.totals.working} shipping`);
   });
 
   test("a clean board raises no findings, and a broken one raises exactly its own", () => {

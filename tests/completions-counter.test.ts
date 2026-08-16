@@ -155,8 +155,22 @@ describe("stalled: the other live counter, which had no real coverage", () => {
     const threshold = observeFleet([agent()], now).momentum.stallThresholdMs;
     const longAgo = iso(now - 2 * threshold);
     const pulse = observeFleet([
-      agent({ id: "codex:quiet-1", sourceSessionId: "q1", updatedAt: longAgo }),
-      agent({ id: "codex:quiet-2", sourceSessionId: "q2", updatedAt: longAgo }),
+      agent({
+        id: "codex:quiet-1",
+        sourceSessionId: "q1",
+        status: "waiting",
+        activity: "idle",
+        lifecycle: "waiting",
+        updatedAt: longAgo,
+      }),
+      agent({
+        id: "codex:quiet-2",
+        sourceSessionId: "q2",
+        status: "waiting",
+        activity: "idle",
+        lifecycle: "waiting",
+        updatedAt: longAgo,
+      }),
       agent({ id: "codex:busy", sourceSessionId: "b", updatedAt: iso(now - 60_000) }),
     ], now);
 
@@ -183,8 +197,9 @@ describe("stalled: the other live counter, which had no real coverage", () => {
     const now = base + 60 * 60_000;
     const threshold = observeFleet([agent()], now).momentum.stallThresholdMs;
 
-    const inside = observeFleet([agent({ updatedAt: iso(now - threshold + 60_000) })], now);
-    const outside = observeFleet([agent({ updatedAt: iso(now - threshold - 60_000) })], now);
+    const waiting = { status: "waiting" as const, activity: "idle" as const, lifecycle: "waiting" as const };
+    const inside = observeFleet([agent({ ...waiting, updatedAt: iso(now - threshold + 60_000) })], now);
+    const outside = observeFleet([agent({ ...waiting, updatedAt: iso(now - threshold - 60_000) })], now);
 
     expect(threshold).toBeGreaterThan(0);
     expect(inside.momentum.stalled).toBe(0);

@@ -204,8 +204,22 @@ describe("stalled counts agents that look fine but have gone quiet", () => {
     const now = base + MINUTE_MS;
 
     tracker.observe(snapshot([
-      agent({ id: "codex:quiet", outcome: "healthy", updatedAt: longAgo }),
-      agent({ id: "codex:broken", outcome: "failed", updatedAt: longAgo }),
+      agent({
+        id: "codex:quiet",
+        status: "waiting",
+        activity: "idle",
+        lifecycle: "waiting",
+        outcome: "healthy",
+        updatedAt: longAgo,
+      }),
+      agent({
+        id: "codex:broken",
+        status: "waiting",
+        activity: "idle",
+        lifecycle: "waiting",
+        outcome: "failed",
+        updatedAt: longAgo,
+      }),
     ]), now);
     const pulse = tracker.report(now);
 

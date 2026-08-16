@@ -2028,9 +2028,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .reading.momentum-cta.is-momentum-armed { box-shadow: inset 0 0 0 1px var(--line-strong); }
 .agent-row.is-momentum-hot { opacity: 1; }
 .agent-row.is-momentum-recede { opacity: 0.4; }
-@media (prefers-reduced-motion: no-preference) {
-  .agent-row.is-momentum-hot { transform: translateY(-1px); }
-}
 .agent-row.is-done .act-ended, .row-state.is-done { color: var(--color-status-success); }
 .act-ended { color: var(--ended-ink); } .act-ended.act-glyph { background: var(--ended-ink); }
 .act-unknown { color: var(--unverified); }
@@ -4115,6 +4112,9 @@ body.feed-frozen .programs { opacity: 0.62; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .agent-row.is-momentum-hot { transform: translateY(-1px); }
 }
 
 /* ---------- the float: alert reorders are flown, not teleported ----------
