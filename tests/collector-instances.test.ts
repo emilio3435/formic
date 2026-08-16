@@ -235,6 +235,35 @@ describe("scanAgentHomes", () => {
       Date.now = originalNow;
     }
   });
+
+  test("Application Support Cursor-2 is found when readdir lists it after the 2s cut", () => {
+    const root = mkdtempSync(join(tmpdir(), "ah-scan-late-"));
+    const dataDir = join(root, "Library/Application Support/Cursor-2");
+    mkdirSync(join(dataDir, "User/globalStorage"), { recursive: true });
+    writeFileSync(join(dataDir, "User/globalStorage/state.vscdb"), "");
+    const supportRoot = join(root, "Library/Application Support");
+    const lateListing = [
+      ...Array.from({ length: 80 }, (_, i) => `zzz-filler-${i}`),
+      "Cursor-2",
+    ];
+    const base = memFs(root);
+    let now = 1_000_000;
+    const originalNow = Date.now;
+    Date.now = () => now;
+    try {
+      const hits = scanAgentHomes({
+        ...base,
+        readdir: (p) => p === supportRoot ? lateListing : base.readdir(p),
+        isDirectory: (p) => {
+          now += 30;
+          return base.isDirectory(p);
+        },
+      });
+      expect(hits.some((h) => h.dataDir === dataDir && h.kind === "cursor-gui")).toBe(true);
+    } finally {
+      Date.now = originalNow;
+    }
+  });
 });
 
 describe("readTextCappedSync", () => {

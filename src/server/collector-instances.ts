@@ -199,6 +199,16 @@ function extractedHomeFlag(text: string): string | undefined {
   return firstGroup(text.match(HOME_FLAG_RE));
 }
 
+export function prioritizeAgentNamedDirs(names: readonly string[]): string[] {
+  const known: string[] = [];
+  const rest: string[] = [];
+  for (const name of names) {
+    if (NAME_TOKEN_RE.test(name)) known.push(name);
+    else rest.push(name);
+  }
+  return known.concat(rest);
+}
+
 function argvPointsAt(dataDir: string, fs: ScanFs): boolean {
   const home = fs.home();
   return fs.processArgv().some((argv) => {
@@ -353,12 +363,15 @@ export function scanAgentHomes(fs: ScanFs): CollectorCandidate[] {
     }
   };
 
-  /* Application Support before the two *.app walks so extras such as Cursor-2
-     are considered while the 2s budget remains. */
-  for (const name of fs.readdir(join(home, "Library/Application Support"))) {
+  /* Application Support first. macOS readdir is not alphabetical — this Mac
+     lists Cursor-2 at index 99 of 111, after the 2s cut. Known agent tokens
+     (Cursor, Grok, Claude, …) go first so extras are classified while budget
+     remains. */
+  const supportRoot = join(home, "Library/Application Support");
+  for (const name of prioritizeAgentNamedDirs(fs.readdir(supportRoot))) {
     if (Date.now() > deadline) break;
     if (SKIP_ROOT_NAMES.has(name) || name === "." || name === "..") continue;
-    const dir = join(home, "Library/Application Support", name);
+    const dir = join(supportRoot, name);
     if (fs.isDirectory(dir)) consider(dir);
   }
 
