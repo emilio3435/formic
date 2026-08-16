@@ -2383,6 +2383,12 @@ body.feed-frozen .programs { opacity: 0.62; }
 .tm-fill.warn { fill: var(--amber); }
 .tm-fill.hot { fill: var(--ember); }
 
+.row-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
 .row-summary {
   display: -webkit-box;
   -webkit-box-orient: vertical;
@@ -2395,6 +2401,18 @@ body.feed-frozen .programs { opacity: 0.62; }
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: normal;
+}
+.row-kickoff {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  max-height: 1.35em;
+  overflow: hidden;
+  min-width: 0;
+  color: var(--faint);
+  font-size: 11.5px;
+  line-height: 1.35;
+  opacity: 0.72;
 }
 .agent-row:hover .row-summary,
 .agent-row:focus .row-summary,

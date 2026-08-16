@@ -1731,6 +1731,72 @@ describe("state derivations fall back from provider-native status", () => {
   });
 });
 
+describe("row last-close (#73) and observed-only mark (#78)", () => {
+  test("prefers lastAgentClosing over the kickoff task", () => {
+    const parts = M.rowSummaryParts(agent({
+      task: "Port the rate limiter",
+      lastAgentClosing: "Should I land this now?",
+    }));
+    expect(parts.primary).toContain("Should I land");
+    expect(parts.kickoff).toContain("Port the rate limiter");
+    expect(M.rowSummary(agent({
+      task: "Port the rate limiter",
+      lastAgentClosing: "Should I land this now?",
+    }))).toContain("Should I land");
+    expect(M.rowSummary(agent({
+      task: "Port the rate limiter",
+      lastAgentClosing: "Should I land this now?",
+    }))).toContain("Port the rate limiter");
+  });
+
+  test("uses unclipped lastAgentMessage when closing is absent", () => {
+    const parts = M.rowSummaryParts(agent({
+      task: "Port the rate limiter",
+      lastAgentMessage: "Should I land this now?",
+    }));
+    expect(parts.primary).toContain("Should I land");
+    expect(parts.kickoff).toContain("Port the rate limiter");
+  });
+
+  test("does not promote a clipped lastAgentMessage", () => {
+    const parts = M.rowSummaryParts(agent({
+      task: "Port the rate limiter",
+      lastAgentMessage: "I reviewed the diff and…",
+    }));
+    expect(parts.primary).toContain("Port the rate limiter");
+    expect(parts.kickoff).toBe("");
+  });
+
+  test("treats machine-text closing as absent", () => {
+    const parts = M.rowSummaryParts(agent({
+      task: "Port the rate limiter",
+      lastAgentClosing: '{"fingerprint":"src/foo.ts:12:3"}',
+    }));
+    expect(parts.primary).toContain("Port the rate limiter");
+    expect(parts.kickoff).toBe("");
+  });
+
+  test("does not paint a duplicate kickoff when it matches the closing", () => {
+    const parts = M.rowSummaryParts(agent({
+      task: "Should I land this now?",
+      lastAgentClosing: "Should I land this now?",
+    }));
+    expect(parts.primary).toContain("Should I land");
+    expect(parts.kickoff).toBe("");
+  });
+
+  test("paints the kickoff as a muted second line", () => {
+    const row = withDom(() => M.renderAgentRow(agent({
+      task: "Port the rate limiter",
+      lastAgentClosing: "Should I land this now?",
+    }), { id: "p1", name: "P", agents: [] }));
+    const summary = findAll(row, (n) => String(n.className || "").includes("row-summary"))[0];
+    const kickoff = findAll(row, (n) => String(n.className || "").includes("row-kickoff"))[0];
+    expect(textOf(summary)).toContain("Should I land");
+    expect(textOf(kickoff)).toContain("Port the rate limiter");
+  });
+});
+
 describe("provider-aware row summaries", () => {
   test("uses the sanitized snapshot field and never falls back to technical transcript text", () => {
     const value = agent({
@@ -3352,16 +3418,9 @@ describe("agent rows: instrument cluster + de-noise (C1)", () => {
       // Controllable session: nothing to warn about, so no mark.
       expect(dotFor({ controlState: "linked" }, reachable)).toBeNull();
 
-      // Watch-only while control DOES work elsewhere — the informative case.
-      const watch = dotFor({ controlState: "observed-only" }, reachable);
-      expect(watch).not.toBeNull();
-      expect(watch.className).toContain("is-observed");
-      // The sentence must survive somewhere reachable, since the column is gone.
-      expect(watch.attributes["aria-label"]).toContain("Watch only");
-      expect(watch.attributes.title).toBeTruthy();
-
-      // cmux unreachable: the header already reports controls offline fleet-wide,
-      // so marking every row would restate it N times. Must stay silent.
+      // Observed-only is the common "we can see it, we cannot drive it" case.
+      // Send stays disabled; the hollow ring restated the drawer. No mark.
+      expect(dotFor({ controlState: "observed-only" }, reachable)).toBeNull();
       expect(dotFor({ controlState: "observed-only" }, unreachable)).toBeNull();
 
       // An ended session is uncontrollable by definition — not news.
