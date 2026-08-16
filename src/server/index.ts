@@ -13,6 +13,7 @@ import { HubState, loadProgramHints } from "./state";
 import { JsonProcessWitnessStore } from "./process-witness";
 import { JsonSessionNameStore } from "./session-names";
 import { JsonProgramAliasStore } from "./program-aliases";
+import { JsonCollectorInstanceStore } from "./collector-instances";
 import { archiveLimits, JsonSettingsStore } from "./settings";
 import { JsonTriageQueueStore, NativeLunaInvestigationRunner } from "./triage";
 
@@ -31,6 +32,9 @@ const cmuxExecutable = runtimeCmuxExecutable();
    through a reader rather than from constants, so an operator lowering either
    takes effect on the next commit instead of at the next restart. */
 const settingsStore = await JsonSettingsStore.open(join(PROJECT_ROOT, "data/settings.json"));
+const collectorInstanceStore = await JsonCollectorInstanceStore.open(
+  join(PROJECT_ROOT, "data/collector-instances.json"),
+);
 const archiveStore = await JsonArchiveStore.open(
   join(PROJECT_ROOT, "data/archive.json"),
   undefined,
@@ -71,6 +75,7 @@ const mountainFetch = createMountainFetch({
   triageRunner,
   programAliasStore,
   settingsStore,
+  collectorInstances: collectorInstanceStore,
   cleanupProposer: createWorkerCleanupProposer(PROJECT_ROOT),
   cleanupLauncher: createNativeCleanupLauncher({
     repoRoot: PROJECT_ROOT,
