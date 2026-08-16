@@ -64,10 +64,12 @@ const SAMPLES: Record<Provider, { path?: string; command: string }> = {
     command: `hermes --resume ${ID}`,
   },
   muse: {
-    command: "muse",
+    path: `/Users/me/.local/share/muse/sessions/2026/08/16/${ID}/session.jsonl`,
+    command: `muse resume ${ID}`,
   },
   antigravity: {
-    command: "agy",
+    path: `/Users/me/.gemini/antigravity/conversations/${ID}.db`,
+    command: `agy --conversation ${ID}`,
   },
 };
 
@@ -151,6 +153,23 @@ describe("Factory specifics", () => {
     // `isRecognizedAgentProcess` is what keeps it in the roster at all.
     expect(isRecognizedAgentProcess("/opt/homebrew/bin/droid --auto high")).toBeTrue();
     expect(isRecognizedAgentProcess("-zsh")).toBeFalse();
+  });
+});
+
+describe("Muse and Antigravity specifics", () => {
+  test("muse-bin wrappers are agent processes; resume names the session", () => {
+    expect(isRecognizedAgentProcess("/Users/me/.local/bin/muse-bin-0.1.0-R708.1 --no-session-log")).toBe(true);
+    expect(identitiesFromCommand(`muse resume ${ID}`)).toEqual([
+      { provider: "muse", value: ID, full: true },
+    ]);
+    expect(identitiesFromCommand("muse resume --last")).toEqual([]);
+  });
+
+  test("agy continue is a recognized process; --conversation names the session", () => {
+    expect(isRecognizedAgentProcess("agy --continue")).toBe(true);
+    expect(identitiesFromCommand(`agy --conversation=${ID}`)).toEqual([
+      { provider: "antigravity", value: ID, full: true },
+    ]);
   });
 });
 

@@ -119,6 +119,22 @@ export function identityFromSessionPath(path: string): IdentityHint | null {
   if (cursorTranscript && cursorTranscript[1].toLowerCase() === cursorTranscript[2].toLowerCase()) {
     return { provider: "cursor", value: cursorTranscript[1].toLowerCase(), full: true };
   }
+  const museChild = path.match(
+    new RegExp(`\\/muse\\/sessions\\/\\d{4}\\/\\d{2}\\/\\d{2}\\/(${UUID})\\/subagent\\/(${UUID})\\/session\\.jsonl$`, "i"),
+  );
+  if (museChild) {
+    return {
+      provider: "muse",
+      value: `${museChild[1].toLowerCase()}/${museChild[2].toLowerCase()}`,
+      full: true,
+    };
+  }
+  const antigravityTranscript = path.match(
+    new RegExp(`\\/antigravity(?:-cli|-ide)?\\/brain\\/(${UUID})\\/`, "i"),
+  );
+  if (antigravityTranscript) {
+    return { provider: "antigravity", value: antigravityTranscript[1].toLowerCase(), full: true };
+  }
   const patterns: [Provider, RegExp][] = [
     ["omp", new RegExp(`\\/.omp\\/agent\\/sessions\\/.+?(?:_|\\/)(${UUID})\\.jsonl$`, "i")],
     ["codex", new RegExp(`\\/.codex\\/sessions\\/.+?rollout-.+?-(${UUID})\\.jsonl$`, "i")],
@@ -130,6 +146,8 @@ export function identityFromSessionPath(path: string): IdentityHint | null {
     ["prime", new RegExp(`\\/.prime\\/agent\\/sessions\\/(${UUID})\\.jsonl$`, "i")],
     ["grok", new RegExp(`\\/.grok\\/sessions\\/.+\\/(${UUID})\\/(?:updates\\.jsonl|summary\\.json)$`, "i")],
     ["hermes", new RegExp(`\\/.hermes\\/sessions\\/([^/]+)\\.jsonl$`, "i")],
+    ["muse", new RegExp(`\\/muse\\/sessions\\/\\d{4}\\/\\d{2}\\/\\d{2}\\/(${UUID})\\/session\\.jsonl$`, "i")],
+    ["antigravity", new RegExp(`\\/antigravity(?:-cli|-ide)?\\/conversations\\/(${UUID})\\.db(?:-wal|-shm)?$`, "i")],
   ];
   for (const [provider, pattern] of patterns) {
     const match = path.match(pattern);
@@ -153,6 +171,8 @@ export function identitiesFromCommand(command: string): IdentityHint[] {
     /* Session resume is `--resume` / `-r`, not the `resume` subcommand
        (that lifts `hermes pause`). Ids are filename stems, not always UUIDs. */
     ["hermes", new RegExp(`(?:^|[\\s/])hermes\\b[^\\n]{0,160}?\\s(?:-r|--resume)\\s+(\\S+)(?:\\s|$)`, "i")],
+    ["muse", new RegExp(`(?:^|[\\s/])muse(?:-bin-[^\\s/]+)?\\b[^\\n]{0,160}?\\sresume\\s+(${UUID})(?:\\s|$)`, "i")],
+    ["antigravity", new RegExp(`(?:^|[\\s/])agy\\b[^\\n]{0,160}?\\s(?:--conversation|-c)(?:\\s+|=)(${UUID})(?:\\s|$)`, "i")],
   ];
   for (const [provider, pattern] of exactPatterns) {
     const match = command.match(pattern);
@@ -185,12 +205,15 @@ export function isSharedAgentService(command: string): boolean {
   return /(?:^|\s)app-server(?:\s|$)/i.test(command);
 }
 
+const MUSE_VERSIONED_BINARY = /(?:^|\s)(?:\S*\/)?muse-bin-\S+(?:\s|$)/i;
+
 export function isRecognizedAgentProcess(command: string): boolean {
   return new RegExp(
     `(?:^|\\s)(?:\\S*\\/)?(?:${AGENT_BINARIES})(?:\\.(?:js|mjs|cjs))?(?:\\s|$)`,
     "i",
   ).test(command) ||
     CURSOR_VERSIONED_WRAPPER.test(command) ||
+    MUSE_VERSIONED_BINARY.test(command) ||
     new RegExp(
       `\\/cmux-agent-resume\\/(?:${RESUME_PROVIDERS})-[0-9a-f-]{8,36}(?:\\.zsh)?(?:\\s|$)`,
       "i",
