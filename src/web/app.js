@@ -9444,6 +9444,17 @@ function renderAgentRow(agent, program, opts = {}) {
           text: "#" + nameTag,
         })
         : null,
+      /* Watch-only / quarantine mark rides the name line. It used to sit in
+         row-identity-tags, which is its own grid row under the title — so a
+         row with no ack and no chips spent a whole line on an 8px ring. */
+      watchOnly
+        ? el("span", {
+          class: "control-dot is-" + watchOnly.key,
+          role: "img",
+          "aria-label": watchOnly.label + ". " + watchOnly.hint,
+          title: watchOnly.label + " — " + watchOnly.hint,
+        })
+        : null,
       el("button", {
         type: "button",
         class: "agent-rename",
@@ -9468,20 +9479,6 @@ function renderAgentRow(agent, program, opts = {}) {
          in the strip where the operator last saw it, so it has to be the first
          thing read here rather than the last. */
       ackedMarkNode(agent, state.snap),
-      /* Session tag, only when this row's name is not unique on the board. It
-         rides the existing identity-tags line rather than adding a row, and it
-         is the same short id the drawer and the copy-id buttons speak, so an
-         operator can carry it between the two. */
-      // Watch-only mark: the Access column's sighted replacement. See
-      // watchOnlyMark() for why it stays silent on most rows.
-      watchOnly
-        ? el("span", {
-          class: "control-dot is-" + watchOnly.key,
-          role: "img",
-          "aria-label": watchOnly.label + ". " + watchOnly.hint,
-          title: watchOnly.label + " — " + watchOnly.hint,
-        })
-        : null,
       /* ROW DIET. The role chip, the model-policy chip, the terminal breadcrumb
          and the staleness note used to sit here and are now in the drawer's
          Evidence shelf (renderRowFacts), reachable in one click from the row
