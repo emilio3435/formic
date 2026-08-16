@@ -3138,48 +3138,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .drawer-workspace-rename .ico { width: 0.9rem; height: 0.9rem; }
 .sync-rename-form { padding: 0.5rem 0; border-bottom: 0; background: none; }
 
-/* The same line on the ROW, one step quieter. It sits under a display name the
-   operator is already reading, so it takes the faint ink and stays out of the
-   way until looked for; the drawer's copy is the one that reads as a field.
-   The pencil only surfaces on hover or keyboard focus — a control on every
-   routed row, printed at full strength, would be the loudest thing on a board
-   whose whole job is to be scannable. */
-/* Column 2, like .row-identity-tags. .row-identity is a two-column grid whose
-   first column is the 1.75rem provider-mark gutter; without this the line
-   auto-places into that gutter, where it renders as a clipped "WORKSPA" on top
-   of the tags. */
-.row-workspace { grid-column: 2; display: flex; align-items: center; gap: 0.35rem; min-width: 0; margin-top: 0.1rem; font: 500 10.5px/1.3 var(--font-mono); color: var(--faint); }
-.row-workspace-label { flex: none; font-size: 9px; letter-spacing: 0.075em; text-transform: uppercase; color: var(--faint); }
-.row-workspace-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
-.row-workspace-rename {
-  flex: none;
-  display: inline-grid;
-  place-items: center;
-  width: 1.25rem; height: 1.25rem;
-  color: var(--faint);
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-.row-workspace-rename .ico { width: 0.8rem; height: 0.8rem; }
-.agent-row:hover .row-workspace-rename { opacity: 1; }
-/* Keyboard focus reveals it AND rings it: a control that only faded in would
-   leave a keyboard operator with no idea where they are. Indigo interaction
-   role, like every other focus state (FORMIC-FOCUS-RED). */
-.row-workspace-rename:focus-visible {
-  opacity: 1;
-  outline-color: var(--color-interactive);
-  box-shadow: var(--color-focus-ring);
-}
-.row-workspace-rename:hover { color: var(--ink); border-color: var(--line-strong); background: var(--raise); }
-/* Touch has no hover to reveal it, so it is always present there — and large
-   enough to hit. Mirrors the sweep the drawer's control already joins. */
-@media (max-width: 1023px) {
-  .row-workspace-rename { opacity: 1; width: 44px; height: 44px; }
-  .row-workspace-rename .ico { width: 1rem; height: 1rem; }
-}
-
 .drawer-session-facts {
   grid-column: 1 / -1;
   display: grid;

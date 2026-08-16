@@ -7693,11 +7693,11 @@ function agentRowSig(agent, ui, opts = {}) {
     ui.renaming === presentationLabelKey(preferredRenameTarget(agent)) ? "1" : "0",
     ui.renamePending ? "1" : "0",
     ui.renameError || "",
-    /* The cmux workspace line the row now prints. The title arrives from the
-       terminal on the event stream, so a rename made on the other side moves
-       NOTHING else in this signature — without it the row keeps its cached node
-       and the new name never appears. The editor's own state rides along for the
-       same reason: opening it swaps the line for a form. */
+    /* Display name derives from the cmux workspace title when
+       preferredRenameTarget is workspace. The title arrives from the terminal
+       on the event stream, so a rename made on the other side moves NOTHING
+       else in this signature — without it the row keeps its cached node and
+       the new name never appears. */
     (agent.target && agent.target.workspaceTitle) || "",
     agent.target && ui.wsRenaming === agent.target.workspaceId ? "ws-editing" : "",
     ui.contextDisplay || "",
@@ -9373,40 +9373,6 @@ function historyChips(agent) {
   })];
 }
 
-/* The cmux workspace title, on the row, under the display name.
-
-   These are two different names and the row now says so. The pencil beside the
-   display name edits a BOARD derivation (a presentation label in
-   /api/program-aliases); this one edits the terminal's own title through
-   /api/sync/rename, which cmux and every other pane in that workspace also see.
-   Same component and same state as the drawer's Workspace line so the two
-   cannot drift, but its own fkey: a shared one would make the focus restore in
-   render() pick whichever control the tree walk reached first.
-
-   Absent unless the workspace is resolved — renameableWorkspace() is the same
-   gate the drawer uses, so the board never aims a rename at a terminal it only
-   guessed at. */
-function renderRowWorkspace(agent) {
-  const ws = renameableWorkspace(agent);
-  if (!ws) return null;
-  if (state.wsRenaming === ws.workspaceId) return renderWorkspaceRenameForm(ws);
-  return el("span", { class: "row-workspace" },
-    el("span", { class: "row-workspace-label", text: "Workspace" }),
-    el("span", { class: "row-workspace-title", title: ws.title, text: ws.title }),
-    el("button", {
-      type: "button",
-      class: "row-workspace-rename",
-      "aria-label": "Rename workspace " + ws.title,
-      title: "Rename the cmux workspace — every pane in it shares this title",
-      dataset: { fkey: "row-ws-rename:" + ws.workspaceId },
-      onclick: (e) => {
-        /* The row itself is a button that opens the drawer. */
-        e.stopPropagation();
-        startWorkspaceRename(ws);
-      },
-    }, icon("rename")));
-}
-
 function renderAgentRow(agent, program, opts = {}) {
   const activity = deriveActivity(agent);
   const outcome = deriveOutcome(agent);
@@ -9512,7 +9478,6 @@ function renderAgentRow(agent, program, opts = {}) {
          the fact still reaches this row's aria-label below, because a screen
          reader arrowing row-to-row may never visit the heading between them. */
       null),
-    renderRowWorkspace(agent),
     el("span", { class: "row-identity-tags" },
       /* SYNC-NF. The ack mark leads the line — it is the reason this row is not
          in the strip where the operator last saw it, so it has to be the first
