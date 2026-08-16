@@ -161,6 +161,44 @@ describe("GET /api/transcript", () => {
     }
   });
 
+  test("keeps CLI list and table line breaks on transcript lines", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "anthill-transcript-layout-"));
+    const path = join(directory, "session.jsonl");
+    const body = [
+      "Here is the plan:",
+      "",
+      "- fix the parser",
+      "- add tests",
+      "",
+      "| field | row |",
+      "| close | keep |",
+    ].join("\n");
+    await writeFile(path, [
+      JSON.stringify({
+        timestamp: "2026-08-16T09:00:00.000Z",
+        type: "response_item",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: body }],
+        },
+      }),
+    ].join("\n"));
+    const fetch = app(snapshot(path));
+    try {
+      const response = await fetch(get("/api/transcript?agent=codex%3Atest-session"));
+      expect(response.status).toBe(200);
+      const payload = await response.json() as { lines: Array<{ text: string }> };
+      expect(payload.lines).toHaveLength(1);
+      expect(payload.lines[0]!.text).toBe(body);
+      expect(payload.lines[0]!.text).toContain("\n- fix the parser\n- add tests\n");
+      expect(payload.lines[0]!.text.split("\n")).toContain("| field | row |");
+    } finally {
+      fetch.dispose();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   test("unknown agents are 404 and agents without readable files return an honest empty result", async () => {
     const fetch = app(snapshot());
     const missing = await fetch(get("/api/transcript?agent=codex%3Amissing"));

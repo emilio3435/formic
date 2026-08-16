@@ -106,6 +106,8 @@ export interface CollectedAgent {
   /* The END of the agent's last message, role-attributed. lastAgentMessage is a
      front window, so a question asked after an explanation never survived it. */
   lastAgentClosing?: string | null;
+  lastUserChatBody?: string | null;
+  lastAgentChatBody?: string | null;
   transcriptTail?: string;
   /* When the archive took custody of this record — set by the archive store,
      absent on a live agent. Retention runs from here, not from `updatedAt`:

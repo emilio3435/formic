@@ -12042,6 +12042,147 @@ describe("inspector chat is one messenger, not a clipped log", () => {
     });
   });
 
+  test("empty transcript with collector speech keeps the preview bubble and hides the empty lead", async () => {
+    const window = collectorWindow();
+    const a = agent({
+      id: "grok:01a006fb-c477-79c1-917b-41c1efbcb9d2",
+      lastAgentMessage: window,
+      lastAgentClosing: "Should I land the limiter now?",
+    });
+    const program = { id: "p", name: "P", agents: [a] };
+    const empty = {
+      agentId: a.id,
+      loading: false,
+      error: "",
+      limit: 200,
+      data: { source: "/tmp/updates.jsonl", truncated: false, lines: [] },
+    };
+
+    expect(M.previewChatTurns(a).some((turn: { role: string; text: string }) => /Should I land the limiter now/.test(turn.text))).toBe(true);
+    expect(withDom(() => M.renderTranscriptFeedLead(a, { transcript: empty }, { hasPreviewSpeech: true }))).toBeNull();
+
+    await withState({ transcript: empty }, () => {
+      const drawer = withDom(() => {
+        const pane = newNode("div");
+        M.renderAgentDrawer(pane, { kind: "agent", agent: a, program });
+        return pane;
+      });
+      const scroll = byClass(drawer, "drawer-chat-scroll");
+      expect(allByClass(scroll, "chat-msg").length).toBeGreaterThan(0);
+      expect(textOf(scroll)).toContain("Should I land the limiter now");
+      expect(textOf(scroll)).not.toContain("No readable turns");
+      expect(textOf(scroll)).not.toContain("has no readable turns");
+      expect(byClass(scroll, "chat-feed-state")).toBeNull();
+    });
+  });
+
+  test("a collector window whose transcript loaded empty has no chevron", () => {
+    const window = collectorWindow();
+    expect(window.endsWith("…")).toBe(true);
+    expect(M.chatSpeechNeedsCollapse(window, { preview: true, canRevealMore: false })).toBe(false);
+
+    const a = agent({
+      id: "grok:01a00996-de16-73c1-b640-f8302eb6b7e3",
+      lastAgentMessage: window,
+      lastAgentClosing: "…ce guidance] MEMORY.md:532-534|note=[used host ortools] </citation_entries> <rollout_ids> 019f </rollout_ids> </oai-mem-citation>",
+    });
+    const body = withDom(() => M.renderChatFeedBody(a, transcriptUi({
+      agentId: a.id,
+      data: { source: "/tmp/updates.jsonl", truncated: false, lines: [] },
+    })));
+    const bubble = byClass(body, "chat-msg");
+    expect(textOf(byClass(bubble, "chat-msg-body"))).toBe(window);
+    expect(byClass(bubble, "chat-msg-more")).toBeNull();
+    expect(byClass(bubble, "chat-msg-body").classList.contains("is-collapsed")).toBe(false);
+    expect(textOf(body)).not.toContain("No readable turns");
+  });
+
+  test("preview assistant text prefers a readable close over the front window", () => {
+    const window = collectorWindow("I started at the top of the file and walked the limiter");
+    const a = agent({
+      id: "grok:preview-close-118",
+      lastAgentMessage: window,
+      lastAgentClosing: "Should I land this now?",
+    });
+    const turns = M.previewChatTurns(a);
+    expect(turns[0]).toMatchObject({ role: "assistant", text: "Should I land this now?" });
+    expect(turns.some((turn: { text: string }) => turn.text === window)).toBe(false);
+
+    const preview = withDom(() => M.renderChat(a));
+    expect(textOf(byClass(preview, "chat-msg-body"))).toBe("Should I land this now?");
+    expect(textOf(preview)).not.toContain("I started at the top of the file");
+
+    const citation = agent({
+      id: "codex:preview-close-118",
+      lastAgentMessage: "Lane implementation is complete and locally committed, but Docker is down.",
+      lastAgentClosing: "…ce guidance] MEMORY.md:532-534|note=[used host ortools] </citation_entries> <rollout_ids> 019f </rollout_ids> </oai-mem-citation>",
+    });
+    expect(M.previewChatTurns(citation)[0].text).toContain("Lane implementation is complete");
+    expect(M.previewChatTurns(citation)[0].text).not.toContain("MEMORY.md");
+  });
+
+  test("expanding a collector window keeps the preview when the transcript is empty", async () => {
+    const window = collectorWindow();
+    const a = agent({
+      id: "grok:expand-empty-118",
+      lastAgentMessage: window,
+      lastUserMessage: "",
+    });
+    const program = { id: "p", name: "P", agents: [a] };
+    await withState({ transcript: { agentId: null, loading: false, error: "", data: null, limit: 200 } }, async () => {
+      await withRequests([{
+        status: 200,
+        json: { ok: true, source: "/tmp/updates.jsonl", truncated: false, lines: [] },
+      }], async (calls) => {
+        const preview = withDom(() => M.renderChat(a));
+        await fire(byClass(preview, "chat-msg-more"));
+        expect(calls[0]!.url).toContain("/api/transcript?agent=" + encodeURIComponent(a.id));
+        const drawer = withDom(() => {
+          const pane = newNode("div");
+          M.renderAgentDrawer(pane, { kind: "agent", agent: a, program });
+          return pane;
+        });
+        const scroll = byClass(drawer, "drawer-chat-scroll");
+        expect(textOf(byClass(scroll, "chat-msg-body"))).toBe(window);
+        expect(textOf(scroll)).not.toContain("No readable turns");
+        expect(byClass(scroll, "chat-msg-more")).toBeNull();
+      });
+    });
+  });
+
+  test("expanding a collector window opens the matching loaded turn instead of a new collapsed key", async () => {
+    const window = collectorWindow();
+    const full = window.replace(/…$/, "") + " then land the limiter.";
+    const a = agent({
+      id: "codex:expand-match-118",
+      lastAgentMessage: window,
+      lastUserMessage: "",
+    });
+    const loadedUi = transcriptUi({
+      agentId: a.id,
+      data: {
+        source: "/tmp/t.jsonl",
+        truncated: false,
+        lines: [{ at: null, role: "assistant", text: full }],
+      },
+    });
+    await withState(loadedUi, async () => {
+      const preview = withDom(() => M.renderChat(a));
+      await fire(byClass(preview, "chat-msg-more"));
+
+      const loaded = withDom(() => M.renderChatFeedBody(a, M.state));
+      const body = byClass(loaded, "chat-msg-body");
+      const more = byClass(loaded, "chat-msg-more");
+      expect(textOf(body)).toBe(full);
+      expect(body.classList.contains("is-collapsed")).toBe(false);
+      expect(more.attributes["aria-expanded"]).toBe("true");
+
+      await fire(more);
+      expect(body.classList.contains("is-collapsed")).toBe(true);
+      expect(more.attributes["aria-expanded"]).toBe("false");
+    });
+  });
+
   test("a long loaded turn collapses to about six lines and expands in place", async () => {
     const long = Array.from({ length: 10 }, (_, i) => `Line ${i + 1} of the agent turn.`).join("\n");
     expect(M.chatSpeechNeedsCollapse(long)).toBe(true);
@@ -12065,6 +12206,44 @@ describe("inspector chat is one messenger, not a clipped log", () => {
     await fire(more);
     expect(body.classList.contains("is-collapsed")).toBe(true);
     expect(more.classList.contains("is-open")).toBe(false);
+  });
+
+  test("preview prefers a layout-preserving chat body over the flattened row window", () => {
+    const body = [
+      "Here is the plan:",
+      "",
+      "- fix the parser",
+      "- add tests",
+      "",
+      "| field | row |",
+      "| close | keep |",
+    ].join("\n");
+    const a = agent({
+      id: "claude:layout-123",
+      lastAgentMessage: "Here is the plan: - fix the parser - add tests | field | row | | close | keep |",
+      lastAgentClosing: "Here is the plan: - fix the parser - add tests | field | row | | close | keep |",
+      lastAgentChatBody: body,
+    });
+    const preview = withDom(() => M.renderChat(a));
+    const spoken = textOf(byClass(preview, "chat-msg-body"));
+    expect(spoken).toBe(body);
+    expect(spoken.split("\n")).toEqual(body.split("\n"));
+    expect(byClass(preview, "chat-msg-body").textContent).toBe(body);
+
+    const row = M.rowSummaryParts(a);
+    expect(row.primary).not.toContain("\n");
+    expect(row.primary).toContain("Here is the plan");
+  });
+
+  test("a short loaded list keeps its line breaks without a chevron", () => {
+    const body = "- fix the parser\n- add tests\n\nShould I land this?";
+    const a = agent({ id: "claude:short-list-123" });
+    const bubble = withDom(() => M.chatBubbleNode({ at: null, role: "assistant", text: body }, a));
+    const spoken = byClass(bubble, "chat-msg-body");
+    expect(textOf(spoken)).toBe(body);
+    expect(spoken.textContent).toBe(body);
+    expect(spoken.classList.contains("is-collapsed")).toBe(false);
+    expect(byClass(bubble, "chat-msg-more")).toBeNull();
   });
 
   test("bubbles drop uppercase ROLE and run ids; Evidence stays the CLI", () => {

@@ -174,7 +174,7 @@ export function chatFeedStateNode(kind, iconName, title, detail, action = null) 
    count and raw source path already belong to Evidence, and the live feed
    refreshes on its own. Semantic buttons are styled as text links because they
    perform actions rather than navigation. */
-export function renderTranscriptFeedLead(agent, ui = state) {
+export function renderTranscriptFeedLead(agent, ui = state, opts = {}) {
   const view = (ui && ui.transcript) || {};
   if (view.agentId !== agent.id) return null;
 
@@ -200,6 +200,9 @@ export function renderTranscriptFeedLead(agent, ui = state) {
 
   const data = view.data || { lines: [], source: null, truncated: false };
   if (!data.lines.length) {
+    /* Collector speech already on the agent is the preview thread. An empty
+       jsonl (common on Grok) must not replace that speech with a lie. */
+    if (opts.hasPreviewSpeech) return null;
     return chatFeedStateNode(
       "empty", "scroll-text",
       data.source ? "No readable turns" : "No transcript recorded",

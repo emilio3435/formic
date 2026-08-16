@@ -7,7 +7,7 @@ import type {
   Provider,
   TargetResolution,
 } from "../shared/types";
-import { readableHumanMessage } from "./human-message";
+import { readableChatBody } from "./human-message";
 import { routingSurfaceObservations, type RoutingSurfaceObservation } from "./targets";
 import type { CmuxSurface } from "./types";
 
@@ -195,7 +195,7 @@ function transcriptLines(agent: AgentSnapshot, contents: string): TranscriptLine
     if (!row || typeof row !== "object" || Array.isArray(row)) continue;
     const candidate = transcriptCandidate(agent, row as Record<string, any>);
     if (!candidate) continue;
-    const text = readableHumanMessage(agent.provider, candidate.content);
+    const text = readableChatBody(agent.provider, candidate.content);
     if (!text) continue;
     const timestamp = typeof candidate.at === "string" && Number.isFinite(Date.parse(candidate.at))
       ? new Date(candidate.at).toISOString()

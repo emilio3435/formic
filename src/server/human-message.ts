@@ -48,10 +48,7 @@ function shorten(text: string): string {
   return `${clipped.slice(0, boundary > MAX_HUMAN_MESSAGE_CHARS * 0.6 ? boundary : clipped.length).trimEnd()}…`;
 }
 
-/* Everything readableText does EXCEPT the final truncation, so a caller that
-   wants the end of a message can have the same cleaning without the front
-   window baked in. */
-function cleanMessage(text: string): string | undefined {
+function stripMessageChrome(text: string, blockReplacement: string): string | undefined {
   let value = text.replace(/\r/g, "").trim();
   if (!value || NON_HUMAN_PREFIX.test(value)) return undefined;
 
@@ -60,44 +57,105 @@ function cleanMessage(text: string): string | undefined {
     .replace(/<file\b[^>]*>|<\/file>/gi, "")
     // Slash-command + local-command transport envelopes (Claude Code) are
     // machinery, not human words — drop the whole block, content included.
-    .replace(/<(command-name|command-message|command-args|command-contents)>[\s\S]*?<\/\1>/gi, " ")
-    .replace(/<(local-command-stdout|local-command-stderr|local-command-caveat)>[\s\S]*?<\/\1>/gi, " ")
-    // Flatten markdown so the one-line human view reads as prose, not source.
+    .replace(/<(command-name|command-message|command-args|command-contents)>[\s\S]*?<\/\1>/gi, blockReplacement)
+    .replace(/<(local-command-stdout|local-command-stderr|local-command-caveat)>[\s\S]*?<\/\1>/gi, blockReplacement)
+    .trim();
+  if (!value || NON_HUMAN_PREFIX.test(value)) return undefined;
+  return value;
+}
+
+function flattenMarkdown(value: string): string {
+  return value
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/^\s{0,3}#{1,6}\s+/gm, "")
     .replace(/(\*\*|__)(.+?)\1/g, "$2")
     .replace(/`([^`]+)`/g, "$1")
     .trim();
-  if (!value || NON_HUMAN_PREFIX.test(value)) return undefined;
+}
 
+function stripInlineMarkdown(value: string): string {
+  return value
+    .replace(/(\*\*|__)(.+?)\1/g, "$2")
+    .replace(/`([^`]+)`/g, "$1");
+}
+
+function rejectMachinePayload(value: string): boolean {
   if (/^[{[]/.test(value)) {
     try {
       const parsed = JSON.parse(value);
-      if (parsed && typeof parsed === "object") return undefined;
+      if (parsed && typeof parsed === "object") return true;
     } catch {
       // A prose message may legitimately begin with a bracket.
     }
   }
-  if (/^<[A-Za-z][\w:.-]*(?:\s[^>]*)?>[\s\S]*<\/[A-Za-z][\w:.-]*>\s*$/i.test(value)) return undefined;
+  return /^<[A-Za-z][\w:.-]*(?:\s[^>]*)?>[\s\S]*<\/[A-Za-z][\w:.-]*>\s*$/i.test(value);
+}
+
+function isDroppedLine(line: string): boolean {
+  return TOOL_LINE.test(line)
+    || SHELL_LINE.test(line)
+    || PATH_ONLY.test(line)
+    || /^\s*(?:sources?|references?):/i.test(line)
+    || CITATION_ONLY.test(line)
+    || DIFF_LINE.test(line);
+}
+
+function stripCitationMarks(value: string): string {
+  return value.replace(/\[\^?\d+\]|【[^】]+】/g, "");
+}
+
+/* Everything readableText does EXCEPT the final truncation, so a caller that
+   wants the end of a message can have the same cleaning without the front
+   window baked in. The row one-liner JOINS surviving lines. */
+function cleanMessage(text: string): string | undefined {
+  let value = stripMessageChrome(text, " ");
+  if (value === undefined) return undefined;
+
+  // Flatten markdown so the one-line human view reads as prose, not source.
+  value = flattenMarkdown(value);
+  if (!value || NON_HUMAN_PREFIX.test(value)) return undefined;
+  if (rejectMachinePayload(value)) return undefined;
 
   const lines = value
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
-    .filter((line) => !TOOL_LINE.test(line))
-    .filter((line) => !SHELL_LINE.test(line))
-    .filter((line) => !PATH_ONLY.test(line))
-    .filter((line) => !/^\s*(?:sources?|references?):/i.test(line))
-    .filter((line) => !CITATION_ONLY.test(line));
+    .filter((line) => !isDroppedLine(line));
   if (lines.length === 0) return undefined;
 
-  const cleaned = lines
-    .filter((line) => !DIFF_LINE.test(line))
-    .join(" ")
-    .replace(/\[\^?\d+\]|【[^】]+】/g, "")
+  const cleaned = stripCitationMarks(lines.join(" "))
     .replace(/\s+/g, " ")
     .trim();
   if (!cleaned || /^(?:diff|index|patch|changes?)\b[\s:.-]*$/i.test(cleaned)) return undefined;
+  return cleaned;
+}
+
+/* Sibling of cleanMessage for the inspector chat body. Same envelope and
+   citation stripping; keeps newlines, blank lines, list markers, and table
+   rows. No join-to-spaces. No squeeze across newlines. */
+function layoutMessage(text: string): string | undefined {
+  let value = stripMessageChrome(text, "\n");
+  if (value === undefined) return undefined;
+  value = stripInlineMarkdown(value);
+  if (!value || NON_HUMAN_PREFIX.test(value)) return undefined;
+  if (rejectMachinePayload(value.trim())) return undefined;
+
+  const kept: string[] = [];
+  for (const line of value.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      kept.push("");
+      continue;
+    }
+    if (isDroppedLine(trimmed)) continue;
+    kept.push(stripCitationMarks(line).replace(/[ \t]+$/g, ""));
+  }
+  while (kept.length > 0 && kept[0] === "") kept.shift();
+  while (kept.length > 0 && kept[kept.length - 1] === "") kept.pop();
+  const cleaned = kept.join("\n");
+  if (!cleaned || /^(?:diff|index|patch|changes?)\b[\s:.-]*$/i.test(cleaned.replace(/\s+/g, " ").trim())) {
+    return undefined;
+  }
   return cleaned;
 }
 
@@ -135,6 +193,11 @@ export function readableClosing(provider: Provider, content: unknown): string | 
 export function readableHumanMessage(provider: Provider, content: unknown): string | undefined {
   const text = textParts(provider, content).join("\n");
   return readableText(text);
+}
+
+export function readableChatBody(provider: Provider, content: unknown): string | undefined {
+  const text = textParts(provider, content).join("\n");
+  return layoutMessage(text);
 }
 
 export function extractLastHumanFacingAt(
@@ -176,6 +239,19 @@ export function extractLastMessageByRole(
     if (candidate.isMeta || candidate.role !== role) continue;
     const message = readableHumanMessage(provider, candidate.content);
     if (message) return message;
+  }
+  return null;
+}
+
+export function extractChatBodyByRole(
+  provider: Provider,
+  candidates: readonly HumanMessageCandidate[],
+  role: "assistant" | "user",
+): string | null {
+  for (const candidate of [...candidates].reverse()) {
+    if (candidate.isMeta || candidate.role !== role) continue;
+    const body = readableChatBody(provider, candidate.content);
+    if (body) return body;
   }
   return null;
 }

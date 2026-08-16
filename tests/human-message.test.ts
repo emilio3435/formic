@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+  extractChatBodyByRole,
   extractClosingByRole,
   extractLastHumanFacingAt,
   extractLastHumanMessage,
   extractLastMessageByRole,
+  readableChatBody,
   readableClosing,
   readableHumanMessage,
   type HumanMessageCandidate,
@@ -177,5 +179,79 @@ describe("readableClosing — the end of a message, not its beginning", () => {
       .toBe("Earlier agent turn that also ends in a question?");
     expect(extractClosingByRole("claude", candidates, "user"))
       .toBe("Now do the migration and tell me when it lands.");
+  });
+});
+
+/* Chat must keep the CLI's line breaks. The row one-liner still joins; this
+   sibling strips the same envelopes and citations without .join(" ") or a
+   cross-newline squeeze. */
+describe("readableChatBody — layout-preserving sibling of the row one-liner", () => {
+  const bullets = [
+    "Here is the plan:",
+    "",
+    "- fix the parser",
+    "- add tests",
+    "",
+    "Should I land this?",
+  ].join("\n");
+  const table = [
+    "Compare the two windows:",
+    "",
+    "| field | row | chat |",
+    "| close | one line | keep breaks |",
+    "",
+    "Want the table in the bubble?",
+  ].join("\n");
+
+  test("keeps bullets, blank lines, and table rows that cleanMessage joins away", () => {
+    expect(readableHumanMessage("claude", bullets)).toBe(
+      "Here is the plan: - fix the parser - add tests Should I land this?",
+    );
+    expect(readableChatBody("claude", bullets)).toBe(bullets);
+    expect(readableChatBody("claude", bullets)).toContain("\n- fix the parser\n- add tests\n");
+    expect((readableChatBody("claude", bullets)?.match(/\n/g) ?? []).length).toBeGreaterThan(0);
+
+    expect(readableHumanMessage("claude", table)).not.toContain("\n");
+    expect(readableChatBody("claude", table)).toBe(table);
+    expect(readableChatBody("claude", table)?.split("\n")).toEqual(table.split("\n"));
+  });
+
+  test("does not squeeze spaces across newlines or inside a table row", () => {
+    const padded = "| field  | row  |\n| close  | keep |";
+    expect(readableChatBody("claude", padded)).toBe(padded);
+    expect(readableHumanMessage("claude", padded)).toBe("| field | row | | close | keep |");
+  });
+
+  test("still strips transport envelopes and skips machine-only turns", () => {
+    const raw = [
+      "<command-name>/model</command-name>",
+      "<command-message>model</command-message>",
+      "Here is the plan:",
+      "- fix the parser",
+    ].join("\n");
+    expect(readableChatBody("claude", raw)).toBe("Here is the plan:\n- fix the parser");
+    expect(readableChatBody("claude", raw)).not.toContain("command-name");
+    expect(readableChatBody("claude", "$ git diff --check")).toBeUndefined();
+    expect(readableChatBody("claude", "")).toBeUndefined();
+  });
+
+  test("does not front-truncate the way the row window does", () => {
+    const longList = ["Keep every item in this layout-preserving body:", ...Array.from({ length: 40 }, (_, i) => `- item ${i + 1}`)].join("\n");
+    expect(readableHumanMessage("claude", longList)?.endsWith("…")).toBe(true);
+    expect(readableChatBody("claude", longList)).toBe(longList);
+    expect(readableChatBody("claude", longList)).toContain("- item 40");
+  });
+
+  test("extractChatBodyByRole returns the last layout-preserving turn for that role", () => {
+    const candidates: HumanMessageCandidate[] = [
+      { role: "assistant", content: "Earlier:\n- stale" },
+      { role: "user", content: "Please use a table." },
+      { role: "assistant", content: bullets },
+    ];
+    expect(extractChatBodyByRole("claude", candidates, "assistant")).toBe(bullets);
+    expect(extractChatBodyByRole("claude", candidates, "user")).toBe("Please use a table.");
+    expect(extractLastMessageByRole("claude", candidates, "assistant")).toBe(
+      "Here is the plan: - fix the parser - add tests Should I land this?",
+    );
   });
 });

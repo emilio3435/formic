@@ -1569,7 +1569,7 @@ globalThis.TheAntHill = {
   transcriptUrl, clampTranscriptLimit, nextTranscriptLimit, normalizeTranscript,
   transcriptFailureText, transcriptWindow, renderTranscriptFeedLead,
   chatBubbleNode, renderChatFeedBody, shouldAutoLoadTranscript, chatScrollPlan, saveChatScrollFrom,
-  chatSpeechNeedsCollapse, isCollectorWindowText,
+  chatSpeechNeedsCollapse, isCollectorWindowText, previewChatTurns, rowClosingText,
   captureDrawerScroll, restoreDrawerScroll,
   actionsUrl, clampActionsLimit, normalizeActions, actionsFailureText,
   controlOutcome,
@@ -9080,6 +9080,20 @@ function rowClosingText(agent) {
   return "";
 }
 
+function previewChatBody(value) {
+  if (typeof value !== "string") return "";
+  const text = value.replace(/^\n+|\n+$/g, "");
+  return text.trim() ? text : "";
+}
+
+function previewAssistantText(agent) {
+  return previewChatBody(agent.lastAgentChatBody) || rowClosingText(agent) || agent.lastAgentMessage;
+}
+
+function previewUserText(agent) {
+  return previewChatBody(agent.lastUserChatBody) || agent.lastUserMessage;
+}
+
 function rowSummaryParts(agent) {
   const closing = rowClosingText(agent);
   if (closing) return { primary: conciseText(closing, 160), kickoff: "" };
@@ -11194,7 +11208,9 @@ function renderAgentDrawer(pane, view) {
 
   // Document (conversation) + Desk (evidence).
   const chatBody = renderChatFeedBody(agent, state);
-  const chatLead = renderTranscriptFeedLead(agent, state);
+  const chatLead = renderTranscriptFeedLead(agent, state, {
+    hasPreviewSpeech: previewChatTurns(agent, state).length > 0,
+  });
   const chatAlarm = feedAlarm(state.conn, state.snap && state.snap.generatedAt);
   const chatFreshness = chatAlarm
     ? chatFeedStateNode(
@@ -11206,8 +11222,9 @@ function renderAgentDrawer(pane, view) {
     : null;
   /* Mini chat window. The feed IS the transcript: bubbles edge to edge, auto-loaded on open
      (selectEntity starts the fetch), with
-     renderChat's preview standing in only while the record is loading, errored,
-     or absent. Exceptional state and the manual older-history action lead the
+     renderChat's preview standing in while the record is loading, errored,
+     absent, or present-but-empty. An empty jsonl must not hide collector speech.
+     Exceptional state and the manual older-history action lead the
      feed rather than consuming a separate footer row. The feed is the one
      deliberate inner scroller on the left.
      role="log" + tabindex make the feed itself a named, keyboard-reachable
@@ -12307,23 +12324,32 @@ function transcriptArtifact(agent) {
    "No operate digest yet" placeholder — a tab whose only remaining content was an
    apology for having none. */
 
-/* Collector front windows are 240 characters, word-broken, then a dead-end
-   ellipsis. Chat may paint that window while the transcript is missing — common
-   on Grok rows — but the bubble itself is never a dead end: a trailing chevron
-   opens the turn. Long loaded speech uses the same control to collapse to about
-   six lines. Side and fill say who spoke; run ids stay in Evidence. */
+/* Collector front windows are 240 characters, word-broken, then an ellipsis.
+   Chat may paint that window while the transcript is missing — common on Grok
+   rows. A chevron is only honest when there is more to show: an unknown or
+   still-loading record might grow, but an empty loaded file is the whole
+   window, no disclosure. Long loaded speech uses the same control to collapse
+   to about six lines. Side and fill say who spoke; run ids stay in Evidence. */
 const CHAT_COLLAPSE_LINES = 6;
 const CHAT_COLLAPSE_CHARS = 240;
-const expandedChatSpeech = new Set();
+const expandedChatSpeech = new Map();
 
 function isCollectorWindowText(text) {
   return /…$/.test(String(text || "").trim());
 }
 
+function transcriptOffersMoreSpeech(agent, ui) {
+  const view = (ui && ui.transcript) || {};
+  if (view.agentId !== agent.id) return true;
+  if (view.loading) return true;
+  if (view.data) return Array.isArray(view.data.lines) && view.data.lines.length > 0;
+  return !view.error;
+}
+
 function chatSpeechNeedsCollapse(text, opts = {}) {
   const value = String(text || "");
   if (!value) return false;
-  if (opts.preview && isCollectorWindowText(value)) return true;
+  if (opts.preview && isCollectorWindowText(value) && opts.canRevealMore !== false) return true;
   if (value.split(/\r?\n/).length > CHAT_COLLAPSE_LINES) return true;
   return value.length > CHAT_COLLAPSE_CHARS;
 }
@@ -12352,13 +12378,40 @@ function chatSpeechMoreLabel(expanded, preview, prose) {
   return preview && isCollectorWindowText(prose) ? "Open full turn" : "Show more";
 }
 
+function chatSpeechExpanded(agentId, role, prose) {
+  const key = chatSpeechKey(agentId, role, prose);
+  if (expandedChatSpeech.has(key)) return true;
+  const prefix = String(agentId || "") + ":" + String(role || "") + ":";
+  for (const [storedKey, stored] of expandedChatSpeech) {
+    if (!String(storedKey).startsWith(prefix)) continue;
+    if (isSameProse(String(stored || ""), String(prose || ""))) return true;
+  }
+  return false;
+}
+
+function matchingChatSpeechKeys(agentId, role, key, prose) {
+  const keys = new Set([key]);
+  const prefix = String(agentId || "") + ":" + String(role || "") + ":";
+  for (const [storedKey, stored] of expandedChatSpeech) {
+    if (storedKey !== key && !String(storedKey).startsWith(prefix)) continue;
+    if (storedKey === key || isSameProse(String(stored || ""), String(prose || ""))) keys.add(storedKey);
+  }
+  return keys;
+}
+
 function revealChatSpeech(agent, key, opts = {}) {
-  if (expandedChatSpeech.has(key)) expandedChatSpeech.delete(key);
-  else expandedChatSpeech.add(key);
+  const prose = String(opts.prose || "");
+  const matches = matchingChatSpeechKeys(agent.id, opts.role, key, prose);
+  const open = [...matches].some((item) => expandedChatSpeech.has(item));
+  if (open) {
+    for (const item of matches) expandedChatSpeech.delete(item);
+  } else {
+    expandedChatSpeech.set(key, prose);
+  }
   if (!opts.preview || !isCollectorWindowText(opts.prose)) return;
   const view = state.transcript || {};
   if (view.agentId === agent.id && (view.loading || view.error || view.data)) return;
-  void loadTranscript(agent.id);
+  return loadTranscript(agent.id);
 }
 
 /* The sender as a NAME. `agent.id` is `provider:sourceSessionId` — durable, and
@@ -12446,9 +12499,9 @@ function previewChatTurns(agent, ui = state) {
      The envelope is stripped before dedupe so two addressed copies of the same
      prose collapse to one bubble. */
   const speech = dedupeTurns([
-    { role: "assistant", text: agent.lastAgentMessage },
+    { role: "assistant", text: previewAssistantText(agent) },
     { role: "assistant", text: tldrTail },
-    { role: "user", text: agent.lastUserMessage },
+    { role: "user", text: previewUserText(agent) },
   ].map((turn) => decorateChatTurn(turn, agent, ui)));
   if (speech.length) return speech;
   return dedupeTurns([{ role: "task", text: agent.task }].map((turn) => decorateChatTurn(turn, agent, ui)));
@@ -12505,8 +12558,9 @@ function chatMessageGroupNode(lines, agent, ui = state, opts = {}) {
   for (const line of lines) {
     const prose = chatSpeechProse(line, ui);
     const key = chatSpeechKey(agent.id, line.role, prose);
-    const needs = chatSpeechNeedsCollapse(prose, { preview });
-    const expanded = expandedChatSpeech.has(key);
+    const canRevealMore = !preview || transcriptOffersMoreSpeech(agent, ui);
+    const needs = chatSpeechNeedsCollapse(prose, { preview, canRevealMore });
+    const expanded = chatSpeechExpanded(agent.id, line.role, prose);
     const body = el("p", {
       class: "chat-msg-body" + (needs && !expanded ? " is-collapsed" : ""),
       text: prose,
@@ -12522,12 +12576,13 @@ function chatMessageGroupNode(lines, agent, ui = state, opts = {}) {
         onclick: (event) => {
           if (event && typeof event.preventDefault === "function") event.preventDefault();
           if (event && typeof event.stopPropagation === "function") event.stopPropagation();
-          revealChatSpeech(agent, key, { preview, prose });
-          const open = expandedChatSpeech.has(key);
+          const pending = revealChatSpeech(agent, key, { preview, prose, role: line.role });
+          const open = chatSpeechExpanded(agent.id, line.role, prose);
           body.classList.toggle("is-collapsed", !open);
           more.classList.toggle("is-open", open);
           more.setAttribute("aria-expanded", String(open));
           more.setAttribute("aria-label", chatSpeechMoreLabel(open, preview, prose));
+          return pending;
         },
       }, icon("chevron"));
     }

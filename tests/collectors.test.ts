@@ -76,6 +76,19 @@ describe("human-facing recency remains separate from provider activity", () => {
     expect(agent?.lastHumanFacingAt).toBe("2026-08-11T10:00:02.000Z");
     expect(agent?.updatedAt).toBe("2026-08-11T10:00:04.000Z");
   });
+
+  test("Claude publishes a flattened row close and a layout-preserving chat body", () => {
+    const body = "Here is the plan:\n\n- fix the parser\n- add tests";
+    const agent = parseClaudeJsonl([
+      JSON.stringify({ type: "user", sessionId: "claude-layout", cwd: "/tmp/formic", timestamp: "2026-08-16T10:00:01.000Z", message: { role: "user", content: "List the steps." } }),
+      JSON.stringify({ type: "assistant", sessionId: "claude-layout", cwd: "/tmp/formic", timestamp: "2026-08-16T10:00:02.000Z", message: { role: "assistant", content: [{ type: "text", text: body }] } }),
+    ].join("\n"), { nowMs: Date.parse("2026-08-16T10:00:03.000Z") });
+
+    expect(agent?.lastAgentMessage).toBe("Here is the plan: - fix the parser - add tests");
+    expect(agent?.lastAgentClosing).toBe("Here is the plan: - fix the parser - add tests");
+    expect(agent?.lastAgentChatBody).toBe(body);
+    expect(agent?.lastUserChatBody).toBe("List the steps.");
+  });
 });
 
 describe("collector identity and usage truth", () => {
