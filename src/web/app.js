@@ -2656,14 +2656,27 @@ function peakContext(snap) {
   return peak;
 }
 
-function reading(label, valueNode, subNode, extraClass) {
+function reading(label, valueNode, subNode, extraClass, attrs = {}) {
   const labelNode = label && label.nodeType
     ? label
     : el("span", { class: "reading-label", text: label });
-  return el("div", { class: "reading" + (extraClass ? " " + extraClass : "") },
+  return el("div", { class: "reading" + (extraClass ? " " + extraClass : ""), ...attrs },
     labelNode,
     valueNode,
     subNode || null);
+}
+
+function toggleMomentumMagnify(event) {
+  if (event && event.type === "keydown" && event.key !== "Enter" && event.key !== " ") return;
+  if (event && event.type === "keydown") event.preventDefault();
+  state.momentumMagnify = !state.momentumMagnify;
+  render();
+}
+
+/* Who Momentum is counting — and therefore who it magnifies. Defaults to the
+   strip population so a future CTA number can reuse the same set. */
+function momentumPopulation(agent, snap = state.snap) {
+  return stripAlerting(agent, snap);
 }
 
 function toggleContextDisplay() {
@@ -3012,7 +3025,24 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
      — the same rule that retired the finding links. They are in the
      notification center's instrument block now, together, next to the sentence
      that says what is wrong. */
-  return reading(widgetLabelNode(id, meta.label, !compact), valueNode, subNode, cellClass);
+  const momentumAttrs = id === "momentum"
+    ? {
+      role: "button",
+      tabindex: "0",
+      "aria-pressed": String(Boolean(state.momentumMagnify)),
+      "aria-label": state.momentumMagnify
+        ? "Stop magnifying needs-you rows"
+        : "Magnify needs-you rows",
+      title: "Lift sessions that need you; the rest of the Board recedes",
+      dataset: { fkey: "momentum-magnify" },
+      onclick: toggleMomentumMagnify,
+      onkeydown: toggleMomentumMagnify,
+    }
+    : {};
+  const momentumClass = id === "momentum"
+    ? " momentum-cta" + (state.momentumMagnify ? " is-momentum-armed" : "")
+    : "";
+  return reading(widgetLabelNode(id, meta.label, !compact), valueNode, subNode, cellClass + momentumClass, momentumAttrs);
 }
 
 function setWidgetEnabled(id, enabled) {
@@ -4071,6 +4101,7 @@ function renderHealthRail() {
        the hidden states below and then hit an unchanged signature — leaving
        the newly shown face empty until the next snapshot moved a number. */
     state.headerCollapsed ? "collapsed" : "expanded",
+    state.momentumMagnify ? "mom-on" : "mom-off",
   ].join("\u001f");
   /* AHEAD of the widgets guard, deliberately. The scan window is not a widget
      and does not belong behind a widget signature: it changes when Settings
@@ -7708,6 +7739,9 @@ function agentRowSig(agent, ui, opts = {}) {
       stallThresholdMs(ui.snap),
       ackedAgent(agent, ui.snap),
     ) || "",
+    ui.momentumMagnify
+      ? (momentumPopulation(agent, ui.snap) ? "mom-hot" : "mom-recede")
+      : "",
     /* Signal's tick. It arrives on the colour endpoint's clock rather than the
        snapshot's, so nothing else in this signature moves when it lands. */
     opts.repoTint || "",
@@ -7769,6 +7803,7 @@ function programsPaintSig(visible, ui) {
        radio writes needsYouDisplay and nothing else, so without this the strip
        would neither leave nor return until something unrelated repainted. */
     needsYouDisplayOf(ui),
+    ui.momentumMagnify ? "mom-on" : "mom-off",
     ui.selected ? ui.selected.kind + ":" + ui.selected.id : "",
     [...ui.programOverrides].map(([id, mode]) => id + "=" + mode).join(","),
     /* Third instance of the same failure class: toggleRepo mutates nothing else
@@ -9654,6 +9689,9 @@ function renderAgentRow(agent, program, opts = {}) {
     (opState === "waiting" ? " is-waiting" : "") +
     (opState === "stalled" ? " is-stalled" : "") +
     (opState === "done" ? " is-done" : "") +
+    (state.momentumMagnify && state.view === "board"
+      ? (momentumPopulation(agent) ? " is-momentum-hot" : " is-momentum-recede")
+      : "") +
     (liveness && liveness.key === "died" ? " is-died" : "") +
     (lineageContradicted ? " is-lineage-disputed" : "") +
     (activity === "ended" ? " is-ended" : "") +
@@ -14271,6 +14309,7 @@ Object.assign(globalThis.TheAntHill, {
      cleared notification staying on screen has to be exercised directly. */
   unreadCmuxByWorkspace, unreadCmuxNotifications, agentUnreadCmux,
   ackedIds, ackedAgent, stripAlerting, acknowledgedCount,
+  momentumPopulation, toggleMomentumMagnify,
   cmuxBadgeNode, ackedMarkNode, syncAckButton, acknowledgedClause,
   renderCmuxNotifySection, cmuxNotifyRow, notifyPanelPaintSig,
   clearCmuxNotification, applySyncAck, syncRequest, syncFailureText, syncPending,

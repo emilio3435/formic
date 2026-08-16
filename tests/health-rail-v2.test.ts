@@ -54,6 +54,7 @@ async function withHeaderHarness(
     M.state.widgetCustomizerOpen = false;
     M.state.tldrView = "ALL";
     M.state.facetProgram = "";
+    M.state.momentumMagnify = false;
     M.state.paintSig.widgets = "";
   } finally {
     if (realLS === undefined) delete G.localStorage; else G.localStorage = realLS;
@@ -762,6 +763,46 @@ describe("F5 — omit blind cost and completions chips", () => {
       expect(painted).not.toContain("Completions are not measured");
       expect(painted).not.toContain("No completion data");
       expect(painted).not.toMatch(/↑\d+ done/);
+    });
+  });
+});
+
+describe("F3 — Momentum magnify", () => {
+  test("clicking Momentum arms the CTA and a second click disarms", async () => {
+    await withHeaderHarness(({ doc, M }) => {
+      const snap: any = repoSnapFixture();
+      snap.pulse = {
+        activity: { buckets: [{ activeSessions: 2 }] },
+        burn: { tokensPerMin: 10, windowMs: 600_000, costProvenance: "unavailable", coverage: { reporting: 0, eligible: 0, unknown: 0 } },
+        momentum: {
+          working: 1,
+          completionsLastHour: null,
+          completionsProvenance: "not-observable",
+          stalled: 0,
+          stalledAgentIds: [],
+          stallThresholdMs: 15 * 60_000,
+        },
+      };
+      M.state.snap = snap;
+      M.state.momentumMagnify = false;
+      M.renderHealthRail();
+      const cell = readingCell(doc.byId("readings-grid"), "Momentum");
+      expect(cell).toBeTruthy();
+      expect(cell.attributes["aria-pressed"]).toBe("false");
+      expect(String(cell.className)).not.toContain("is-momentum-armed");
+
+      fireClick(cell);
+      expect(M.state.momentumMagnify).toBe(true);
+      const armed = readingCell(doc.byId("readings-grid"), "Momentum");
+      expect(armed.attributes["aria-pressed"]).toBe("true");
+      expect(String(armed.className)).toContain("is-momentum-armed");
+      expect(String(armed.className)).toContain("momentum-cta");
+
+      fireClick(armed);
+      expect(M.state.momentumMagnify).toBe(false);
+      const idle = readingCell(doc.byId("readings-grid"), "Momentum");
+      expect(idle.attributes["aria-pressed"]).toBe("false");
+      expect(String(idle.className)).not.toContain("is-momentum-armed");
     });
   });
 });

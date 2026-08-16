@@ -3175,6 +3175,57 @@ describe("calm program and agent list rendering", () => {
     });
   });
 
+  test("armed Momentum lifts needs-you rows and recedes the rest", async () => {
+    const now = new Date().toISOString();
+    const asking = agent({
+      id: "codex:ask",
+      status: "waiting",
+      lifecycle: "waiting",
+      hookLifecycle: "needsInput",
+      updatedAt: now,
+    });
+    const working = agent({ id: "codex:w", status: "running", lifecycle: "working", updatedAt: now });
+    const stalled = agent({
+      id: "codex:z",
+      status: "waiting",
+      lifecycle: "waiting",
+      activity: "idle",
+      outcome: "healthy",
+      provenance: "process-live-quiet",
+      updatedAt: "2026-07-01T00:00:00.000Z",
+    });
+    const snap = snapshot({
+      generatedAt: now,
+      programs: [{ id: "p", name: "P", agents: [asking, working, stalled] }],
+    });
+    const program = { id: "p", name: "P", agents: [asking, working, stalled] };
+
+    expect(M.momentumPopulation(asking, snap)).toBe(true);
+    expect(M.momentumPopulation(working, snap)).toBe(false);
+    expect(M.momentumPopulation(stalled, snap)).toBe(false);
+
+    await withState({ snap, view: "board", momentumMagnify: true }, () => {
+      const hot = withDom(() => M.renderAgentRow(asking, program));
+      const work = withDom(() => M.renderAgentRow(working, program));
+      const dim = withDom(() => M.renderAgentRow(stalled, program));
+      expect(String(hot.className)).toContain("is-momentum-hot");
+      expect(String(hot.className)).not.toContain("is-momentum-recede");
+      expect(String(work.className)).toContain("is-momentum-recede");
+      expect(String(dim.className)).toContain("is-momentum-recede");
+      expect(String(dim.className)).toContain("is-stalled");
+    });
+
+    await withState({ snap, view: "board", momentumMagnify: false }, () => {
+      const cold = withDom(() => M.renderAgentRow(asking, program));
+      expect(String(cold.className)).not.toContain("is-momentum-hot");
+      expect(String(cold.className)).not.toContain("is-momentum-recede");
+    });
+
+    expect(styles).toContain(".agent-row.is-momentum-hot");
+    expect(styles).toContain(".agent-row.is-momentum-recede");
+    expect(styles).toContain("prefers-reduced-motion");
+  });
+
   test("selected rows retain an accessible full-text inspector path", () => {
     const message = "Review the full terminal transcript before dispatch.";
     const selected = agent({ lastUserMessage: message, lastAgentMessage: "Evidence checked." });
