@@ -24,6 +24,7 @@ import { resolveAgentName, type AuthoredNameSource } from "./naming";
 import { createFactoryParser, parseFactoryJsonl } from "./factory";
 import { createPrimeParser, parsePrimeJsonl } from "./prime";
 import { collectGrokSessions } from "./grok";
+import { collectGrokBotSessions } from "./grok-bot";
 import { createHermesParser, parseHermesJsonl } from "./hermes";
 import { readHookSessionStores, type HookSessionRecord } from "./cmux-hook-sessions";
 import { readProcessLineage, type ProcessLineageExec } from "./process-lineage";
@@ -34,6 +35,7 @@ export interface CollectSessionsOptions {
   hookProcessStarts?: () => ReadonlyMap<number, number> | undefined;
   processLineageExec?: ProcessLineageExec;
   extraCursorGuiRoots?: readonly string[];
+  extraGrokBotRoots?: readonly string[];
 }
 export type SessionProviderResult = CollectionResult<CollectedAgent[]>;
 export type SessionProviderResults = Record<Provider, SessionProviderResult>;
@@ -1312,7 +1314,24 @@ export async function collectSessionProvider(
     case "grok": {
       const override = home === homedir() ? process.env.GROK_HOME?.trim() : undefined;
       const root = override || join(home, ".grok");
-      return collectGrokSessions(root, windowMs, thresholds);
+      const cli = await collectGrokSessions(root, windowMs, thresholds);
+      const bot = await collectGrokBotSessions(
+        options.extraGrokBotRoots ?? [],
+        Date.now(),
+        windowMs,
+        thresholds,
+      );
+      const seen = new Set(cli.value.map((agent) => agent.id));
+      const botAgents = bot.value.filter((agent) => {
+        if (seen.has(agent.id)) return false;
+        seen.add(agent.id);
+        return true;
+      });
+      return {
+        value: [...cli.value, ...botAgents],
+        errors: [...cli.errors, ...bot.errors],
+        ...(cli.absent ? { absent: true } : {}),
+      };
     }
     case "hermes": {
       const root = join(home, ".hermes");
