@@ -127,6 +127,7 @@ export function identityFromSessionPath(path: string): IdentityHint | null {
     ["factory", new RegExp(`\\/.factory\\/sessions\\/.+?\\/(${UUID})\\.jsonl$`, "i")],
     ["prime", new RegExp(`\\/.prime\\/agent\\/sessions\\/(${UUID})\\.jsonl$`, "i")],
     ["grok", new RegExp(`\\/.grok\\/sessions\\/.+\\/(${UUID})\\/(?:updates\\.jsonl|summary\\.json)$`, "i")],
+    ["hermes", new RegExp(`\\/.hermes\\/sessions\\/([^/]+)\\.jsonl$`, "i")],
   ];
   for (const [provider, pattern] of patterns) {
     const match = path.match(pattern);
@@ -147,6 +148,9 @@ export function identitiesFromCommand(command: string): IdentityHint[] {
     ["factory", new RegExp(`(?:^|[\\s/])droid\\b[^\\n]{0,160}?\\s(?:-r|--resume|--fork)\\s+(${UUID})(?:\\s|$)`, "i")],
     ["prime", new RegExp(`(?:^|[\\s/])prime-agent\\b[^\\n]{0,160}?\\s--resume\\s+(${UUID})(?:\\s|$)`, "i")],
     ["grok", new RegExp(`(?:^|[\\s/])grok\\b[^\\n]{0,160}?\\s(?:-r|--resume)(?:\\s+|=)(${UUID})(?:\\s|$)`, "i")],
+    /* Session resume is `--resume` / `-r`, not the `resume` subcommand
+       (that lifts `hermes pause`). Ids are filename stems, not always UUIDs. */
+    ["hermes", new RegExp(`(?:^|[\\s/])hermes\\b[^\\n]{0,160}?\\s(?:-r|--resume)\\s+(\\S+)(?:\\s|$)`, "i")],
   ];
   for (const [provider, pattern] of exactPatterns) {
     const match = command.match(pattern);

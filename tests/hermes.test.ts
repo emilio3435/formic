@@ -59,6 +59,22 @@ describe("Hermes interactive sessions", () => {
     });
     expect(agent?.identity?.name).toBeTruthy();
     expect(agent?.tokens.provenance).toBe("unknown");
+    expect(agent?.lastUserMessage).toBe("Audit the Hermes scheduler.");
+    expect(agent?.lastAgentClosing).toBe("The scheduler audit is complete.");
+    expect(agent?.status).not.toBeUndefined();
+  });
+
+  test("an assistant question is the closing, not the kickoff", () => {
+    const agent = parseHermesJsonl([
+      { role: "user", content: "Port the rate limiter.", timestamp: "2026-08-15T14:00:00.000Z" },
+      { role: "assistant", content: "Should I land this now?", timestamp: "2026-08-15T14:00:30.000Z" },
+    ].map((row) => JSON.stringify(row)).join("\n"), {
+      sourcePath: "/Users/ant/.hermes/sessions/ask-session.jsonl",
+      nowMs: Date.parse("2026-08-15T14:00:31.000Z"),
+    });
+    expect(agent?.lastAgentClosing).toBe("Should I land this now?");
+    expect(agent?.lastUserMessage).toBe("Port the rate limiter.");
+    expect(agent?.status).toBe("running");
   });
 
   test("the sessions directory is collected while request dumps remain excluded", async () => {

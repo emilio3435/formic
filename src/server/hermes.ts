@@ -2,11 +2,37 @@ import { existsSync } from "node:fs";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import type { TokenUsage } from "../shared/types";
+import type { AgentStatus, TokenUsage } from "../shared/types";
 import type { IncrementalParser, ParseMetadata } from "./collectors";
-import { readableHumanMessage } from "./human-message";
+import {
+  extractClosingByRole,
+  extractLastHumanMessage,
+  extractLastMessageByRole,
+  readableHumanMessage,
+  type HumanMessageCandidate,
+} from "./human-message";
+import {
+  DEFAULT_LIFECYCLE_THRESHOLDS,
+  spokenMinutes,
+  type LifecycleThresholds,
+} from "./lifecycle";
 import { resolveAgentName } from "./naming";
 import type { CollectedAgent, CollectionResult, SpendSource } from "./types";
+
+function recencyStatus(
+  updatedAt: string,
+  nowMs: number,
+  thresholds: LifecycleThresholds = DEFAULT_LIFECYCLE_THRESHOLDS,
+): { status: AgentStatus; reason: string } {
+  const ageMs = Math.max(0, nowMs - Date.parse(updatedAt));
+  if (ageMs < thresholds.freshMs) {
+    return { status: "running", reason: `Source activity within ${spokenMinutes(thresholds.freshMs)}.` };
+  }
+  if (ageMs < thresholds.quietMs) {
+    return { status: "waiting", reason: `No source activity in the last ${spokenMinutes(thresholds.freshMs)}.` };
+  }
+  return { status: "stale", reason: `No source activity in the last ${spokenMinutes(thresholds.quietMs)}.` };
+}
 
 type JsonRecord = Record<string, unknown>;
 
@@ -51,6 +77,7 @@ export function createHermesParser(): IncrementalParser {
   let task: string | undefined;
   let tail: string | undefined;
   let lastHumanFacingAt: string | undefined;
+  const humanMessages: HumanMessageCandidate[] = [];
   let messages = 0;
 
   const append = (rows: readonly JsonRecord[]): void => {
@@ -64,6 +91,11 @@ export function createHermesParser(): IncrementalParser {
       }
       if (row.role !== "user" && row.role !== "assistant") continue;
       messages += 1;
+      humanMessages.push({
+        role: row.role,
+        content: row.content,
+        timestamp: at,
+      });
       const body = contentText(row.content);
       if (!body) continue;
       if (readableHumanMessage("hermes", row.content) && at) {
@@ -86,6 +118,7 @@ export function createHermesParser(): IncrementalParser {
     const sourceUpdatedAt = meta.mtimeMs === undefined
       ? updatedAt ?? fallback
       : later(updatedAt, fallback) ?? fallback;
+    const recency = recencyStatus(sourceUpdatedAt, meta.nowMs ?? Date.now(), meta.thresholds);
     return {
       id: `hermes:${sourceSessionId}`,
       provider: "hermes",
@@ -101,12 +134,16 @@ export function createHermesParser(): IncrementalParser {
       originCwd: cwd,
       model,
       task,
-      status: "running",
-      statusReason: "Hermes interactive session activity.",
+      status: recency.status,
+      statusReason: recency.reason,
       startedAt,
       updatedAt: sourceUpdatedAt,
       tokens: { provenance: "unknown" },
       lastHumanFacingAt,
+      lastHumanMessage: extractLastHumanMessage("hermes", humanMessages, task),
+      lastUserMessage: extractLastMessageByRole("hermes", humanMessages, "user"),
+      lastAgentMessage: extractLastMessageByRole("hermes", humanMessages, "assistant"),
+      lastAgentClosing: extractClosingByRole("hermes", humanMessages, "assistant"),
       transcriptTail: tail,
       artifacts: sourcePath ? [{ label: "Hermes transcript", path: sourcePath }] : [],
       gates: [],
