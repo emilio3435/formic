@@ -7,6 +7,10 @@ import {
   decodeBlobKey,
   parseReplica,
 } from "../src/server/grok-bot";
+import { buildSnapshot } from "../src/server/snapshot";
+import type { ArchiveStore } from "../src/server/types";
+
+const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
 
 const FIXTURE_ROOT = join(import.meta.dir, "fixtures/grok-bot/Grok Bot 2");
 const PERSISTENCE = "sand-client-persistence";
@@ -120,6 +124,34 @@ describe("Grok Bot sand-client-persistence", () => {
     expect(await collectGrokBotSessions([], NOW)).toEqual({ value: [], errors: [] });
   });
 
+  test("treats lastActivityAt 0 as missing and keeps the row via updatedAt", async () => {
+    const root = tempRoot();
+    writeBlob(root, ROSTER_KEY, {
+      schemaVersion: 3,
+      value: {
+        rows: [{
+          id: SESSION_ID,
+          name: "Winnow Adversary",
+          path: `/home/box/sand-data/agents/${SESSION_ID}/store.db`,
+          lastActivityAt: 0,
+          updatedAt: NOW - 1_000,
+        }],
+      },
+    });
+
+    const result = await collectGrokBotSessions([root], NOW, 120_000);
+    expect(result.value).toHaveLength(1);
+    expect(result.value[0]?.displayName).toBe("Winnow Adversary");
+    expect(result.value[0]?.cwd).toBe(root);
+    expect(result.value[0]?.cwd).not.toContain("store.db");
+  });
+
+  test("does not use the Bot sandbox store.db path as cwd", async () => {
+    const result = await collectGrokBotSessions([FIXTURE_ROOT], NOW);
+    expect(result.value[0]?.cwd).not.toMatch(/store\.db$/);
+    expect(result.value[0]?.cwd).not.toMatch(/^\/home\/box\//);
+  });
+
   test("drops a roster row whose last activity is outside windowMs", async () => {
     const root = tempRoot();
     writeBlob(root, ROSTER_KEY, {
@@ -163,5 +195,27 @@ describe("Grok Bot hub wiring", () => {
       provider: "grok",
       instanceLabel: "Grok Bot 2",
     });
+  });
+});
+
+describe("Grok Bot board visibility", () => {
+  test("a quiet Bot row is not finished by a complete process roster", async () => {
+    const collected = await collectGrokBotSessions([FIXTURE_ROOT], NOW);
+    const bot = collected.value[0];
+    expect(bot).toBeDefined();
+    const snap = buildSnapshot({
+      agents: [bot!],
+      surfaces: [],
+      archiveStore,
+      processRosterComplete: true,
+      now: new Date(NOW),
+    });
+    const published = snap.programs.flatMap((program) => program.agents);
+    expect(published).toHaveLength(1);
+    expect(published[0]?.id).toBe(bot!.id);
+    expect(published[0]?.processRosterComplete).toBeUndefined();
+    expect(published[0]?.lifecycle).not.toBe("finished");
+    expect(published[0]?.programId).not.toContain("store.db");
+    expect(published[0]?.cwd).not.toMatch(/store\.db$/);
   });
 });
