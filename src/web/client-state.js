@@ -81,6 +81,10 @@ export const state = {
   settings: null,
   settingsLoaded: false,
   settingsPanelOpen: false,
+  /* Agent homes the Settings → Collectors block lists. Fetched on panel open
+     only, so a snapshot tick cannot rebuild the form under a checkbox. */
+  collectorInstances: [],
+  collectorInstancesPending: false,
   repoColorSettings: null,
   liveRepoKeys: [],
   /* The attention panel's disclosure state. A panel the operator opened stays
