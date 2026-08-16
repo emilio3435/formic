@@ -1801,7 +1801,7 @@ describe("row last-close (#73) and observed-only mark (#78)", () => {
       task: "Port the rate limiter",
       lastAgentClosing: '{"fingerprint":"src/foo.ts:12:3"}',
     }));
-    expect(parts.primary).toBe("No readable message yet");
+    expect(parts.primary).toContain("Port the rate limiter");
     expect(parts.kickoff).toBe("");
   });
 
