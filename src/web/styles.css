@@ -2200,15 +2200,6 @@ body.feed-frozen .programs { opacity: 0.62; }
   color: var(--faint);
   white-space: nowrap;
 }
-/* Who sent an agent-to-agent instruction, under the name of whoever sent it.
-   Muted: the sender is context for the message, not the message. */
-.chat-turn-sender {
-  font-size: 10px;
-  color: var(--faint);
-  font-variant-numeric: tabular-nums;
-  margin-top: -0.1rem;
-  margin-bottom: 0.25rem;
-}
 /* The swarm chip is the caret. It was already the one element naming the
    subtree, so the control rides it rather than adding a glyph beside it — the
    row diet removed four chips from this line and immediately adding a fifth
@@ -3428,9 +3419,9 @@ body.feed-frozen .programs { opacity: 0.62; }
   flex: 1 1 auto;
   width: 100%;
   min-width: 0;
-  min-height: 44px;
+  min-height: 4.5rem;
   max-height: 8rem;
-  padding: 0.55rem 0.45rem;
+  padding: 0.65rem 0.5rem;
   font: inherit;
   font-size: 14px;
   line-height: 1.45;
@@ -3606,26 +3597,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .label-status { margin: 0; color: var(--faint-strong); font-size: 12px; }
 .label-status.err { color: var(--bad); }
 .label-action { flex: none; min-height: 32px; padding: 0.3rem 0.65rem; font-size: 12px; }
-.chat-turn-body {
-  margin: -0.2rem 0 0;
-  padding: 0.7rem 0.8rem;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--raise);
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-
-.chat-turn { display: flex; flex-direction: column; gap: 0.3rem; }
-.chat-turn-role {
-  font: 500 10px/1.3 var(--font-mono);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--faint-strong);
-}
-.chat-turn--assistant .chat-turn-body {
-  border-left: 2px solid color-mix(in srgb, var(--moss) 45%, var(--line));
-}
 .detail-grid { display: grid; grid-template-columns: 8rem 1fr; gap: 0.45rem 0.8rem; margin: 0; }
 .detail-grid dt { font: 500 11px/1.2 var(--font-mono); letter-spacing: 0.07em; text-transform: uppercase; color: var(--faint-strong); padding-top: 0.1rem; }
 .detail-grid dd { margin: 0; font-size: 13.5px; overflow-wrap: anywhere; }
@@ -3889,6 +3860,7 @@ body.feed-frozen .programs { opacity: 0.62; }
      kind of inline control as .program-rename, so it joins the same sweep. */
   .drawer-workspace-rename,
   .command-composer textarea, .rename-form input { min-height: 44px; }
+  .command-composer textarea { min-height: 4.5rem; }
   .artifact-copy { width: 44px; }
 }
 
@@ -5024,28 +4996,73 @@ body.feed-frozen .programs { opacity: 0.62; }
   padding: 8px 12px;
   display: flex; flex-direction: column; gap: 4px;
 }
-.chat-msg[data-role="user"] {
+.chat-msg[data-role="user"],
+.chat-msg[data-role="task"] {
   align-self: flex-end;
   border-color: transparent;
   border-radius: 16px 16px 5px 16px;
   background: var(--slate);
 }
-.chat-msg-meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; font: 500 12px/1.2 var(--font-mono); color: var(--muted); }
-.chat-msg[data-role="assistant"] .chat-msg-role { color: var(--moss); }
-.chat-msg-at, .chat-msg-run { color: var(--faint-strong); font-weight: 500; }
+.chat-msg-at { color: var(--faint-strong); font-weight: 500; }
 .chat-msg-content { display: grid; gap: 2px; }
 .chat-msg-content + .chat-msg-content { margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--line); }
-.chat-msg-body { margin: 0; font-size: 14px; line-height: 1.5; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-msg-body {
+  --chat-collapse-lines: 6;
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.chat-msg-body.is-collapsed {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--chat-collapse-lines);
+  overflow: hidden;
+}
+.chat-msg-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-height: 18px;
+}
+.chat-msg-foot:has(.chat-msg-at) { justify-content: space-between; }
 .chat-msg-content .chat-msg-at { font: 500 10.5px/1.2 var(--font-mono); }
-/* White ink on the filled bubble, meta a step quieter — same hierarchy the
-   agent side gets from --muted/--faint-strong, translated to the dark ground. */
-.chat-msg[data-role="user"] .chat-msg-body { color: var(--color-text-on-inverse); }
-.chat-msg[data-role="user"] .chat-msg-role { color: var(--color-text-on-inverse-strong); }
-.chat-msg[data-role="user"] .chat-msg-meta,
+.chat-msg-more {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-inline-end: -4px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--faint-strong);
+  cursor: pointer;
+  transition: transform 140ms ease, color 140ms ease;
+}
+.chat-msg-more .ico { width: 14px; height: 14px; }
+.chat-msg-more.is-open { transform: rotate(90deg); }
+.chat-msg-more:hover { color: var(--color-interactive); }
+.chat-msg-more:focus-visible {
+  outline: 2px solid var(--color-interactive);
+  outline-offset: 2px;
+}
+/* White ink on the filled bubble, time and the disclosure a step quieter —
+   same hierarchy the agent side gets from --muted/--faint-strong. */
+.chat-msg[data-role="user"] .chat-msg-body,
+.chat-msg[data-role="task"] .chat-msg-body { color: var(--color-text-on-inverse); }
 .chat-msg[data-role="user"] .chat-msg-at,
-.chat-msg[data-role="user"] .chat-msg-run { color: var(--color-text-on-inverse-muted); }
+.chat-msg[data-role="user"] .chat-msg-more,
+.chat-msg[data-role="task"] .chat-msg-at,
+.chat-msg[data-role="task"] .chat-msg-more { color: var(--color-text-on-inverse-muted); }
 /* The verdict mark must survive the dark ground it can land on. */
-.chat-msg[data-role="user"] .sender-unconfirmed { background: var(--raise); }
+.chat-msg[data-role="user"] .sender-unconfirmed,
+.chat-msg[data-role="task"] .sender-unconfirmed { background: var(--raise); }
 .chat-feed .tr-line { opacity: 0.85; }
 .chat-tool-group {
   display: grid;
@@ -5463,13 +5480,14 @@ body.feed-frozen .programs { opacity: 0.62; }
 .tldr-card-repo:focus-visible,
 #search:focus-visible { outline-color: var(--color-interactive); }
 
-/* Inverse chat hierarchy: body, role, and metadata remain three separate
-   readable levels while the filled user-bubble geometry stays unchanged. */
-.chat-msg[data-role="user"] .chat-msg-body { color: var(--color-text-on-inverse); }
-.chat-msg[data-role="user"] .chat-msg-role { color: var(--color-text-on-inverse-strong); }
-.chat-msg[data-role="user"] .chat-msg-meta { color: var(--color-text-on-inverse-muted); }
-.chat-msg[data-role="user"] .chat-msg-at { color: var(--color-text-on-inverse-muted); }
-.chat-msg[data-role="user"] .chat-msg-run { color: var(--color-text-on-inverse-muted); }
+/* Inverse chat hierarchy: body and quiet foot remain separate readable
+   levels while the filled user-bubble geometry stays unchanged. */
+.chat-msg[data-role="user"] .chat-msg-body,
+.chat-msg[data-role="task"] .chat-msg-body { color: var(--color-text-on-inverse); }
+.chat-msg[data-role="user"] .chat-msg-at,
+.chat-msg[data-role="user"] .chat-msg-more,
+.chat-msg[data-role="task"] .chat-msg-at,
+.chat-msg[data-role="task"] .chat-msg-more { color: var(--color-text-on-inverse-muted); }
 
 /* Remaining action/state surfaces keep the same roles when they are rendered
    outside the shared .btn chassis. */

@@ -3338,7 +3338,7 @@ describe("calm program and agent list rendering", () => {
        `byClass(...)[0]` and so quietly also asserted reading order, which the
        comment above says was never the point — and it failed the moment the
        agent's reply was promoted to lead the thread. Exactly once, still. */
-    const bodies = allByClass(drawer, "chat-turn-body").map((node: any) => textOf(node));
+    const bodies = allByClass(drawer, "chat-msg-body").map((node: any) => textOf(node));
     expect(bodies.filter((body: string) => body === message)).toHaveLength(1);
     expect(textOf(drawer)).toContain("Evidence checked.");
     expect(styles).toContain("white-space: pre-wrap");
@@ -6921,7 +6921,7 @@ describe("FE-B: harness-backed client behavior", () => {
     const RUNTIME_PREFIXES = [
       "act-", "outcome-", "provider-", "conn-", "dw-accent--", "dw-eyebrow--",
       "dw-provider--", "work-", "role-", "verdict-", "st-", "tri-kind-",
-      "tri-live-", "depth-", "chat-turn--", "program-rollup-cell--",
+      "tri-live-", "depth-", "program-rollup-cell--",
       "widget-option-", "identity-step--", "control-", "is-", "dw-d",
       // W4-B: the drawer composes "liveness-" + the normalized liveness word.
       "liveness-",
@@ -7696,10 +7696,12 @@ describe("FE-B: harness-backed client behavior", () => {
       .not.toContain("needs-you");
   });
 
-  test("(2b) provider task is the final deduplicated conversation candidate", () => {
+  test("(2b) provider task is a fallback only when no speech is on screen", () => {
     const both = agent({ task: "Port the SEM forecast rate limiter", lastUserMessage: "start with the buckets", lastAgentMessage: "done" });
     const rendered = textOf(withDom(() => M.renderChat(both)));
-    expect(rendered.match(/Port the SEM forecast/g)).toHaveLength(1);
+    expect(rendered).toContain("start with the buckets");
+    expect(rendered).toContain("done");
+    expect(rendered.match(/Port the SEM forecast/g)).toBeNull();
 
     // With no turns at all the floor still holds, and an exact turn duplicate wins once.
     const bare = agent({ task: "Port the SEM forecast rate limiter", lastUserMessage: "", lastAgentMessage: "", lastHumanMessage: "Port the SEM forecast rate limiter" });
@@ -7707,9 +7709,8 @@ describe("FE-B: harness-backed client behavior", () => {
     const duplicate = agent({ task: "Port the SEM forecast rate limiter", lastUserMessage: "Port the SEM forecast rate limiter", lastAgentMessage: "" });
     expect(textOf(withDom(() => M.renderChat(duplicate))).match(/Port the SEM forecast/g)).toHaveLength(1);
 
-    // A successfully loaded transcript replaces the preview, so the floor must
-    // survive that normal path too. Assistant-only history cannot erase the
-    // standing provider task, and an exact loaded duplicate still renders once.
+    // A loaded transcript with real speech must not append kickoff as a fake
+    // last bubble. An exact loaded duplicate still renders once.
     const loaded = transcriptUi({
       ok: true,
       agentId: both.id,
@@ -7718,7 +7719,8 @@ describe("FE-B: harness-backed client behavior", () => {
       lines: [{ at: null, role: "assistant", text: "done" }],
     });
     const loadedText = textOf(withDom(() => M.renderChatFeedBody(both, loaded)));
-    expect(loadedText).toContain("Port the SEM forecast");
+    expect(loadedText).toContain("done");
+    expect(loadedText.match(/Port the SEM forecast/g)).toBeNull();
     const loadedDuplicate = transcriptUi({
       ok: true,
       agentId: both.id,
@@ -11015,7 +11017,7 @@ describe("FE-C: a frozen feed is announced, not merely available on inspection",
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const input: any = findAll(dock, (n: any) => n.tagName === "textarea")[0];
       expect(input).toBeDefined();
-      expect(input.attributes.rows).toBe("1");
+      expect(input.attributes.rows).toBe("3");
 
       let prevented = false;
       await fire(input, "keydown", { key: "Enter", shiftKey: true, preventDefault: () => { prevented = true; } });
@@ -11061,7 +11063,7 @@ describe("FE-C: a frozen feed is announced, not merely available on inspection",
 
     field.scrollHeight = 20;
     M.resizeComposer(field);
-    expect(field.style.height).toBe("44px");
+    expect(field.style.height).toBe("72px");
     expect(styles).toMatch(/\.command-composer textarea\s*\{[^}]*max-height:\s*8rem[^}]*field-sizing:\s*content/);
     expect(styles).toMatch(/\.command-send\.primary\s*\{[^}]*box-shadow:/);
   });
@@ -11339,9 +11341,14 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
     expect(bubbles).toHaveLength(2); // user + assistant speak; tool/system stay rows
     const user = bubbles[0];
     expect(user.dataset.role).toBe("user");
-    // The envelope: stripped from the prose, resolved into the meta line.
+    // The envelope is stripped from the prose. Side and fill say who spoke;
+    // run ids stay out of the bubble.
     expect(textOf(byClass(user, "chat-msg-body"))).toBe("board is green");
-    expect(textOf(byClass(user, "chat-msg-meta"))).toContain("0runX");
+    expect(byClass(user, "chat-msg-role")).toBeNull();
+    expect(byClass(user, "chat-msg-run")).toBeNull();
+    expect(textOf(user)).not.toContain("0runX");
+    expect(textOf(user)).not.toMatch(/\brun\s/i);
+    expect(user.attributes["aria-label"]).toBe("codex:a2");
     expect(byClass(user, "sender-unconfirmed")).not.toBeNull();
     // Relative time renders for a stamped line, and only for a stamped line.
     expect(byClass(user, "chat-msg-at")).not.toBeNull();
@@ -11358,8 +11365,8 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
     /* The iMessage discriminator, pinned at the stylesheet: the operator's
        sends are the FILLED slate bubbles (white ink), the agent's the white
        bordered cards — fill vs outline, never two near-identical grays. */
-    expect(styles).toMatch(/\.chat-msg\[data-role="user"\] \{[^}]*background: var\(--slate\)/);
-    expect(styles).toMatch(/\.chat-msg\[data-role="user"\] \.chat-msg-body \{[^}]*color: var\(--color-text-on-inverse\)/);
+    expect(styles).toMatch(/\.chat-msg\[data-role="user"\](?:,\s*\.chat-msg\[data-role="task"\])?\s*\{[^}]*background: var\(--slate\)/);
+    expect(styles).toMatch(/\.chat-msg\[data-role="user"\] \.chat-msg-body(?:,\s*\.chat-msg\[data-role="task"\] \.chat-msg-body)?\s*\{[^}]*color: var\(--color-text-on-inverse\)/);
     expect(styles).toMatch(/\n\.chat-msg \{[^}]*background: var\(--raise\)/);
   });
 
@@ -11384,9 +11391,9 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
 
     const speech = allByClass(body, "chat-msg");
     expect(speech).toHaveLength(2);
-    expect(allByClass(speech[0], "chat-msg-role")).toHaveLength(1);
+    expect(allByClass(speech[0], "chat-msg-role")).toHaveLength(0);
     expect(allByClass(speech[0], "chat-msg-body")).toHaveLength(2);
-    expect(allByClass(speech[1], "chat-msg-role")).toHaveLength(1);
+    expect(allByClass(speech[1], "chat-msg-role")).toHaveLength(0);
     expect(allByClass(speech[1], "chat-msg-body")).toHaveLength(2);
 
     const toolGroups = allByClass(body, "chat-tool-group");
@@ -11737,7 +11744,7 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
     const a = agent({ lastAgentMessage: "Done", lastUserMessage: "Go" });
     const preview = withDom(() => M.renderChat(a));
     const transcript = withDom(() => M.chatBubbleNode({ at: null, role: "assistant", text: "Done" }, a));
-    for (const node of [...allByClass(preview, "chat-turn-body"), ...allByClass(transcript, "chat-msg-body")]) {
+    for (const node of [...allByClass(preview, "chat-msg-body"), ...allByClass(transcript, "chat-msg-body")]) {
       expect(node.hasAttribute("tabindex")).toBe(false);
     }
     expect(source).not.toMatch(/class:\s*"tr-text",\s*tabindex/);
@@ -11912,6 +11919,7 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
       expect(byClass(drawer, "transcript-view")).toBeNull();
       // With the record present the preview thread does not render beside it…
       expect(allByClass(drawer, "chat-turn-body")).toHaveLength(0);
+      expect(allByClass(drawer, "chat-msg")).toHaveLength(2);
       // …so the message text appears exactly once in the entire drawer.
       expect(textOf(drawer).split(msg).length - 1).toBe(1);
       // A fully loaded feed needs no duplicate metadata/refresh footer; the
@@ -11958,6 +11966,123 @@ describe("FE-C: the transcript is readable inside the drawer", () => {
     expect(M.inspectorPaintSig(sel, view, identityUi(transcriptUi({
       agentId: "claude:other", data: { source: "/x", truncated: false, lines: [] },
     })))).toBe(base);
+  });
+});
+
+describe("inspector chat is one messenger, not a clipped log", () => {
+  function collectorWindow(seed = "Reviewed the SEM forecast and the limiter buckets") {
+    return ((seed + " ").repeat(20)).slice(0, 239).trimEnd() + "…";
+  }
+
+  test("preview and loaded thread use the same bubble", () => {
+    const window = collectorWindow();
+    const a = agent({ id: "codex:preview-86", lastAgentMessage: window, lastUserMessage: "go", task: "Ship the limiter" });
+    const preview = withDom(() => M.renderChat(a));
+    const loaded = withDom(() => M.renderChatFeedBody(a, transcriptUi({
+      agentId: a.id,
+      data: {
+        source: "/tmp/t.jsonl",
+        truncated: false,
+        lines: [
+          { at: null, role: "user", text: "go" },
+          { at: null, role: "assistant", text: window + " then land it." },
+        ],
+      },
+    })));
+
+    expect(preview.className).toBe("chat-feed");
+    expect(loaded.className).toBe("chat-feed");
+    expect(allByClass(preview, "chat-turn")).toHaveLength(0);
+    expect(allByClass(loaded, "chat-turn")).toHaveLength(0);
+    expect(allByClass(preview, "chat-msg").map((node: any) => node.dataset.role)).toEqual(["assistant", "user"]);
+    expect(allByClass(loaded, "chat-msg").map((node: any) => node.dataset.role)).toEqual(["user", "assistant"]);
+    expect(textOf(preview)).not.toContain("Ship the limiter");
+  });
+
+  test("a collector window is a collapsed bubble with a chevron, never a dead-end ellipsis", async () => {
+    const window = collectorWindow();
+    expect(window.endsWith("…")).toBe(true);
+    expect(M.isCollectorWindowText(window)).toBe(true);
+    expect(M.chatSpeechNeedsCollapse(window, { preview: true })).toBe(true);
+
+    const a = agent({ id: "codex:collector-86", lastAgentMessage: window, lastUserMessage: "" });
+    const preview = withDom(() => M.renderChat(a));
+    const bubble = byClass(preview, "chat-msg");
+    const body = byClass(bubble, "chat-msg-body");
+    const more = byClass(bubble, "chat-msg-more");
+    expect(body.classList.contains("is-collapsed")).toBe(true);
+    expect(textOf(body)).toBe(window);
+    expect(more).not.toBeNull();
+    expect(more.attributes["aria-expanded"]).toBe("false");
+    expect(more.attributes["aria-label"]).toBe("Open full turn");
+
+    await withState({ transcript: { agentId: null, loading: false, error: "", data: null, limit: 200 } }, async () => {
+      await withRequests([{
+        status: 200,
+        json: {
+          ok: true,
+          source: "/tmp/t.jsonl",
+          truncated: false,
+          lines: [{ at: null, role: "assistant", text: window + " the rest of the turn." }],
+        },
+      }], async (calls) => {
+        await fire(more);
+        expect(body.classList.contains("is-collapsed")).toBe(false);
+        expect(more.attributes["aria-expanded"]).toBe("true");
+        expect(more.attributes["aria-label"]).toBe("Show less");
+        expect(calls[0]!.url).toBe("/api/transcript?agent=" + encodeURIComponent(a.id) + "&limit=200");
+        await fire(more);
+        expect(body.classList.contains("is-collapsed")).toBe(true);
+        expect(more.attributes["aria-expanded"]).toBe("false");
+      });
+    });
+  });
+
+  test("a long loaded turn collapses to about six lines and expands in place", async () => {
+    const long = Array.from({ length: 10 }, (_, i) => `Line ${i + 1} of the agent turn.`).join("\n");
+    expect(M.chatSpeechNeedsCollapse(long)).toBe(true);
+    expect(styles).toMatch(/--chat-collapse-lines:\s*6/);
+    expect(styles).toMatch(/-webkit-line-clamp:\s*var\(--chat-collapse-lines\)/);
+
+    const a = agent({ id: "codex:long-86" });
+    const bubble = withDom(() => M.chatBubbleNode({ at: "2026-08-16T08:00:00.000Z", role: "assistant", text: long }, a));
+    const body = byClass(bubble, "chat-msg-body");
+    const more = byClass(bubble, "chat-msg-more");
+    expect(byClass(bubble, "chat-msg-role")).toBeNull();
+    expect(body.classList.contains("is-collapsed")).toBe(true);
+    expect(textOf(body)).toBe(long);
+    expect(more.attributes["aria-label"]).toBe("Show more");
+    expect(byClass(bubble, "chat-msg-at")).not.toBeNull();
+
+    await fire(more);
+    expect(body.classList.contains("is-collapsed")).toBe(false);
+    expect(more.classList.contains("is-open")).toBe(true);
+    expect(more.attributes["aria-expanded"]).toBe("true");
+    await fire(more);
+    expect(body.classList.contains("is-collapsed")).toBe(true);
+    expect(more.classList.contains("is-open")).toBe(false);
+  });
+
+  test("bubbles drop uppercase ROLE and run ids; Evidence stays the CLI", () => {
+    const claimed = "[from codex:a2 run 0runX] board is green";
+    const a = agent({ senderVerified: false, lastUserMessage: claimed });
+    const ui = transcriptUi({
+      agentId: a.id,
+      data: { source: "/tmp/session.jsonl", truncated: false, lines: [{ at: null, role: "user", text: claimed }] },
+    });
+    const bubble = withDom(() => M.renderChatFeedBody(a, ui));
+    expect(textOf(byClass(bubble, "chat-msg-body"))).toBe("board is green");
+    expect(textOf(bubble)).not.toContain("YOU");
+    expect(textOf(bubble)).not.toContain("AGENT");
+    expect(textOf(bubble)).not.toContain("0runX");
+    expect(textOf(bubble)).not.toContain("/tmp/session.jsonl");
+    expect(styles).not.toContain(".chat-turn-role");
+    expect(styles).not.toContain(".chat-msg-role");
+    expect(styles).not.toContain(".chat-msg-run");
+
+    const evidence = withDom(() => M.renderEvidence(a, ui));
+    expect(allByClass(evidence, "chat-msg")).toHaveLength(0);
+    expect(ui.transcript.data.source).toBe("/tmp/session.jsonl");
   });
 });
 
@@ -14472,25 +14597,31 @@ describe("Atlas F2: role confidence and message provenance", () => {
     const snap = { schemaVersion: 1, programs: [{ id: "p", name: "P", agents: [orchestrator, lane] }] };
 
     const pane = withDom(() => M.renderChat(lane, { snap }));
-    const turn = byClass(pane, "chat-turn--user");
-    const role = byClass(turn, "chat-turn-role");
+    const turn = byClass(pane, "chat-msg");
 
-    expect(textOf(role)).not.toContain("You");
+    expect(turn.dataset.role).toBe("user");
+    expect(byClass(turn, "chat-msg-role")).toBeNull();
+    expect(byClass(turn, "chat-msg-run")).toBeNull();
+    expect(textOf(turn)).not.toContain("You");
     // Named by whoever sent it — resolved against the board, not printed raw.
-    expect(textOf(role)).toBe("atlas-orchestrator");
-    expect(textOf(role)).not.toContain(ORCH);
-    // The run it was sent under is the other half of the provenance, and it is
-    // a DIFFERENT string from the sender's name.
-    expect(textOf(byClass(turn, "chat-turn-sender"))).toContain(RUN);
+    // The name is the accessible label; side and fill carry it visually.
+    expect(turn.attributes["aria-label"]).toBe("atlas-orchestrator");
+    expect(turn.attributes["aria-label"]).not.toContain(ORCH);
+    // The run it was sent under belongs in Evidence, not on the bubble.
+    expect(textOf(turn)).not.toContain(RUN);
+    expect(textOf(turn)).not.toMatch(/\brun\s/i);
     // And the envelope is gone from the prose it was wrapping.
-    expect(textOf(byClass(turn, "chat-turn-body"))).toBe("F2 is UNLOCKED — B4 landed.");
+    expect(textOf(byClass(turn, "chat-msg-body"))).toBe("F2 is UNLOCKED — B4 landed.");
     expect(textOf(turn)).not.toContain("[from ");
   });
 
-  test("an unheaded user turn still says You — absence is the signal", () => {
+  test("an unheaded user turn is still You on the accessible name — absence is the signal", () => {
     const lane = agent({ id: "claude:solo", lastAgentMessage: null, lastUserMessage: "ship it" });
     const pane = withDom(() => M.renderChat(lane, { snap: { schemaVersion: 1, programs: [] } }));
-    expect(textOf(byClass(pane, "chat-turn-role"))).toBe("You");
+    const bubble = byClass(pane, "chat-msg");
+    expect(bubble.dataset.role).toBe("user");
+    expect(byClass(bubble, "chat-msg-role")).toBeNull();
+    expect(bubble.attributes["aria-label"]).toBe("You");
   });
 
   test("role confidence is a visible difference, not a hidden field", () => {
@@ -14547,7 +14678,7 @@ describe("Atlas F2: role confidence and message provenance", () => {
     for (const src of [".role-src-declared", ".role-src-observed", ".role-src-inferred"]) {
       expect(styles.includes(src), src).toBe(true);
     }
-    expect(styles).toContain(".chat-turn-sender");
+    expect(styles).toContain(".sender-unconfirmed");
     expect(styles).toContain(".specialty-chip");
   });
 });
