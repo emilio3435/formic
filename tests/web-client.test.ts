@@ -1476,12 +1476,16 @@ describe("summary status and widgets", () => {
   test("program rollup names live and ended separately, and only when they add up", () => {
     const labels = (cells: Array<{ value: string; label: string }>) =>
       cells.map((c) => c.value + " " + c.label);
+    /* Fresh timestamps: an idle fixture dated July 22 is stalled against
+       Date.now() and would make live + ended miss the roster — the same
+       disappearing-population guard this test exists to keep. */
+    const now = new Date().toISOString();
 
     const mixed = [
-      agent({ id: "a", activity: "working" }),
-      agent({ id: "b", activity: "idle" }),
-      agent({ id: "c", activity: "ended" }),
-      agent({ id: "d", activity: "ended" }),
+      agent({ id: "a", activity: "working", updatedAt: now }),
+      agent({ id: "b", activity: "idle", updatedAt: now }),
+      agent({ id: "c", activity: "ended", updatedAt: now }),
+      agent({ id: "d", activity: "ended", updatedAt: now }),
     ];
     expect(labels(M.programRollupCells(mixed))).toEqual(
       expect.arrayContaining(["2 live", "2 ended"]),
@@ -1489,8 +1493,27 @@ describe("summary status and widgets", () => {
     expect(labels(M.programRollupCells(mixed)).join(" ")).not.toContain("4 agents");
 
     // Nothing ended yet: one population, so one word is honest.
-    const allLive = [agent({ id: "a", activity: "working" }), agent({ id: "b", activity: "idle" })];
+    const allLive = [
+      agent({ id: "a", activity: "working", updatedAt: now }),
+      agent({ id: "b", activity: "idle", updatedAt: now }),
+    ];
     expect(labels(M.programRollupCells(allLive))).toContain("2 agents");
+
+    /* A stalled waiter is a fourth cohort: live + ended no longer sum, so the
+       header keeps the total rather than silently dropping the zombie. */
+    const withStalled = [
+      agent({ id: "a", activity: "working", updatedAt: now }),
+      agent({
+        id: "b",
+        activity: "idle",
+        lifecycle: "waiting",
+        updatedAt: "2026-07-01T00:00:00.000Z",
+      }),
+      agent({ id: "c", activity: "ended", updatedAt: now }),
+    ];
+    const stalledCells = labels(M.programRollupCells(withStalled));
+    expect(stalledCells).toContain("3 agents");
+    expect(stalledCells.join(" ")).not.toContain("live");
 
     /* An unaccounted-for cohort means the split cannot be trusted to sum, so the
        total is the only true claim. This is the guard, not an edge case: naming
@@ -3080,12 +3103,12 @@ describe("calm program and agent list rendering", () => {
     expect(M.rowStateWords("ended", "healthy", "history")).toEqual([]);    // pinned by the tab
 
     // An exceptional outcome is never silent, in any view.
-    expect(M.rowStateWords("working", "needs-you", "now")).toEqual(["Alert"]);
+    expect(M.rowStateWords("working", "needs-you", "now")).toEqual(["Needs you"]);
     expect(M.rowStateWords("working", "failed", "working")).toEqual(["Failed"]);
     // A mixed view still distinguishes a non-dominant activity.
     // "Idle" is spelled Waiting now: idle blamed the agent for a silence that is
     // usually the operator's move.
-    expect(M.rowStateWords("idle", "needs-you", "now")).toEqual(["Waiting", "Alert"]);
+    expect(M.rowStateWords("idle", "needs-you", "now")).toEqual(["Waiting", "Needs you"]);
 
     const row = source.match(/function renderAgentRow\(agent, program, opts = \{\}\) \{[\s\S]*?\n\}/)?.[0];
     expect(row).toBeDefined();
@@ -3095,27 +3118,61 @@ describe("calm program and agent list rendering", () => {
     expect(row).not.toContain("act-glyph act-");
     expect(row).toContain('"row-state-alert"');
     expect(styles).toContain(".row-state-alert { color: var(--needs); }");
+    expect(styles).toContain("--working: var(--color-status-info);");
+    expect(styles).toContain("--needs: var(--color-status-warning);");
+    expect(styles).toContain(".agent-row.is-stalled { opacity: 0.62; }");
+    expect(styles).toContain(".row-state-blocked { color: var(--blocked); }");
+    expect(styles).toContain(".row-state-failed { color: var(--failed); }");
   });
 
-  test("an alerting row says Alert even when Waiting got there first", () => {
+  test("an alerting row says Needs you even when Waiting got there first", () => {
     /* Sweep audit §2: the group head said "6 alerts" while most of its rows
        printed only "Waiting" — a hook-shaped alert has a HEALTHY outcome, so
        the attention word was gated behind !words.length and lost on exactly
        the rows where it was the only signal. It appends now; it never depends
        on being the only word. */
     const hooked = agent({ status: "waiting", lifecycle: "waiting", hookLifecycle: "needsInput" });
-    expect(M.rowStateWords("idle", "healthy", "now", hooked)).toEqual(["Waiting", "Alert"]);
-    expect(M.rowStateWords("working", "healthy", "now", hooked)).toEqual(["Alert"]);
-    // Never doubled when the outcome already carries the word.
-    expect(M.rowStateWords("idle", "needs-you", "now", hooked)).toEqual(["Waiting", "Alert"]);
+    expect(M.rowStateWords("idle", "healthy", "now", hooked)).toEqual(["Needs you"]);
+    expect(M.rowStateWords("working", "healthy", "now", hooked)).toEqual(["Needs you"]);
+    // One operator state per row — needs-you wins over Waiting.
+    expect(M.rowStateWords("idle", "needs-you", "now", hooked)).toEqual(["Needs you"]);
 
-    /* And the ink follows the words: outcome-picked ink painted "Alert" in
-       the healthy activity green — the safe color — on those same rows. */
+    /* And the ink follows the words: needs-you is amber, not the waiting
+       graphite and not the working blue. */
     const program = { id: "p1", name: "P", agents: [hooked] };
     const rendered = withDom(() => M.renderAgentRow(hooked, program));
     const word = byClass(rendered, "row-state-alert");
     expect(word).not.toBe(null);
-    expect(textOf(word)).toContain("Alert");
+    expect(textOf(word)).toContain("Needs you");
+    expect(String(rendered.className)).toContain("is-needs-you");
+  });
+
+  test("a 28h quiet waiter is Stalled, not live, and stays on the Board", async () => {
+    const zombie = agent({
+      id: "codex:zombie",
+      status: "waiting",
+      lifecycle: "waiting",
+      activity: "idle",
+      outcome: "healthy",
+      provenance: "process-live-quiet",
+      processState: "running",
+      updatedAt: "2026-07-21T00:00:00.000Z",
+    });
+    const snap = snapshot({
+      generatedAt: "2026-07-22T04:00:00.000Z",
+      programs: [{ id: "p", name: "P", agents: [zombie] }],
+    });
+    expect(M.isLive(zombie, Date.parse(snap.generatedAt), M.DEFAULT_STALL_THRESHOLD_MS)).toBe(false);
+    expect(M.isStalled(zombie, Date.parse(snap.generatedAt), M.DEFAULT_STALL_THRESHOLD_MS)).toBe(true);
+    expect(M.viewMatches("board", zombie)).toBe(true);
+    expect(M.rowStateWords("idle", "healthy", "board", zombie, false, Date.parse(snap.generatedAt))).toEqual(["Stalled"]);
+
+    await withState({ snap, view: "board" }, () => {
+      const row = withDom(() => M.renderAgentRow(zombie, { id: "p", name: "P", agents: [zombie] }));
+      expect(String(row.className)).toContain("is-stalled");
+      expect(String(row.className)).not.toContain("is-needs-you");
+      expect(textOf(byClass(row, "row-state"))).toContain("Stalled");
+    });
   });
 
   test("selected rows retain an accessible full-text inspector path", () => {
@@ -9161,7 +9218,7 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(root.children[1]).not.toBe(betaSection);
     const newBetaBody = root.children[1].children[root.children[1].children.length - 1];
     expect(newBetaBody.children.length).toBe(2);
-    expect(textOf(newBetaBody.children[1])).toContain("Waiting");
+    expect(textOf(newBetaBody.children[1])).toContain("Needs you");
     expect(newBetaBody.children[1]).not.toBe(rowS3); // its own signature moved too
     // Alpha is untouched by Beta's rebuild.
     expect(alphaBody.children[2]).toBe(rowS2);
@@ -9390,7 +9447,7 @@ describe("FE-B: harness-backed client behavior", () => {
        two rows up already carries it — so the rescued row identifies itself as
        "Codex" here. What this test is about is that it PAINTS at all. */
     expect(rowText).toContain("Codex");
-    expect(rowText).toContain("Alert"); // and it reads as needing a human
+    expect(rowText).toContain("Needs you"); // and it reads as needing a human
 
     // The guard: a program of finished, healthy agents still collapses, so this
     // cannot expand the 60+ done programs on a real board.
@@ -9538,7 +9595,12 @@ describe("FE-B: harness-backed client behavior", () => {
     test("acknowledging an alert returns the row to its lifecycle section", () => {
       // The plan's open question, answered: ack means "I have seen it", so the
       // row leaves the strip and rejoins the fleet rather than vanishing.
-      const acked = agent({ id: "codex:a-alert", status: "waiting", lifecycle: "waiting" });
+      const acked = agent({
+        id: "codex:a-alert",
+        status: "waiting",
+        lifecycle: "waiting",
+        updatedAt: new Date().toISOString(),
+      });
       const program = { id: "alpha", name: "Alpha", agents: [acked] };
       const visible = [{ program, agents: [acked] }];
       const root = newNode("div");

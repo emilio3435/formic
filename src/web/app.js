@@ -156,6 +156,10 @@ import {
   deriveOutcome,
   deriveRollup,
   isLive,
+  isStalled,
+  operatorState,
+  stallThresholdMs,
+  DEFAULT_STALL_THRESHOLD_MS,
   isReviewWorker,
   sessionKindOf,
   agentClassOf,
@@ -195,6 +199,7 @@ import {
   LOOKBACK_STORAGE_KEY,
   NEEDS_YOU_DISPLAY_KEY,
   OPS_VIEWS,
+  OPERATOR_STATE_LABELS,
   OUTCOME_LABELS,
   RETIRED_WIDGET_IDS,
   ROSTER_ROLE_ORDER,
@@ -319,7 +324,12 @@ const RESOLUTION_LABELS = { exact: "exact match", "unique-cwd": "matched by fold
    instead of summing its own. Until then it sums, and says which quantity it
    summed. */
 function programRollupCells(agents, rollup = null, snap = null) {
-  const r = deriveRollup(agents);
+  const nowMs = snap && Date.parse(snap.generatedAt);
+  const r = deriveRollup(
+    agents,
+    Number.isFinite(nowMs) ? nowMs : Date.now(),
+    stallThresholdMs(snap),
+  );
   if (snap) r.needsYou = agents.filter((agent) => stripAlerting(agent, snap)).length;
   const cells = [
     /* "230 agents" was 33 live and 197 ended — 5.8x the operational population
@@ -605,7 +615,9 @@ function totalsOf(snap) {
     unverified: byLifecycle.unverified ?? count(isUnverified),
     history: t.history ?? count(isTerminal),
     retained: t.retained ?? count((a) => scopeOf(a) === "retained"),
-    live: t.live ?? count(isLive),
+    /* Wrap the predicate: Array#filter would pass the index as nowMs and
+       treat every waiting row as years past the stall threshold. */
+    live: t.live ?? count((a) => isLive(a)),
     tracked: t.tracked ?? agents.length,
     tokens: t.tokens,
     tokenMedian: t.tokenMedian,
@@ -1507,7 +1519,7 @@ const STAGE_BY_WORK = {
 
 globalThis.TheAntHill = {
   deriveActivity, deriveOutcome, deriveControlState, deriveRollup, programRollup,
-  lifecycleOf, provenanceOf, scopeOf, isTerminal, isLive, isUnverified, wantsHuman,
+  lifecycleOf, provenanceOf, scopeOf, isTerminal, isLive, isStalled, operatorState, stallThresholdMs, DEFAULT_STALL_THRESHOLD_MS, isUnverified, wantsHuman,
   declaredQuiet, declaredDone,
   controlUnavailableText,
   totalsOf, issuesOf, alerting, alertFirst, viewMatches, matchesQuery, buildClusters, tokenSummary,
@@ -7690,6 +7702,12 @@ function agentRowSig(agent, ui, opts = {}) {
     // this signature moving, so it has to be in here or the row keeps its
     // cached, unmarked node.
     opts.alerting ? "alert-mark" : "",
+    operatorState(
+      agent,
+      Number.isFinite(Date.parse(ui.snap && ui.snap.generatedAt)) ? Date.parse(ui.snap.generatedAt) : Date.now(),
+      stallThresholdMs(ui.snap),
+      ackedAgent(agent, ui.snap),
+    ) || "",
     /* Signal's tick. It arrives on the colour endpoint's clock rather than the
        snapshot's, so nothing else in this signature moves when it lands. */
     opts.repoTint || "",
@@ -9126,7 +9144,19 @@ const CONTROL_ICONS = { linked: "linked", quarantined: "quarantine", "observed-o
    not the dominant case. Healthy working rows in Now say nothing. */
 const ACTIVITY_PINNED_VIEWS = new Set(["waiting", "history"]);
 
-function rowStateWords(activity, outcome, view, agent, alertMuted = false) {
+function rowStateWords(activity, outcome, view, agent, alertMuted = false, nowMs = Date.now(), thresholdMs = DEFAULT_STALL_THRESHOLD_MS) {
+  if (agent) {
+    const words = [];
+    const shown = operatorState(agent, nowMs, thresholdMs, alertMuted);
+    if (shown === "needs-you") words.push(OPERATOR_STATE_LABELS["needs-you"]);
+    else if (shown === "stalled") words.push(OPERATOR_STATE_LABELS.stalled);
+    else if (shown === "done" && view !== "history") words.push(OPERATOR_STATE_LABELS.done);
+    else if (shown === "working" && view !== "now" && view !== "working") words.push(OPERATOR_STATE_LABELS.working);
+    else if (shown === "waiting" && view !== "waiting") words.push(OPERATOR_STATE_LABELS.waiting);
+    if (outcome === "blocked") words.push(OUTCOME_LABELS.blocked);
+    if (outcome === "failed") words.push(OUTCOME_LABELS.failed);
+    return words;
+  }
   const words = [];
   if (!ACTIVITY_PINNED_VIEWS.has(view) && activity !== "working") {
     words.push(ACTIVITY_LABELS[activity] || activity);
@@ -9134,12 +9164,6 @@ function rowStateWords(activity, outcome, view, agent, alertMuted = false) {
   if (outcome !== "healthy" && !(alertMuted && outcome === "needs-you")) {
     words.push(OUTCOME_LABELS[outcome] || outcome);
   }
-  /* An alerting row always says so — even when another word got there first. A
-     healthy-outcome session that wantsHuman used to print only "Waiting": the
-     group head counted it among "6 alerts" while the row corroborated nothing,
-     which teaches the operator the count is decorative. Appended, never
-     duplicated — a needs-you outcome already put the word there. */
-  if (!alertMuted && outcome === "healthy" && agent && wantsHuman(agent)) words.push(OUTCOME_LABELS["needs-you"]);
   return words;
 }
 
@@ -9315,6 +9339,10 @@ function renderAgentRow(agent, program, opts = {}) {
   const outcome = deriveOutcome(agent);
   const alertMuted = ackedAgent(agent, state.snap);
   const presentedOutcome = alertMuted && outcome === "needs-you" ? "healthy" : outcome;
+  const nowMs = state.snap && Date.parse(state.snap.generatedAt);
+  const thresholdMs = stallThresholdMs(state.snap);
+  const opState = operatorState(agent, Number.isFinite(nowMs) ? nowMs : Date.now(), thresholdMs, alertMuted);
+  const opLabel = opState ? OPERATOR_STATE_LABELS[opState] : null;
   const control = deriveControlState(agent);
   const watchOnly = watchOnlyMark(control, activity, state.snap);
   const role = roleView(agent.role);
@@ -9325,7 +9353,8 @@ function renderAgentRow(agent, program, opts = {}) {
   // Status column shows the activity word colored by state (the color already
   // encodes working/idle/ended, so no separate dot), with any alert suffix on
   // its own red span. Full state stays in the tooltip + row aria-label.
-  const stateText = ACTIVITY_LABELS[activity] + (presentedOutcome !== "healthy" ? " · " + OUTCOME_LABELS[presentedOutcome] : "");
+  const stateText = (opLabel || ACTIVITY_LABELS[activity])
+    + (presentedOutcome !== "healthy" && presentedOutcome !== "needs-you" ? " · " + OUTCOME_LABELS[presentedOutcome] : "");
 
   const nameTarget = preferredRenameTarget(agent);
   const nameKey = presentationLabelKey(nameTarget);
@@ -9530,17 +9559,25 @@ function renderAgentRow(agent, program, opts = {}) {
        the title and the row's aria-label, so nothing is lost to a reader who
        asks — it just stops being printed 275 times. */
     (() => {
-      const words = rowStateWords(activity, outcome, state.view, agent, alertMuted);
+      const words = rowStateWords(activity, outcome, state.view, agent, alertMuted, Number.isFinite(nowMs) ? nowMs : Date.now(), thresholdMs);
       if (!words.length) return null;
       return el("span", {
-        class: "row-state state-" + activity + (presentedOutcome !== "healthy" ? " outcome-" + presentedOutcome : ""),
+        class: "row-state state-" + activity + (presentedOutcome !== "healthy" ? " outcome-" + presentedOutcome : "")
+          + (opState === "stalled" ? " is-stalled" : "")
+          + (opState === "done" ? " is-done" : ""),
         title: stateText,
         "aria-label": "Status: " + stateText,
       }, el("span", {
-        // The ink follows the words, not the outcome alone: a hook-shaped alert
-        // has a HEALTHY outcome, so "Alert" was printing in the activity's own
-        // green — the safe color, on the rows where the word is the only signal.
-        class: presentedOutcome !== "healthy" || (!alertMuted && agent && wantsHuman(agent)) ? "row-state-alert" : "act-" + activity,
+        // The ink follows the operator state: needs-you is amber, stalled is
+        // the same graphite as waiting (dimmed on the row), working is blue.
+        class: opState === "needs-you" ? "row-state-alert"
+          : presentedOutcome === "blocked" ? "row-state-blocked"
+            : presentedOutcome === "failed" ? "row-state-failed"
+              : opState === "stalled" ? "act-idle is-stalled"
+                : opState === "done" ? "act-ended is-done"
+                  : opState === "working" ? "act-working"
+                    : opState === "waiting" ? "act-idle"
+                      : "act-" + activity,
         text: words.join(" · "),
       }));
     })(),
@@ -9612,6 +9649,11 @@ function renderAgentRow(agent, program, opts = {}) {
        A row can be in the set with a healthy outcome (hook needsInput), so
        this mark and is-needs-you are two different facts. */
     (opts.alerting ? " is-alerting" : "") +
+    (opState === "needs-you" ? " is-needs-you" : "") +
+    (opState === "working" ? " is-working" : "") +
+    (opState === "waiting" ? " is-waiting" : "") +
+    (opState === "stalled" ? " is-stalled" : "") +
+    (opState === "done" ? " is-done" : "") +
     (liveness && liveness.key === "died" ? " is-died" : "") +
     (lineageContradicted ? " is-lineage-disputed" : "") +
     (activity === "ended" ? " is-ended" : "") +

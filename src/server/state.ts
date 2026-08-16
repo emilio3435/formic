@@ -36,6 +36,7 @@ import {
 import { withAttentionClasses } from "./attention-signal";
 import { collectHermesSpendSources } from "./hermes";
 import { buildSnapshot, type ProgramHint, withIssueDecoration, withPulse } from "./snapshot";
+import { isLive } from "./live";
 import { rollupFor } from "./snapshot-programs";
 import { PulseTracker } from "./pulse";
 import type {
@@ -607,7 +608,7 @@ export class HubState {
         return endedByCmux(agent);
       });
       return agents.some((agent, index) => agent !== program.agents[index])
-        ? { ...program, agents, rollup: rollupFor(agents) }
+        ? { ...program, agents, rollup: rollupFor(agents, Date.now()) }
         : program;
     });
     if (!changed) return;
@@ -624,7 +625,7 @@ export class HubState {
       programs,
       totals: {
         ...this.#snapshot.totals,
-        live: observed.filter((agent) => agent.activity === "working" || agent.activity === "idle").length,
+        live: observed.filter((agent) => isLive(agent, Date.now())).length,
         attention: observed.filter((agent) => agent.attention === true).length,
         working: observed.filter((agent) => agent.activity === "working").length,
         idle: observed.filter((agent) => agent.activity === "idle").length,
