@@ -375,10 +375,13 @@ describe("mix and spend widgets", () => {
     // @ts-expect-error browser client has no declaration
     await import("../src/web/app.js");
     const M = (globalThis as any).TheAntHill;
-    const known = M.summaryWidgetData("spend", burnSnapFixture({ costLastHourUsd: 18.4, costIsFloor: true }), "live", "percent", [], false, "");
+    const known = M.summaryWidgetData("spend", burnSnapFixture({ costLastHourUsd: 18.4, costIsFloor: true, costProvenance: "burnbar" }), "live", "percent", [], false, "");
     expect(known.value).toContain("≥$18.40");
     const unknown = M.summaryWidgetData("spend", burnSnapFixture({ costProvenance: "unavailable", costLastHourUsd: null }), "live", "percent", [], false, "");
+    expect(unknown.tone).toBe("missing");
     expect(unknown.value).not.toContain("$0");
+    expect(JSON.stringify(unknown)).not.toContain("cost unavailable");
+    expect(JSON.stringify(unknown)).not.toContain("—");
   });
   test("customizer offers mix/spend without changing default layout", async () => {
     // @ts-expect-error browser client has no declaration
@@ -673,6 +676,92 @@ describe("header disclosure — compact face parity with the owner derivations",
       const compactText = textOf(compact);
       expect(compactText).not.toContain("No data");
       expect(compactText).not.toContain("$0.00");
+    });
+  });
+});
+
+describe("F5 — omit blind cost and completions chips", () => {
+  function stressedBurnSnap(burnOver: Record<string, unknown> = {}, momentumOver: Record<string, unknown> = {}) {
+    const snap: any = repoSnapFixture();
+    snap.pulse = {
+      activity: { buckets: [{ activeSessions: 2 }] },
+      burn: {
+        tokensPerMin: 1234,
+        windowMs: 600_000,
+        costLastHourUsd: null,
+        costProvenance: "unavailable",
+        coverage: { reporting: 1, eligible: 1, unknown: 0 },
+        ...burnOver,
+      },
+      momentum: {
+        working: 2,
+        completionsLastHour: null,
+        completionsProvenance: "not-observable",
+        stalled: 0,
+        stalledAgentIds: [],
+        stallThresholdMs: 15 * 60_000,
+        ...momentumOver,
+      },
+    };
+    return snap;
+  }
+
+  test("burn with a rate and unavailable cost keeps the rate and omits the cost clause", async () => {
+    await withHeaderHarness(({ doc, M }) => {
+      M.state.snap = stressedBurnSnap();
+      const data = M.summaryWidgetData("burn", M.state.snap, "live");
+      expect(data.value).toBe(M.fmtTok(1234));
+      expect(data.tone).not.toBe("missing");
+      expect(data.sublabel).not.toContain("cost unavailable");
+      expect(data.sublabel).not.toContain("$0");
+      expect(data.sublabel).not.toMatch(/—/);
+      expect(data.sublabel).not.toContain("$");
+      M.renderHealthRail();
+      const cell = readingCell(doc.byId("readings-grid"), "Burn");
+      expect(cell).toBeTruthy();
+      const painted = textOf(cell);
+      expect(painted).toContain("/min");
+      expect(painted).not.toContain("cost unavailable");
+      expect(painted).not.toContain("$0");
+      expect(painted).not.toMatch(/—/);
+    });
+  });
+
+  test("burn with unavailable cost and no rate is omitted from the painted readings", async () => {
+    await withHeaderHarness(({ doc, M }) => {
+      M.state.snap = stressedBurnSnap({ tokensPerMin: null, windowMs: 0 });
+      const data = M.summaryWidgetData("burn", M.state.snap, "live");
+      expect(data.tone).toBe("missing");
+      expect(data.value).toBe("No data");
+      expect(JSON.stringify(data)).not.toContain("cost unavailable");
+      expect(JSON.stringify(data)).not.toMatch(/—/);
+      const model = M.pulseStripModel(M.state.snap, "live", [], "percent", "");
+      expect(model.cells.map((cell: { id: string }) => cell.id)).not.toContain("burn");
+      M.renderHealthRail();
+      expect(readingCell(doc.byId("readings-grid"), "Burn")).toBeNull();
+      expect(textOf(doc.byId("readings-grid"))).not.toContain("cost unavailable");
+    });
+  });
+
+  test("momentum keeps the needs-you CTA and never paints a completions filler", async () => {
+    await withHeaderHarness(({ doc, M }) => {
+      M.state.snap = stressedBurnSnap();
+      const data = M.summaryWidgetData("momentum", M.state.snap, "live");
+      expect(data.unit).toMatch(/need you/);
+      expect(String(data.value)).toMatch(/^\d+$/);
+      expect(data.sublabel).toContain("shipping");
+      expect(data.sublabel).not.toContain("Completions are not measured");
+      expect(data.sublabel).not.toContain("No completion data");
+      expect(data.sublabel).not.toMatch(/↑\d+ done/);
+      expect(JSON.stringify(data)).not.toMatch(/—/);
+      M.renderHealthRail();
+      const cell = readingCell(doc.byId("readings-grid"), "Momentum");
+      expect(cell).toBeTruthy();
+      const painted = textOf(cell);
+      expect(painted).toMatch(/need you/);
+      expect(painted).not.toContain("Completions are not measured");
+      expect(painted).not.toContain("No completion data");
+      expect(painted).not.toMatch(/↑\d+ done/);
     });
   });
 });

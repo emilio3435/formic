@@ -192,8 +192,9 @@ describe("README.md stays true to the product", () => {
        that the shape a cost-less machine actually produces renders that way. */
     const noCost = producedBoard({ agents: [workingAgent] });
     const burn = M.summaryWidgetData("burn", noCost, "live", "percent", [], false);
-    expect(burn.sublabel, "a null cost stopped rendering as unavailable").toContain("cost unavailable");
     expect(burn.sublabel, "a null cost is being rendered as a zero").not.toContain("$0");
+    expect(burn.sublabel, "a blind cost must not print a placeholder").not.toContain("cost unavailable");
+    expect(burn.sublabel, "a blind cost must not print a dash").not.toMatch(/—/);
     expect(readme).toContain("no process evidence");
     /* Driven through the PRODUCER: a collected agent that never yielded process
        evidence — no processAlive, no pids — must come out of buildSnapshot as

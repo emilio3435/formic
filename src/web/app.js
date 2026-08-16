@@ -1154,27 +1154,17 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
      instead of two truncated titles and a number. */
   if (id === "momentum") {
     const momentum = snap.pulse && snap.pulse.momentum;
-    /* "yet" promises a number that is never coming. The server withholds
-       completions permanently — success is unverifiable and completion is
-       undetectable for most providers — and says so in `completionsProvenance`,
-       which nothing read. On a busy board the stall text fills this line so the
-       promise never showed; on a quiet or brand-new one it is the first thing a
-       newcomer reads about the counter. Saying "not measured" once is honest;
-       saying "not yet" forever is the same overclaim in a patient voice. */
-    let sublabel = momentum && momentum.completionsProvenance === "not-observable"
-      ? "Completions are not measured — no source reports them reliably."
-      : "No completion data yet.";
+    /* Completions are not-observable on the wire. Do not mount a filler chip
+       or a "not measured" sentence — omit that reading. The CTA stays the
+       needs-you count; stall and shipping facts may still ride the sublabel. */
+    const parts = [];
     if (momentum) {
-      // Window honesty: a freshly restarted tracker says how long it has
-      // actually watched, never a fabricated "this hour". Below one full
-      // 5-min bucket there is no completion window to report at all; stall
-      // detection reads updatedAt directly, so it stays valid immediately.
-      const parts = [];
-      const windowText = completionWindowText(momentum);
+      const windowText = momentum.completionsProvenance === "not-observable"
+        ? ""
+        : completionWindowText(momentum);
       if (windowText) parts.push(windowText);
       const stall = stallText(snap, momentum.stalled);
       if (stall) parts.push(stall);
-      if (parts.length) sublabel = parts.join(" · ");
     }
     /* Attention leads. The strip was the one surface with zero attention
        information — a header that summarizes everything except what needs a
@@ -1188,7 +1178,7 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
     return {
       value: String(asking),
       unit: asking === 1 ? "needs you" : "need you",
-      sublabel: totals.working + " shipping · " + sublabel,
+      sublabel: [totals.working + " shipping", ...parts].filter(Boolean).join(" · "),
       tone: asking ? "hot" : "ok",
     };
   }
@@ -1208,9 +1198,12 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
        travels with the number when the sublabel is skimmed or read aloud, and it
        is what stops a measured floor being banked as the hour's total spend. */
     const costKnown = burn.costProvenance !== "unavailable" && burn.costLastHourUsd != null;
+    /* Blind cost is omitted, not replaced with "cost unavailable", a dash, or
+       $0. Provenance wins: a payload that says unavailable beside a numeric 0
+       still must not print a dollar figure. */
     const cost = costKnown
       ? (burn.costIsFloor ? "≥$" : "$") + burn.costLastHourUsd.toFixed(2) + " last hour"
-      : "cost unavailable";
+      : "";
     /* Cost is the one figure on this card that does NOT come from this board's
        own collection cycle — BurnBar computes it over its own hour, which is why
        the guide warns against dividing the rate by it. So the as-of is not
@@ -1241,11 +1234,10 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
        spend was unknown or $19.54. Only the missing half says it is missing. */
     const hasRate = burn.tokensPerMin != null;
     const hasCost = costKnown;
-    /* Both missing is still "No data", but it keeps the sublabel rather than
-       swapping in a generic one: "cost unavailable" is the honest phrasing for a
-       failed BurnBar query and must never degrade into a rendered $0. */
-    const sub = cost + asOf + coverage + (burn.costNote ? " · " + burn.costNote : "");
-    if (!hasRate && !hasCost) return { value: "No data", unit: "", sublabel: sub, tone: "missing" };
+    /* Both missing: skip the chip. A missing-tone cell is how the painter
+       omits a reading; do not mount a dash or an "unavailable" sentence. */
+    const sub = [cost + asOf, coverage, burn.costNote].filter(Boolean).join(" · ");
+    if (!hasRate && !hasCost) return noDataWidget("No burn data yet.");
     /* The rate is an average over a window the payload carries and the widget
        never printed. windowMs is 300000 here — a five-minute average shown as a
        bare "/min" invites reading it as an instantaneous rate, which is how a
@@ -1465,9 +1457,7 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
     const burn = snap.pulse && snap.pulse.burn;
     if (!burn) return noDataWidget("No spend data yet.");
     const costKnown = burn.costProvenance !== "unavailable" && burn.costLastHourUsd != null;
-    if (!costKnown) {
-      return { value: "No data", unit: "", sublabel: "cost unavailable", tone: "missing" };
-    }
+    if (!costKnown) return noDataWidget("No spend data yet.");
     const value = (burn.costIsFloor ? "≥$" : "$") + Number(burn.costLastHourUsd).toFixed(2);
     const asOf = burn.costAsOf && !Number.isNaN(Date.parse(burn.costAsOf))
       ? agoText(burn.costAsOf)
@@ -3861,7 +3851,8 @@ function renderWidgetCustomizer() {
    not have two phrasings depending on whether the band happens to be collapsed.
    Absent when BurnBar priced nothing, never a fabricated $0. */
 function calmSpendText(burn) {
-  const cost = burn && burn.costLastHourUsd;
+  if (!burn || burn.costProvenance === "unavailable") return "";
+  const cost = burn.costLastHourUsd;
   return typeof cost === "number" ? "$" + cost.toFixed(2) + " last hour" : "";
 }
 
@@ -3890,7 +3881,9 @@ function renderPulseCalm(healthData, watch = watchClauses(state.snap)) {
      vanishing. (Day-one review.) */
   const parts = totals.tracked > 0 ? [totals.working + " shipping"] : [];
   if (pulse && totals.tracked > 0) {
-    const windowText = completionWindowText(pulse.momentum);
+    const windowText = pulse.momentum && pulse.momentum.completionsProvenance === "not-observable"
+      ? ""
+      : completionWindowText(pulse.momentum);
     if (windowText) parts.push(windowText);
     if (pulse.burn.tokensPerMin != null) parts.push(fmtTok(pulse.burn.tokensPerMin) + " tok/min");
     const spend = calmSpendText(pulse.burn);

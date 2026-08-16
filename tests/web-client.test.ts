@@ -1563,10 +1563,11 @@ describe("summary status and widgets", () => {
     expect(priced.sublabel).toContain("$12.50 last hour");
     expect(priced.value).toBe("840");
 
-    // Unknown cost states its ignorance and never renders as free.
+    // Unknown cost is omitted entirely — never a dash, never a fabricated $0.
     const unknown = M.summaryWidgetData("burn", burnSnap({ costLastHourUsd: null }), "live", "percent", [], false);
-    expect(unknown.sublabel).toContain("cost unavailable");
+    expect(unknown.sublabel).not.toContain("cost unavailable");
     expect(unknown.sublabel).not.toContain("$");
+    expect(unknown.sublabel).not.toMatch(/—/);
 
     // A real zero is a real number and must survive as one.
     const free = M.summaryWidgetData("burn", burnSnap({ costLastHourUsd: 0 }), "live", "percent", [], false);
@@ -1677,11 +1678,15 @@ describe("summary status and widgets", () => {
     const withMomentum = (momentum: Record<string, unknown>) => snapshot({ pulse: { momentum } });
     /* The shipping count opens the sub now that attention holds the headline;
        every window-honest sentence keeps its exact wording after it. */
-    expect(M.summaryWidgetData("momentum", snapshot()).sublabel).toContain("shipping · No completion data yet.");
+    expect(M.summaryWidgetData("momentum", snapshot()).sublabel).toMatch(/shipping$/);
+    expect(M.summaryWidgetData("momentum", snapshot()).sublabel).not.toContain("No completion data");
+    expect(M.summaryWidgetData("momentum", snapshot()).sublabel).not.toContain("not measured");
     // Under one completed 5-min bucket there is no completion window to report,
     // but stall detection (updatedAt-based) is valid immediately.
     expect(M.summaryWidgetData("momentum", withMomentum({ completionsLastHour: 0, observedWindowMs: 0, stalled: 0 })).sublabel)
-      .toContain("shipping · No completion data yet.");
+      .toMatch(/shipping$/);
+    expect(M.summaryWidgetData("momentum", withMomentum({ completionsLastHour: null, completionsProvenance: "not-observable" })).sublabel)
+      .not.toContain("not measured");
     expect(M.summaryWidgetData("momentum", withMomentum({ completionsLastHour: 0, observedWindowMs: 0, stalled: 2 })).sublabel)
       .toContain("shipping · 2 quiet 15m+");
     // A young tracker reports its real window, never a fabricated "this hour".
@@ -15500,15 +15505,17 @@ describe("Burn and Cost render their provenance rather than implying it", () => 
   });
   const sub = (burn: Record<string, unknown>) => M.summaryWidgetData("burn", withBurn(burn), "live").sublabel;
 
-  test("an unavailable cost says so, even when a number rides beside it", () => {
+  test("an unavailable cost is omitted, even when a number rides beside it", () => {
     /* The defect costProvenance exists to prevent. Reading the number's
        null-ness and inferring the rest is one inference away from printing
        "$0.00 last hour" for an hour nobody could price — a fabricated total,
-       which is exactly what "never $0" forbids. The provenance wins. */
+       which is exactly what "never $0" forbids. The provenance wins, and a
+       blind reading is skipped rather than replaced with a dash. */
     const text = sub({ tokensPerMin: 1000, windowMs: 600_000, costLastHourUsd: 0, costProvenance: "unavailable" });
-    expect(text).toContain("cost unavailable");
+    expect(text).not.toContain("cost unavailable");
     expect(text).not.toContain("$0");
     expect(text).not.toContain("$0.00");
+    expect(text).not.toMatch(/—/);
     // A measured zero from a source that DID answer is a real reading and prints.
     expect(sub({ tokensPerMin: 1000, windowMs: 600_000, costLastHourUsd: 0, costProvenance: "burnbar" }))
       .toContain("$0.00 last hour");
@@ -15536,7 +15543,7 @@ describe("Burn and Cost render their provenance rather than implying it", () => 
     expect(text).toMatch(/\$4\.12 last hour \([^)]+\)/);
     // An unavailable cost has no instant to be as-of, and does not invent one.
     expect(sub({ tokensPerMin: 1, windowMs: 600_000, costLastHourUsd: null, costProvenance: "unavailable", costAsOf: new Date().toISOString() }))
-      .toContain("cost unavailable");
+      .not.toContain("cost unavailable");
     expect(sub({ tokensPerMin: 1, windowMs: 600_000, costLastHourUsd: null, costProvenance: "unavailable", costAsOf: new Date().toISOString() }))
       .not.toMatch(/\(/);
     // Nor does a malformed instant.
@@ -15573,15 +15580,19 @@ describe("Burn and Cost render their provenance rather than implying it", () => 
        was unknown or $19.54. */
     const rateOnly = M.summaryWidgetData("burn", withBurn({ tokensPerMin: 500, windowMs: 600_000, costLastHourUsd: null, costProvenance: "unavailable" }), "live");
     expect(rateOnly.value).toBe("500");
-    expect(rateOnly.sublabel).toContain("cost unavailable");
+    expect(rateOnly.sublabel).not.toContain("cost unavailable");
+    expect(rateOnly.sublabel).not.toMatch(/—/);
     const costOnly = M.summaryWidgetData("burn", withBurn({ tokensPerMin: null, costLastHourUsd: 9.5, costProvenance: "burnbar" }), "live");
     expect(costOnly.value).toBe("Token rate unavailable");
     expect(costOnly.sublabel).toContain("$9.50 last hour");
-    // Both gone is "No data", and it KEEPS the honest cost phrasing.
+    // Both gone is omitted: missing tone so the painter skips the chip.
     const neither = M.summaryWidgetData("burn", withBurn({ tokensPerMin: null, costLastHourUsd: null, costProvenance: "unavailable" }), "live");
     expect(neither.value).toBe("No data");
     expect(neither.tone).toBe("missing");
-    expect(neither.sublabel).toContain("cost unavailable");
+    expect(neither.sublabel).not.toContain("cost unavailable");
+    expect(neither.sublabel).not.toMatch(/—/);
+    expect(M.pulseStripModel(withBurn({ tokensPerMin: null, costLastHourUsd: null, costProvenance: "unavailable" }), "live", [], "percent", "")
+      .cells.map((c: { id: string }) => c.id)).not.toContain("burn");
   });
 });
 
