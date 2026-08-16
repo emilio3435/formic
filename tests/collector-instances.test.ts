@@ -174,6 +174,67 @@ describe("scanAgentHomes", () => {
     expect(hits.some((h) => h.dataDir === dataDir && h.kind === "cursor-gui")).toBe(true);
     expect(reads.some((p) => p.startsWith("/Applications/") && !p.startsWith(appPath))).toBe(false);
   });
+
+  test("quoted $HOME --user-data-dir classifies as cursor-gui labeled Cursor-2", () => {
+    const root = mkdtempSync(join(tmpdir(), "ah-scan-"));
+    const dataDir = join(root, "Library/Application Support/Cursor-2");
+    mkdirSync(join(dataDir, "User/globalStorage"), { recursive: true });
+    writeFileSync(join(dataDir, "User/globalStorage/state.vscdb"), "");
+    const app = join(root, "Applications/Cursor Extra.app");
+    mkdirSync(join(app, "Contents/MacOS"), { recursive: true });
+    writeFileSync(join(app, "Contents/MacOS/launch"),
+      `#!/bin/bash\nexec /Applications/Cursor.app/Contents/MacOS/Cursor --user-data-dir="$HOME/Library/Application Support/Cursor-2"\n`);
+    const supportRoot = join(root, "Library/Application Support");
+    const base = memFs(root, {
+      readAppIdentity: (p) => p.endsWith(".app")
+        ? { name: "Cursor Extra", identifier: "com.todesktop.230313mzl4w4u92" }
+        : undefined,
+    });
+    /* Hide Cursor-2 from the Application Support listing so the wrapper's
+       expanded $HOME path is the only way to find it. */
+    const hits = scanAgentHomes({
+      ...base,
+      readdir: (p) => p === supportRoot
+        ? base.readdir(p).filter((name) => name !== "Cursor-2")
+        : base.readdir(p),
+    });
+    const hit = hits.find((h) => h.kind === "cursor-gui" && h.label === "Cursor-2");
+    expect(hit?.dataDir).toBe(dataDir);
+    expect(hit?.provider).toBe("cursor");
+    expect(hit?.default).toBe(false);
+  });
+
+  test("Application Support Cursor-2 is found even when /Applications has many .app dirs", () => {
+    const root = mkdtempSync(join(tmpdir(), "ah-scan-"));
+    const dataDir = join(root, "Library/Application Support/Cursor-2");
+    mkdirSync(join(dataDir, "User/globalStorage"), { recursive: true });
+    writeFileSync(join(dataDir, "User/globalStorage/state.vscdb"), "");
+    const appNames = Array.from({ length: 40 }, (_, i) => `App${i}.app`);
+    const base = memFs(root);
+    let now = 1_000_000;
+    const originalNow = Date.now;
+    Date.now = () => now;
+    try {
+      const hits = scanAgentHomes({
+        ...base,
+        readdir: (p) => {
+          if (p === "/Applications") return appNames;
+          if (p.startsWith("/Applications/")) {
+            now += 80;
+            return [];
+          }
+          return base.readdir(p);
+        },
+        isDirectory: (p) => {
+          if (p.startsWith("/Applications/") && p.endsWith(".app")) return true;
+          return base.isDirectory(p);
+        },
+      });
+      expect(hits.some((h) => h.dataDir === dataDir && h.kind === "cursor-gui")).toBe(true);
+    } finally {
+      Date.now = originalNow;
+    }
+  });
 });
 
 describe("readTextCappedSync", () => {

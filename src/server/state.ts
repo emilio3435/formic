@@ -120,6 +120,17 @@ const MIN_CONTROL_AGGREGATE_TIMEOUT_MS = 10_000;
    completed provider truth reach persistence after a 10-second cutoff. */
 const PUBLISHING_TAIL_TIMEOUT_MS = 5_000;
 
+/* Settlement reuses an in-flight or staged scan when this key matches. Extra
+   Cursor GUI roots must be in it or Import's refresh keeps the previous
+   cursor result. */
+export function providerCollectionConfigKey(
+  windowMs: number,
+  thresholds: { readonly freshMs?: number; readonly quietMs?: number } | undefined,
+  extraCursorGuiRoots: readonly string[],
+): string {
+  return `${windowMs}:${thresholds?.freshMs ?? "default"}:${thresholds?.quietMs ?? "default"}:${extraCursorGuiRoots.join(",")}`;
+}
+
 function waitWithAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   if (signal.aborted) return Promise.reject(signal.reason ?? new Error("refresh cancelled"));
   return new Promise<T>((resolve, reject) => {
@@ -938,7 +949,7 @@ export class HubState {
     });
     const providerCollection = (this.collectors.sessionProvider && this.collectors.finalizeSessions
       ? track("providers", (async () => {
-          const configKey = `${windowMs}:${thresholds?.freshMs ?? "default"}:${thresholds?.quietMs ?? "default"}`;
+          const configKey = providerCollectionConfigKey(windowMs, thresholds, extraCursorGuiRoots);
           const selection = await this.#providerSettlement.settle(
             providers,
             async (provider) => {

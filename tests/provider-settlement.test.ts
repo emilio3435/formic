@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ProviderSettlementCoordinator } from "../src/server/provider-settlement";
+import { providerCollectionConfigKey } from "../src/server/state";
 
 type Provider = "fast" | "slow";
 
@@ -193,5 +194,53 @@ describe("provider settlement", () => {
     );
     expect(next.current.slow).toBe("slow-after-recovery");
     expect(slowCalls).toBe(2);
+  });
+
+  test("extra Cursor GUI roots change the collection config key", () => {
+    const windowMs = 36 * 3600_000;
+    const thresholds = { freshMs: 5 * 60_000, quietMs: 30 * 60_000 };
+    const without = providerCollectionConfigKey(windowMs, thresholds, []);
+    const withRoot = providerCollectionConfigKey(
+      windowMs,
+      thresholds,
+      ["/Users/me/Library/Application Support/Cursor-2"],
+    );
+    expect(withRoot).not.toBe(without);
+    expect(withRoot).toContain("Cursor-2");
+  });
+
+  test("two settle calls with different extra-root lists do not share a scan", async () => {
+    const coordinator = new ProviderSettlementCoordinator<"cursor", string>(() => true);
+    let scans = 0;
+    const pending = deferred<string>();
+    const firstKey = providerCollectionConfigKey(1, undefined, []);
+    const secondKey = providerCollectionConfigKey(1, undefined, ["/tmp/Cursor-2"]);
+
+    const first = coordinator.settle(["cursor"], async () => {
+      scans += 1;
+      return pending.promise;
+    }, { waitMs: 7_500, configKey: firstKey });
+    await flushSettlements();
+
+    const cutoff = controlledCutoff();
+    const second = coordinator.settle(["cursor"], async () => {
+      scans += 1;
+      return "with-extra";
+    }, { waitMs: 7_500, configKey: secondKey, wait: cutoff.wait });
+    await flushSettlements();
+    pending.resolve("without-extra");
+    await flushSettlements();
+    cutoff.release();
+
+    expect(await first).toMatchObject({ current: { cursor: "without-extra" } });
+    expect(await second).toMatchObject({ current: {}, timedOut: ["cursor"] });
+    expect(scans).toBe(1);
+
+    const recovered = await coordinator.settle(["cursor"], async () => {
+      scans += 1;
+      return "with-extra";
+    }, { waitMs: 7_500, configKey: secondKey });
+    expect(recovered).toMatchObject({ current: { cursor: "with-extra" }, timedOut: [] });
+    expect(scans).toBe(2);
   });
 });

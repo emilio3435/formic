@@ -105,6 +105,22 @@ function normalizePath(path: string): string {
   return stripTrailingSep(normalize(path));
 }
 
+/* Only the leading token. Wrapper scripts write --user-data-dir="$HOME/..."
+   and --home=~/...; a general expander would treat $HOME in the middle of a
+   path as a variable, which we do not want. */
+function expandLeadingHome(path: string, home: string): string {
+  if (path === "~" || path === "$HOME" || path === "${HOME}") return home;
+  if (path.startsWith("~/")) return `${home}${path.slice(1)}`;
+  if (path.startsWith("$HOME/")) return `${home}${path.slice("$HOME".length)}`;
+  if (path.startsWith("${HOME}/")) return `${home}${path.slice("${HOME}".length)}`;
+  return path;
+}
+
+function resolveExtractedPath(raw: string | undefined, home: string): string | undefined {
+  if (raw === undefined) return undefined;
+  return normalizePath(expandLeadingHome(raw, home));
+}
+
 function samePath(left: string, right: string): boolean {
   return normalizePath(left) === normalizePath(right);
 }
@@ -184,11 +200,12 @@ function extractedHomeFlag(text: string): string | undefined {
 }
 
 function argvPointsAt(dataDir: string, fs: ScanFs): boolean {
+  const home = fs.home();
   return fs.processArgv().some((argv) => {
-    const userData = extractedUserDataDir(argv);
-    const home = extractedHomeFlag(argv);
+    const userData = resolveExtractedPath(extractedUserDataDir(argv), home);
+    const homeFlag = resolveExtractedPath(extractedHomeFlag(argv), home);
     return (userData !== undefined && samePath(userData, dataDir))
-      || (home !== undefined && samePath(home, dataDir));
+      || (homeFlag !== undefined && samePath(homeFlag, dataDir));
   });
 }
 
@@ -286,7 +303,10 @@ function extractScriptDataDir(appPath: string, fs: ScanFs): string | undefined {
     if (fs.isDirectory(bin)) continue;
     const text = fs.readTextCapped(bin, SCRIPT_CAP_BYTES);
     if (text === undefined || !text.startsWith("#!")) continue;
-    const dataDir = extractedUserDataDir(text) ?? extractedHomeFlag(text);
+    const dataDir = resolveExtractedPath(
+      extractedUserDataDir(text) ?? extractedHomeFlag(text),
+      fs.home(),
+    );
     if (dataDir) return dataDir;
   }
   return undefined;
@@ -307,7 +327,7 @@ export function scanAgentHomes(fs: ScanFs): CollectorCandidate[] {
 
   const consider = (raw: string | undefined): void => {
     if (!raw || Date.now() > deadline) return;
-    const dataDir = normalizePath(raw);
+    const dataDir = normalizePath(expandLeadingHome(raw, home));
     if (!isAllowedAliasTarget(dataDir, home)) return;
     if (seen.has(dataDir) || !fs.isDirectory(dataDir)) return;
     let hit: CollectorCandidate | undefined;
@@ -333,15 +353,17 @@ export function scanAgentHomes(fs: ScanFs): CollectorCandidate[] {
     }
   };
 
-  scanApps(join(home, "Applications"));
-  scanApps("/Applications");
-
+  /* Application Support before the two *.app walks so extras such as Cursor-2
+     are considered while the 2s budget remains. */
   for (const name of fs.readdir(join(home, "Library/Application Support"))) {
     if (Date.now() > deadline) break;
     if (SKIP_ROOT_NAMES.has(name) || name === "." || name === "..") continue;
     const dir = join(home, "Library/Application Support", name);
     if (fs.isDirectory(dir)) consider(dir);
   }
+
+  scanApps(join(home, "Applications"));
+  scanApps("/Applications");
 
   for (const name of fs.readdir(home)) {
     if (Date.now() > deadline) break;
@@ -352,7 +374,10 @@ export function scanAgentHomes(fs: ScanFs): CollectorCandidate[] {
 
   for (const argv of fs.processArgv()) {
     if (Date.now() > deadline) break;
-    const extracted = extractedUserDataDir(argv) ?? extractedHomeFlag(argv);
+    const extracted = resolveExtractedPath(
+      extractedUserDataDir(argv) ?? extractedHomeFlag(argv),
+      home,
+    );
     if (!extracted) continue;
     if (isUnder(extracted, home) || isUnder(extracted, "/Applications")) consider(extracted);
   }
