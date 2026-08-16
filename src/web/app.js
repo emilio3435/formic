@@ -9295,6 +9295,7 @@ const PROVIDER_MARK = {
   claude: { src: "/icons/claude.svg" },
   spark: { src: "/icons/meta.svg" },
   grok: { src: "/icons/grok.svg" },
+  xai: { src: "/icons/xai.svg" },
   cursor: { src: "/icons/cursor.svg" },
   prime: { src: "/icons/prime-orch.svg" },
   factory: { src: "/icons/factory.svg" },
@@ -9310,7 +9311,7 @@ const HARNESS_MARK = {
   factory: { src: "/icons/factory.svg", label: "Factory" },
   prime: { src: "/icons/prime-orch.svg", label: "Prime" },
   omp: { src: "/icons/omp.svg", label: "OMP" },
-  grok: { src: "/icons/grok.svg", label: "Grok Build" },
+  grok: { src: "/icons/xai.svg", label: "Grok Build" },
   hermes: { src: "/icons/formic-mark.svg", label: "Hermes" },
   omni: { src: "/icons/omp.svg", label: "OMP" },
 };
@@ -14502,7 +14503,7 @@ Object.assign(globalThis.TheAntHill, {
   cmuxBadgeNode, ackedMarkNode, syncAckButton, acknowledgedClause,
   renderCmuxNotifySection, cmuxNotifyRow, notifyPanelPaintSig,
   clearCmuxNotification, applySyncAck, syncRequest, syncFailureText, syncPending,
-  HARNESS_MARK, harnessKeyOf, agentKeyOf,
+  HARNESS_MARK, AGENT_MARK, harnessKeyOf, agentKeyOf,
 });
 
 if (typeof document !== "undefined" && typeof window !== "undefined") {

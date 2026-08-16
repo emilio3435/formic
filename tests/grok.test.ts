@@ -214,7 +214,10 @@ describe("the Grok harness stays distinct from its model badge", () => {
 
     expect(web.harnessKeyOf(row)).toBe("grok");
     expect(web.HARNESS_MARK[web.harnessKeyOf(row)].label).toBe("Grok Build");
+    expect(web.HARNESS_MARK.grok.src).toBe("/icons/xai.svg");
     expect(web.agentKeyOf(row)).toBe("grok");
+    expect(web.AGENT_MARK.grok.src).toBe("/icons/grok.svg");
+    expect(web.HARNESS_MARK.grok.src).not.toBe(web.AGENT_MARK.grok.src);
   });
 
   test("Cursor-hosted Grok remains a Cursor harness", () => {
