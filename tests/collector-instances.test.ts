@@ -40,7 +40,7 @@ describe("classifyDataDir", () => {
     expect(hit?.default).toBe(false);
   });
 
-  test("Grok Bot persistence is grok-bot / needs-parser", () => {
+  test("Grok Bot persistence is grok-bot and no longer needs-parser", () => {
     const root = mkdtempSync(join(tmpdir(), "ah-scan-"));
     const dataDir = join(root, "Library/Application Support/Grok Bot 2");
     mkdirSync(join(dataDir, "sand-client-persistence"), { recursive: true });
@@ -48,7 +48,7 @@ describe("classifyDataDir", () => {
     const hit = classifyDataDir(dataDir, memFs(root));
     expect(hit?.kind).toBe("grok-bot");
     expect(hit?.provider).toBeNull();
-    expect(hit?.reason).toBe("needs-parser");
+    expect(hit?.reason).toBeUndefined();
   });
 
   test("extra grok home is grok-cli / needs-home-list", () => {
@@ -321,6 +321,8 @@ describe("JsonCollectorInstanceStore", () => {
     const again = await JsonCollectorInstanceStore.open(path);
     expect(again.get().find((i) => i.id === "cursor-gui:cursor-2")?.onboarded).toBe(true);
     expect(again.onboardedGuiRoots()).toEqual(["/Users/me/Library/Application Support/Cursor-2"]);
+    expect(again.onboardedRoots("cursor-gui")).toEqual(again.onboardedGuiRoots());
+    expect(again.onboardedRoots("grok-bot")).toEqual([]);
   });
 
   test("defaults cannot be turned off", async () => {

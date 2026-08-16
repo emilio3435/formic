@@ -59,6 +59,7 @@ const ackStore = await JsonAckStore.open(join(PROJECT_ROOT, "data/acks.json"));
 const state = new HubState(runner, archiveStore, programHints, {
   settingsReader: () => settingsStore.get(),
   guiRootsReader: () => collectorInstanceStore.onboardedGuiRoots(),
+  botRootsReader: () => collectorInstanceStore.onboardedRoots("grok-bot"),
   triageReader: () => triageStore.list(),
   cmuxExecutable,
   bindingStore: identityBindingStore,

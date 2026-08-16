@@ -292,7 +292,7 @@ export function classifyDataDir(dataDir: string, fs: ScanFs, deadline?: number):
     return candidate("hermes", dataDir, fs);
   }
   if (base.startsWith("Grok Bot") && fs.isDirectory(join(dataDir, "sand-client-persistence"))) {
-    return candidate("grok-bot", dataDir, fs, "needs-parser");
+    return candidate("grok-bot", dataDir, fs);
   }
   if (base === "OpenBurnBar") {
     return candidate("burnbar", dataDir, fs);
@@ -661,10 +661,14 @@ export class JsonCollectorInstanceStore {
     return this.get();
   }
 
-  onboardedGuiRoots(): string[] {
+  onboardedRoots(kind: CollectorKind): string[] {
     return this.#instances
-      .filter((row) => row.kind === "cursor-gui" && row.onboarded && !row.default)
+      .filter((row) => row.kind === kind && row.onboarded && !row.default)
       .map((row) => row.dataDir);
+  }
+
+  onboardedGuiRoots(): string[] {
+    return this.onboardedRoots("cursor-gui");
   }
 }
 

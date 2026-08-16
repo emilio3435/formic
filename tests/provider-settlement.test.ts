@@ -209,6 +209,19 @@ describe("provider settlement", () => {
     expect(withRoot).toContain("Cursor-2");
   });
 
+  test("extra Grok Bot roots change the collection config key", () => {
+    const windowMs = 36 * 3600_000;
+    const without = providerCollectionConfigKey(windowMs, undefined, []);
+    const withBot = providerCollectionConfigKey(
+      windowMs,
+      undefined,
+      [],
+      ["/Users/me/Library/Application Support/Grok Bot 2"],
+    );
+    expect(withBot).not.toBe(without);
+    expect(withBot).toContain("Grok Bot 2");
+  });
+
   test("two settle calls with different extra-root lists do not share a scan", async () => {
     const coordinator = new ProviderSettlementCoordinator<"cursor", string>(() => true);
     let scans = 0;

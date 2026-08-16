@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 2,
+  "value": {
+    "entries": [
+      {
+        "id": "entry-user",
+        "kind": "send-message",
+        "message": "Please parse the persisted conversation.",
+        "timestampMs": 1999999960000
+      },
+      {
+        "id": "entry-agent",
+        "kind": "message",
+        "role": "assistant",
+        "content": "Parsed the Grok Bot transcript.",
+        "timestampMs": 1999999970000
+      },
+      {
+        "id": "entry-empty",
+        "kind": "message",
+        "role": "assistant",
+        "content": "   ",
+        "timestampMs": 1999999975000
+      }
+    ],
+    "epochHint": 3,
+    "acceptedSequenceHint": 7,
+    "persistedAt": 1999999980000
+  }
+}

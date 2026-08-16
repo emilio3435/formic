@@ -128,8 +128,9 @@ export function providerCollectionConfigKey(
   windowMs: number,
   thresholds: { readonly freshMs?: number; readonly quietMs?: number } | undefined,
   extraCursorGuiRoots: readonly string[],
+  extraGrokBotRoots: readonly string[] = [],
 ): string {
-  return `${windowMs}:${thresholds?.freshMs ?? "default"}:${thresholds?.quietMs ?? "default"}:${extraCursorGuiRoots.join(",")}`;
+  return `${windowMs}:${thresholds?.freshMs ?? "default"}:${thresholds?.quietMs ?? "default"}:${extraCursorGuiRoots.join(",")}:bot=${extraGrokBotRoots.join(",")}`;
 }
 
 function waitWithAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -214,6 +215,7 @@ export interface HubStateOptions {
   collectors?: HubCollectors;
   settingsReader?: () => HubSettings;
   guiRootsReader?: () => readonly string[];
+  botRootsReader?: () => readonly string[];
   triageReader?: () => readonly TriageQueueSummary[];
   burnReader?: () => Promise<UsageSummary>;
   cmuxExecutable?: string;
@@ -285,6 +287,7 @@ export class HubState {
   private readonly collectors: HubCollectors;
   private readonly settingsReader?: () => HubSettings;
   private readonly guiRootsReader?: () => readonly string[];
+  private readonly botRootsReader?: () => readonly string[];
   private readonly triageReader?: () => readonly TriageQueueSummary[];
   private readonly burnReader?: () => Promise<UsageSummary>;
   private readonly cmuxExecutable: string;
@@ -306,6 +309,7 @@ export class HubState {
     this.collectors = options.collectors ?? DEFAULT_COLLECTORS;
     this.settingsReader = options.settingsReader;
     this.guiRootsReader = options.guiRootsReader;
+    this.botRootsReader = options.botRootsReader;
     this.triageReader = options.triageReader;
     this.burnReader = options.burnReader;
     this.cmuxExecutable = options.cmuxExecutable ?? DEFAULT_CMUX_EXECUTABLE;
@@ -862,6 +866,7 @@ export class HubState {
        restart. */
     const thresholds = settings ? lifecycleThresholds(settings) : undefined;
     const extraCursorGuiRoots = this.guiRootsReader?.() ?? [];
+    const extraGrokBotRoots = this.botRootsReader?.() ?? [];
     type SessionsResult = Awaited<ReturnType<HubCollectors["sessions"]>>;
     type SpendSourcesResult = Awaited<ReturnType<typeof collectHermesSpendSources>>;
     type CmuxResult = Awaited<ReturnType<HubCollectors["cmux"]>>;
@@ -950,13 +955,13 @@ export class HubState {
     });
     const providerCollection = (this.collectors.sessionProvider && this.collectors.finalizeSessions
       ? track("providers", (async () => {
-          const configKey = providerCollectionConfigKey(windowMs, thresholds, extraCursorGuiRoots);
+          const configKey = providerCollectionConfigKey(windowMs, thresholds, extraCursorGuiRoots, extraGrokBotRoots);
           const selection = await this.#providerSettlement.settle(
             providers,
             async (provider) => {
               try {
                 return await this.collectors.sessionProvider!(
-                  provider, homedir(), windowMs, thresholds, { extraCursorGuiRoots }, signal,
+                  provider, homedir(), windowMs, thresholds, { extraCursorGuiRoots, extraGrokBotRoots }, signal,
                 );
               } catch (error) {
                 return {
@@ -989,7 +994,7 @@ export class HubState {
             );
           }
         })())
-      : capture("session collection failed", this.collectors.sessions(homedir(), windowMs, thresholds, { extraCursorGuiRoots }, signal), (value) => {
+      : capture("session collection failed", this.collectors.sessions(homedir(), windowMs, thresholds, { extraCursorGuiRoots, extraGrokBotRoots }, signal), (value) => {
           sessionsResult = value;
         })).catch((error) => {
           if (!signal.aborted) {

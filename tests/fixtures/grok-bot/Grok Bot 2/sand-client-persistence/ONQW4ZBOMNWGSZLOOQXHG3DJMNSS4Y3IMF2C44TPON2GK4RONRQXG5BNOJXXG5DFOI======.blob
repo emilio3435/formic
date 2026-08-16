@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "value": {
+    "rows": [
+      {
+        "id": "11111111-2222-4333-8444-555555555555",
+        "name": "Synthetic Bot session",
+        "path": "/Users/example/Developer/formic",
+        "createdAt": 1999999880000,
+        "updatedAt": 1999999940000,
+        "lastActivityAt": 1999999970000,
+        "lastEntry": "Roster fallback should not replace the replica tail."
+      },
+      {
+        "id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+        "title": "Hidden synthetic session",
+        "updatedAt": 1999999990000,
+        "lastActivityAt": 1999999990000,
+        "isHiddenFromSidebar": true
+      }
+    ]
+  }
+}
