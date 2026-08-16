@@ -2035,10 +2035,21 @@ body.feed-frozen .programs { opacity: 0.62; }
 /* Dual harness+agent marks — two 1.35rem badges overlapping by 0.35rem, reading left→right as harness then model. */
 .row-identity.has-dual-marks { grid-template-columns: 2.2rem minmax(0, 1fr); }
 .dual-marks { display: inline-flex; align-items: center; gap: 0; flex: none; }
+.dual-marks.has-instance-home { gap: 0.35rem; }
 .dual-marks .provider-mark { width: 1.35rem; height: 1.35rem; padding: 0.18rem; border-radius: 50%; background: var(--raise); border: 1px solid var(--line); box-sizing: border-box; }
 .dual-marks .harness-mark { position: relative; z-index: 1; }
 .dual-marks .agent-mark { margin-left: -0.35rem; z-index: 0; opacity: 0.97; }
+.dual-marks.has-instance-home .agent-mark { margin-right: 0.05rem; }
 .dual-marks .agent-mark.is-empty { color: var(--faint); border-style: dashed; }
+.instance-home {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--faint);
+  white-space: nowrap;
+}
+.row-identity.has-dual-marks:has(.instance-home) { grid-template-columns: auto minmax(0, 1fr); }
 .swarm-anchor .dual-marks .provider-mark { width: 1.15rem; height: 1.15rem; padding: 0.14rem; }
 @media (forced-colors: active) { .dual-marks .provider-mark { border: 1px solid CanvasText; } }
 

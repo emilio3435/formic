@@ -9511,10 +9511,22 @@ function agentMark(agent) {
   if (!mark || !mark.src) return el("span", { class: "provider-mark provider-mark-text agent-mark", title: label, "aria-label": "Agent " + label, text: label.slice(0, 1) });
   return el("img", { class: "provider-mark agent-mark" + (mark.raster ? " provider-mark-raster" : ""), src: mark.src, alt: label, title: "Agent " + label });
 }
+function instanceHomeOf(agent) {
+  return typeof agent.instanceLabel === "string" ? agent.instanceLabel.trim() : "";
+}
+
 function harnessAgentMarks(agent) {
   const h = harnessMark(agent);
   const a = agentMark(agent);
-  return el("span", { class: "dual-marks", role: "group", "aria-label": "Harness " + (HARNESS_MARK[harnessKeyOf(agent)]?.label || providerLabel(agent.provider)) + ", Agent " + (modelShort(agent.model) || "not reported") }, h, a);
+  const home = instanceHomeOf(agent);
+  const harnessName = HARNESS_MARK[harnessKeyOf(agent)]?.label || providerLabel(agent.provider);
+  return el("span", {
+    class: "dual-marks" + (home ? " has-instance-home" : ""),
+    role: "group",
+    "aria-label": "Harness " + harnessName + (home ? " " + home : "") + ", Agent " + (modelShort(agent.model) || "not reported"),
+  },
+    h, a,
+    home ? el("span", { class: "instance-home", title: "Agent home " + home, text: home }) : null);
 }
 
 function providerMark(agent) {
