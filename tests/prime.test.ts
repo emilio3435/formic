@@ -13,10 +13,21 @@ describe("Prime human-facing recency", () => {
 
     expect(agent?.lastHumanFacingAt).toBe("2026-08-11T10:00:02.000Z");
     expect(agent?.updatedAt).toBe("2026-08-11T10:00:03.000Z");
-    expect(agent?.lastHumanMessage).toBeUndefined();
-    expect(agent?.lastUserMessage).toBeUndefined();
-    expect(agent?.lastAgentMessage).toBeUndefined();
-    expect(agent?.lastAgentClosing).toBeUndefined();
+    expect(agent?.lastUserMessage).toBe("Please inspect Prime.");
+    expect(agent?.lastAgentClosing).toBeTruthy();
+    expect(agent?.status).toBe("running");
+  });
+
+  test("an assistant question is the closing, not the kickoff", () => {
+    const agent = parsePrimeJsonl([
+      JSON.stringify({ type: "session", id: "prime-ask", cwd: "/tmp/formic", timestamp: "2026-08-11T10:00:00.000Z" }),
+      JSON.stringify({ type: "message", timestamp: "2026-08-11T10:00:01.000Z", message: { role: "user", content: "Port the rate limiter." } }),
+      JSON.stringify({ type: "message", timestamp: "2026-08-11T10:00:02.000Z", message: { role: "assistant", content: "Should I land this now?" } }),
+    ].join("\n"), { nowMs: Date.parse("2026-08-11T10:00:04.000Z") });
+
+    expect(agent?.lastAgentClosing).toBe("Should I land this now?");
+    expect(agent?.lastUserMessage).toBe("Port the rate limiter.");
+    expect(agent?.status).toBe("running");
   });
 
   test("preserves the reserved heartbeat session classification", () => {
