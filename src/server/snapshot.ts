@@ -448,7 +448,12 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
              scan window, so the live process table says nothing about it — offering
              the roster as evidence there would re-end the whole filing cabinet on
              grounds that never applied to it. */
-          processRosterComplete: scope === "observed" ? input.processRosterComplete : undefined,
+          /* Grok Bot has no process identity. A complete Mac roster does not
+             prove those chats are gone — it proves we cannot see Grok Bot.app.
+             Passing complete here files them finished after 45 quiet minutes. */
+          processRosterComplete: scope === "observed" && !source.id.startsWith("grok:bot:")
+            ? input.processRosterComplete
+            : undefined,
           /* Records written before this contract carry no verdict of their own. The
              one thing still knowable about them is whether a human filed them, so
              that is what a legacy operator archive freezes as; everything else
