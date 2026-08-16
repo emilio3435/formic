@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { classifyDataDir, instanceIdFor, readTextCappedSync, scanAgentHomes, type ScanFs } from "../src/server/collector-instances";
+import { classifyDataDir, instanceIdFor, JsonCollectorInstanceStore, readTextCappedSync, scanAgentHomes, type ScanFs } from "../src/server/collector-instances";
 
 function underRoot(root: string, path: string): boolean {
   return path === root || path.startsWith(`${root}/`);
@@ -204,5 +204,53 @@ describe("classify deadline", () => {
     expect(hit).toBeUndefined();
     expect(listed.some((p) => p === "/Applications" || p.startsWith("/Applications/"))).toBe(false);
     expect(listed.some((p) => p.includes("sessions"))).toBe(false);
+  });
+});
+
+describe("JsonCollectorInstanceStore", () => {
+  test("empty store + scan leaves extras not onboarded", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ah-store-"));
+    const store = await JsonCollectorInstanceStore.open(join(dir, "collector-instances.json"));
+    const merged = store.mergeScan([{
+      kind: "cursor-gui", provider: "cursor", dataDir: "/tmp/Cursor-2",
+      label: "Cursor-2", default: false,
+    }], "2026-08-16T00:00:00.000Z");
+    expect(merged[0].onboarded).toBe(false);
+    expect(store.onboardedGuiRoots()).toEqual([]);
+  });
+
+  test("update onboarded persists across reopen", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ah-store-"));
+    const path = join(dir, "collector-instances.json");
+    const store = await JsonCollectorInstanceStore.open(path);
+    store.mergeScan([{
+      kind: "cursor-gui", provider: "cursor", dataDir: "/Users/me/Library/Application Support/Cursor-2",
+      label: "Cursor-2", default: false,
+    }], "2026-08-16T00:00:00.000Z");
+    await store.update({ ids: ["cursor-gui:cursor-2"], onboarded: true });
+    const again = await JsonCollectorInstanceStore.open(path);
+    expect(again.get().find((i) => i.id === "cursor-gui:cursor-2")?.onboarded).toBe(true);
+    expect(again.onboardedGuiRoots()).toEqual(["/Users/me/Library/Application Support/Cursor-2"]);
+  });
+
+  test("defaults cannot be turned off", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ah-store-"));
+    const store = await JsonCollectorInstanceStore.open(join(dir, "collector-instances.json"));
+    store.mergeScan([{
+      kind: "cursor-gui", provider: "cursor",
+      dataDir: "/Users/me/Library/Application Support/Cursor",
+      label: "Cursor", default: true,
+    }], "2026-08-16T00:00:00.000Z");
+    await expect(store.update({ ids: ["cursor-gui:cursor"], onboarded: false }))
+      .rejects.toThrow(/default/i);
+  });
+
+  test("corrupt file boots empty and reports loadError", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ah-store-"));
+    const path = join(dir, "collector-instances.json");
+    writeFileSync(path, "{nope");
+    const store = await JsonCollectorInstanceStore.open(path);
+    expect(store.get()).toEqual([]);
+    expect(store.loadError).toContain("collector-instances.json");
   });
 });

@@ -1,6 +1,8 @@
 import { closeSync, openSync, readSync } from "node:fs";
-import { basename, join, normalize } from "node:path";
-import type { Provider } from "../shared/types";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { basename, dirname, join, normalize } from "node:path";
+import { PROVIDERS, type Provider } from "../shared/types";
+import type { SettingsFileOperations } from "./settings";
 
 export type CollectorKind =
   | "cursor-gui" | "cursor-cli" | "codex" | "claude" | "factory"
@@ -354,4 +356,207 @@ export function scanAgentHomes(fs: ScanFs): CollectorCandidate[] {
   }
 
   return hits;
+}
+
+export interface CollectorInstance {
+  id: string;
+  kind: CollectorKind;
+  provider: Provider | null;
+  label: string;
+  dataDir: string;
+  onboarded: boolean;
+  ignored: boolean;
+  default: boolean;
+  discoveredAt: string;
+  lastSeenAt: string;
+  reason?: CollectorReason;
+}
+
+const COLLECTOR_INSTANCES_VERSION = 1;
+
+const nodeFiles: SettingsFileOperations = {
+  readText: (path) => readFile(path, "utf8"),
+  makeDirectory: async (path) => {
+    await mkdir(path, { recursive: true });
+  },
+  writeText: async (path, contents) => {
+    await writeFile(path, contents, "utf8");
+  },
+  rename,
+};
+
+function isCollectorKind(value: unknown): value is CollectorKind {
+  return typeof value === "string" && value in PROVIDER_FOR;
+}
+
+function isProvider(value: unknown): value is Provider {
+  return typeof value === "string" && (PROVIDERS as readonly string[]).includes(value);
+}
+
+function isCollectorReason(value: unknown): value is CollectorReason {
+  return value === "needs-parser" || value === "needs-home-list";
+}
+
+function parseInstance(value: unknown): CollectorInstance | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (typeof record.id !== "string" || !record.id) return undefined;
+  if (!isCollectorKind(record.kind)) return undefined;
+  if (record.provider !== null && !isProvider(record.provider)) return undefined;
+  if (typeof record.label !== "string") return undefined;
+  if (typeof record.dataDir !== "string") return undefined;
+  if (typeof record.onboarded !== "boolean") return undefined;
+  if (typeof record.ignored !== "boolean") return undefined;
+  if (typeof record.default !== "boolean") return undefined;
+  if (typeof record.discoveredAt !== "string") return undefined;
+  if (typeof record.lastSeenAt !== "string") return undefined;
+  const instance: CollectorInstance = {
+    id: record.id,
+    kind: record.kind,
+    provider: record.provider,
+    label: record.label,
+    dataDir: record.dataDir,
+    onboarded: record.onboarded,
+    ignored: record.ignored,
+    default: record.default,
+    discoveredAt: record.discoveredAt,
+    lastSeenAt: record.lastSeenAt,
+  };
+  if (isCollectorReason(record.reason)) instance.reason = record.reason;
+  return instance;
+}
+
+function parseRecord(value: unknown, path: string): { instances: CollectorInstance[]; loadError?: string } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { instances: [], loadError: `collector instances at ${path} is not an object` };
+  }
+  const record = value as Record<string, unknown>;
+  if (record.version !== COLLECTOR_INSTANCES_VERSION) {
+    return { instances: [], loadError: `collector instances at ${path} has unknown version` };
+  }
+  if (!Array.isArray(record.instances)) {
+    return { instances: [], loadError: `collector instances at ${path} is missing instances` };
+  }
+  return { instances: record.instances.flatMap((row) => {
+    const instance = parseInstance(row);
+    return instance ? [instance] : [];
+  }) };
+}
+
+function copyInstance(instance: CollectorInstance): CollectorInstance {
+  return { ...instance };
+}
+
+/* Import/ignore is its own file because HubSettings rejects unknown keys.
+   Vanished extras stay so Ignore still has a row. Writes are temp-then-rename. */
+export class JsonCollectorInstanceStore {
+  #instances: CollectorInstance[];
+  #writeQueue: Promise<void> = Promise.resolve();
+  readonly #loadError?: string;
+
+  private constructor(
+    private readonly path: string,
+    private readonly files: SettingsFileOperations,
+    instances: CollectorInstance[],
+    loadError?: string,
+  ) {
+    this.#instances = instances;
+    this.#loadError = loadError;
+  }
+
+  static async open(
+    path: string,
+    files: SettingsFileOperations = nodeFiles,
+  ): Promise<JsonCollectorInstanceStore> {
+    let instances: CollectorInstance[] = [];
+    let loadError: string | undefined;
+    try {
+      const loaded = parseRecord(JSON.parse(await files.readText(path)), path);
+      instances = loaded.instances;
+      loadError = loaded.loadError;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        loadError = `collector instances at ${path} could not be read: `
+          + (error instanceof Error ? error.message : String(error));
+      }
+    }
+    if (loadError) console.error(`[collector-instances] ${loadError}`);
+    return new JsonCollectorInstanceStore(path, files, instances, loadError);
+  }
+
+  get loadError(): string | undefined {
+    return this.#loadError;
+  }
+
+  get(): CollectorInstance[] {
+    return this.#instances.map(copyInstance);
+  }
+
+  mergeScan(found: CollectorCandidate[], nowIso: string): CollectorInstance[] {
+    for (const candidate of found) {
+      const id = instanceIdFor(candidate.kind, candidate.dataDir);
+      const existing = this.#instances.find((row) => row.id === id);
+      if (existing) {
+        existing.kind = candidate.kind;
+        existing.provider = candidate.provider;
+        existing.dataDir = candidate.dataDir;
+        existing.default = candidate.default;
+        existing.lastSeenAt = nowIso;
+        if (candidate.reason) existing.reason = candidate.reason;
+        else delete existing.reason;
+        continue;
+      }
+      const instance: CollectorInstance = {
+        id,
+        kind: candidate.kind,
+        provider: candidate.provider,
+        label: candidate.label,
+        dataDir: candidate.dataDir,
+        onboarded: candidate.default,
+        ignored: false,
+        default: candidate.default,
+        discoveredAt: nowIso,
+        lastSeenAt: nowIso,
+      };
+      if (candidate.reason) instance.reason = candidate.reason;
+      this.#instances.push(instance);
+    }
+    return this.get();
+  }
+
+  async update(patch: {
+    ids: string[];
+    onboarded?: boolean;
+    ignored?: boolean;
+    label?: string;
+  }): Promise<CollectorInstance[]> {
+    const write = this.#writeQueue.then(async () => {
+      const next = this.#instances.map(copyInstance);
+      for (const id of patch.ids) {
+        const instance = next.find((row) => row.id === id);
+        if (!instance) continue;
+        if (instance.default && patch.onboarded === false) {
+          throw new Error("default collector instances cannot be turned off");
+        }
+        if (patch.onboarded !== undefined) instance.onboarded = patch.onboarded;
+        if (patch.ignored !== undefined) instance.ignored = patch.ignored;
+        if (patch.label !== undefined) instance.label = patch.label;
+      }
+      await this.files.makeDirectory(dirname(this.path));
+      const temp = `${this.path}.${process.pid}.${Date.now()}.tmp`;
+      const record = { version: COLLECTOR_INSTANCES_VERSION, instances: next };
+      await this.files.writeText(temp, `${JSON.stringify(record, null, 2)}\n`);
+      await this.files.rename(temp, this.path);
+      this.#instances = next;
+    });
+    this.#writeQueue = write.catch(() => {});
+    await write;
+    return this.get();
+  }
+
+  onboardedGuiRoots(): string[] {
+    return this.#instances
+      .filter((row) => row.kind === "cursor-gui" && row.onboarded && !row.default)
+      .map((row) => row.dataDir);
+  }
 }
