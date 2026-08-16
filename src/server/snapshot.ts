@@ -579,7 +579,12 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
          from the same evidence. Only where it is true and only on observed
          rows, so it costs nothing on the ~660 retained records it can never
          apply to. */
-      ...(scope === "observed" && !lastKnown && input.processRosterComplete ? { processRosterComplete: true } : {}),
+      /* Grok Bot chats have no process identity (#105). Publishing a complete
+         roster here files them finished/process-absent after 45 quiet minutes
+         and they vanish from the Board tab into History under "store.db". */
+      ...(scope === "observed" && !lastKnown && input.processRosterComplete && !source.id.startsWith("grok:bot:")
+        ? { processRosterComplete: true }
+        : {}),
       ...(notification ? { attention: true } : {}),
       processState,
       outcome,

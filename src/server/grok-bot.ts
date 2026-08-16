@@ -46,7 +46,9 @@ function text(value: unknown): string | undefined {
 }
 
 function millis(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  /* 0 is a Grok Bot sentinel for "never", not 1970-01-01. Treating it as a
+     real clock drops the row as aged-out of every scan window. */
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined;
   return Number.isFinite(new Date(value).getTime()) ? value : undefined;
 }
 
@@ -60,7 +62,13 @@ function lastEntryText(value: unknown): string | undefined {
 }
 
 function filesystemPath(value: string | undefined): string | undefined {
-  return value?.startsWith("/") ? value : undefined;
+  if (!value?.startsWith("/")) return undefined;
+  /* The roster `path` is the Bot sandbox sqlite file
+     (`/home/box/sand-data/agents/<id>/store.db`), not a Mac checkout. Using it
+     as cwd groups every Bot row under a program named "store.db" and hides
+     them from the repos the operator actually scans. */
+  if (value.startsWith("/home/box/") || value.endsWith("/store.db")) return undefined;
+  return value;
 }
 
 function missing(error: unknown): boolean {
@@ -268,7 +276,10 @@ export async function collectGrokBotSessions(
           provider: "grok",
           sourceSessionId: `bot:${row.id}`,
           displayName: row.name ?? row.title ?? row.description,
-          cwd: filesystemPath(row.path),
+          /* Sandbox store.db is not a project. Fall back to the Mac instance
+             home so the board groups "Grok Bot" / "Grok Bot 2", not "store.db". */
+          cwd: filesystemPath(row.path) ?? root,
+          originCwd: root,
           startedAt: timestamp(row.createdAt),
           updatedAt,
           tokens: { scope: "unknown", provenance: "unknown" },
