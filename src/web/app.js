@@ -9038,42 +9038,55 @@ function renderSwarmAnchor(agent, depth, activeChildren, pinned = false, board =
 }
 
 function rowSummary(agent) {
-  const parts = rowSummaryParts(agent);
-  return parts.kickoff ? parts.primary + " " + parts.kickoff : parts.primary;
+  return rowSummaryParts(agent).primary;
 }
 
 /* Machine data that survived cleaning. Same pattern as the server's
    readableClosingText: a closing that is JSON / a diff hunk / a log line
    is not something the roster should quote. */
 const ROW_MACHINE_TEXT = /\{"|"\}|":\s*"|\[\{|\}\]|^\s*[+-]{3}\s|\b[\w./-]+:\d+:\d+\b|\{\s*\w+\s*=|\w+="[^"]*"/;
+/* Codex appends a citation trailer to an otherwise readable close. */
+const ROW_CITATION_TRAILER = /<oai-mem-citation>[\s\S]*?<\/oai-mem-citation>/gi;
+const ROW_CITATION_LEFTOVER = /<\/?(?:oai-mem-citation|citation_entries|citation_entry|rollout_ids|rollout_id)\b[^>]*>/gi;
 
-function rowClosingText(agent) {
-  const closing = String(agent.lastAgentClosing || "").trim();
-  if (closing && !ROW_MACHINE_TEXT.test(closing)) return closing;
-  const spoken = String(agent.lastAgentMessage || "").trim();
-  if (spoken && !spoken.endsWith("…") && !ROW_MACHINE_TEXT.test(spoken)) return spoken;
-  return "";
+function stripRowMachineTrailer(value) {
+  return String(value || "")
+    .replace(ROW_CITATION_TRAILER, " ")
+    .replace(ROW_CITATION_LEFTOVER, " ")
+    .replace(/\s+/g, " ")
+    .replace(/^[.…\s]+/, "")
+    .trim();
 }
 
-function sameRowLine(a, b) {
-  return a.replace(/\s+/g, " ").trim().toLowerCase() === b.replace(/\s+/g, " ").trim().toLowerCase();
+function humanReadableAgentText(value) {
+  const text = stripRowMachineTrailer(value);
+  if (!text) return "";
+  if (ROW_MACHINE_TEXT.test(text)) return "";
+  if (/<\/?\w/.test(text)) return "";
+  return text;
+}
+
+function rowClosingText(agent) {
+  const closing = humanReadableAgentText(agent.lastAgentClosing);
+  if (closing) return closing;
+  const spoken = humanReadableAgentText(agent.lastAgentMessage);
+  if (spoken) return spoken;
+  return "";
 }
 
 function rowSummaryParts(agent) {
   const closing = rowClosingText(agent);
-  const task = agent.task ? withoutSenderHeader(agent.task).trim() : "";
-  const kickoff = task ? conciseText(task, 120) : "";
-  if (closing) {
-    const primary = conciseText(closing, 160);
-    return { primary, kickoff: kickoff && !sameRowLine(kickoff, primary) ? kickoff : "" };
-  }
-  if (kickoff) return { primary: kickoff, kickoff: "" };
+  if (closing) return { primary: conciseText(closing, 160), kickoff: "" };
   const message = formatLastHumanMessage(agent);
-  if (message !== NO_READABLE_MESSAGE) return { primary: message, kickoff: "" };
-  if (agent.statusReason) return { primary: conciseText(agent.statusReason, 120), kickoff: "" };
+  if (message !== NO_READABLE_MESSAGE && !ROW_MACHINE_TEXT.test(message)) {
+    return { primary: message, kickoff: "" };
+  }
+  if (agent.statusReason) {
+    const reason = humanReadableAgentText(agent.statusReason);
+    if (reason) return { primary: conciseText(reason, 120), kickoff: "" };
+  }
   return { primary: NO_READABLE_MESSAGE, kickoff: "" };
 }
-
 /* Codex uses the official ChatGPT/Codex app mark (raster, own background);
    the others are single-color SVG marks that ride in the neutral badge. */
 const PROVIDER_MARK = {
@@ -9589,14 +9602,9 @@ function renderAgentRow(agent, program, opts = {}) {
          without lying about the session. */
       cmuxBadgeNode(agent, state.snap),
       syncAckButton(agent, state.snap)),
-    description || summaryParts.kickoff
+    description
       ? el("span", { class: "row-copy" },
-        description
-          ? el("span", { class: "row-identity-tags row-summary row-description", title: "Last thing this session said or asked. Select for full details.", text: description })
-          : null,
-        summaryParts.kickoff
-          ? el("span", { class: "row-kickoff", title: "Original kickoff", text: summaryParts.kickoff })
-          : null)
+        el("span", { class: "row-identity-tags row-summary row-description", title: "Last thing this session said or asked. Select for full details.", text: description }))
       : null);
 
   // Right-side instrument cluster: status word · outcome, model + ctx%, tokens,
