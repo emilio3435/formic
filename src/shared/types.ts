@@ -472,6 +472,10 @@ export interface AgentSnapshot {
   surfaceTitle?: string;
   /** Latest readable user/assistant prose with a directly associated source timestamp. */
   lastHumanFacingAt?: string;
+  /** Newest user / assistant / tool / system transcript event. Not collector bookkeeping. */
+  lastThreadAt?: string;
+  /** Start of the current open working streak. Absent when that streak has closed. */
+  workingSince?: string;
   /** Sanitized provider-aware prose for dense rows; null means no readable fallback survived. */
   lastHumanMessage: string | null;
   /** Latest sanitized human-legible USER request; null when none survived cleaning. */

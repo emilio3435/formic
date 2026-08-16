@@ -103,6 +103,7 @@ should read is a separate stage, and most of it does not live in `snapshot.ts`:
 | `live.ts` | Stall-aware live: working, needs-you, or waiting inside the stall window. Stalled, finished, and parked rows are not live even if the process is still running. `processAlive` stays a process fact. Shared by `pulse.ts`, `rollupFor`, and snapshot totals so the three live spellings cannot drift. |
 | `pulse.ts` | The live person-blocker count (`pulse.blocked`), momentum, burn rate, and the activity window behind the summary strip. No dead-time field is published without a defensible blocked-entry clock. |
 | `human-message.ts` | Readable prose out of a raw transcript. `readableHumanMessage` keeps a message's **first** 240 characters, because that is where it announces its subject and a row wants one line of it. `readableClosing` keeps the **last** 240, because an agent asks its question in the closing sentence — reading from the front discarded every one of them before the snapshot existed. Two reads of the same message, deliberately. |
+| `thread-clock.ts` | The board row's two thread clocks. `lastThreadAt` is the newest user / assistant / tool / system event, not collector bookkeeping. `workingSince` is the start of the current open working streak, so a later tool does not reset time-doing. Parsers observe as they walk; `makeAgent` falls back from human-message timestamps when a parser (Grok) does not. |
 | `sender-verification.ts` | Whether a leading agent-sender claim is corroborated by that sender's own bounded transcript tail. The current user request outranks the original task; a present unheaded request is direct operator input, not an excuse to inherit a stale sender. Readable contrary evidence is `false`, and unavailable evidence stays absent. |
 | `triage.ts` | The investigation queue and the read-only Luna runs — see `TRIAGE-WORKFLOW.md` |
 | `burnbar.ts`, `burnbar-query.ts` | Cost, read from an external encrypted OpenBurnBar database in an isolated subprocess; billed names that do not match the shared provider registry are disclosed as unmodelled |
@@ -200,7 +201,7 @@ than color, since color on that chip already means *which* role.
 `app.js` holds the render tree and the board's own state machine. Around it:
 `presentation.js` (pure derivations from a snapshot — the layer tests exercise
 directly), `agent-model.js`, `client-state.js`, `dom-primitives.js` (`el`, icons,
-SVG meters), `text-formatters.js`, `api-client.js` (fetch + envelope handling),
+SVG meters), `text-formatters.js`, `row-time-band.js` (one clock under the name: verb + working streak, or a compact last-thread age), `api-client.js` (fetch + envelope handling),
 `client-catalogs.js`, `repaint.js`, `feed-freshness.js`, `transcript.js`,
 `notifications.js`, `tldr-markup.js` (writer mini-markup → styled nodes through
 an allowlist tokenizer — transcript text is untrusted and never meets

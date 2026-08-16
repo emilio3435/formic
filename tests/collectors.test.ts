@@ -46,6 +46,8 @@ describe("human-facing recency remains separate from provider activity", () => {
 
     expect(agent?.lastHumanFacingAt).toBe("2026-08-11T10:00:02.000Z");
     expect(agent?.updatedAt).toBe("2026-08-11T10:00:04.000Z");
+    expect(agent?.lastThreadAt).toBe("2026-08-11T10:00:02.000Z");
+    expect(agent?.workingSince).toBe("2026-08-11T10:00:01.000Z");
   });
 
   test("Codex ignores later reasoning, tool, and token records", () => {
@@ -62,6 +64,8 @@ describe("human-facing recency remains separate from provider activity", () => {
 
     expect(agent?.lastHumanFacingAt).toBe("2026-08-11T10:00:03.000Z");
     expect(agent?.updatedAt).toBe("2026-08-11T10:00:06.000Z");
+    expect(agent?.lastThreadAt).toBe("2026-08-11T10:00:05.000Z");
+    expect(agent?.workingSince).toBe("2026-08-11T10:00:01.000Z");
   });
 
   test("Claude ignores later thinking, tools, and injected metadata", () => {
@@ -75,6 +79,8 @@ describe("human-facing recency remains separate from provider activity", () => {
 
     expect(agent?.lastHumanFacingAt).toBe("2026-08-11T10:00:02.000Z");
     expect(agent?.updatedAt).toBe("2026-08-11T10:00:04.000Z");
+    expect(agent?.lastThreadAt).toBe("2026-08-11T10:00:03.000Z");
+    expect(agent?.workingSince).toBe("2026-08-11T10:00:01.000Z");
   });
 
   test("Claude publishes a flattened row close and a layout-preserving chat body", () => {

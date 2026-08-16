@@ -100,6 +100,10 @@ export interface CollectedAgent {
   nickname?: string;
   /** Latest readable user/assistant prose with a directly associated source timestamp. */
   lastHumanFacingAt?: string;
+  /** Newest user / assistant / tool / system transcript event. Not collector bookkeeping. */
+  lastThreadAt?: string;
+  /** Start of the current open working streak. Absent when that streak has closed. */
+  workingSince?: string;
   lastHumanMessage?: string | null;
   lastUserMessage?: string | null;
   lastAgentMessage?: string | null;

@@ -5,7 +5,8 @@
    file directly; DOM wiring only runs when a document exists. */
 
 import { $, contextPressureOf, el, icon, SVGNS, svgChild, svgGauge, svgMeter, svgSegmentMeter, svgSparkline, svgTitle } from "./dom-primitives.js";
-import { agoText, fmtElapsed, fmtTok, modelShort, providerLabel } from "./text-formatters.js";
+import { agoText, fmtCompactAge, fmtElapsed, fmtTok, fmtWorkingDuration, modelShort, providerLabel, ROW_TIME_VERBS, rowTimeVerb } from "./text-formatters.js";
+import { rowTimeBand } from "./row-time-band.js";
 import { state, paintedEntityKey } from "./client-state.js";
 import { setRepaint } from "./repaint.js";
 import { tldrMarkupNodes } from "./tldr-markup.js";
@@ -1521,7 +1522,8 @@ globalThis.TheAntHill = {
   // presentation.js; these are re-exported here so the client's own test
   // surface can drive parser and renderer through one handle.
   parseSenderHeader, senderOf, senderClaimText, withoutSenderHeader, roleSourceView, specialtyLabel,
-  elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, modelShort, agentName,
+  elapsedDataset, liveElapsedText, fmtTok, fmtElapsed, fmtWorkingDuration, fmtCompactAge,
+  ROW_TIME_VERBS, rowTimeVerb, rowTimeBand, modelShort, agentName,
   sourceAgentName, presentationLabelKey, agentLabelEligible, programName, sessionTag, ambiguousNames, landingRosterNames,
   preferredRenameTarget, terminalSourceName, stripSpinnerFrame, terminalIdentity, terminalBreadcrumb, focusDestinationHint, focusButtonLabel,
   quietSourceLine, fullSourceDetail, verdictGate, conciseText,
@@ -7684,6 +7686,15 @@ function programShellSig(program, agents, ui, label = "") {
    elapsed clock stays out — tickClocks rewrites it in place from
    data-elapsed-base — but the >10min staleness fact does not tick, so it is in. */
 function agentRowSig(agent, ui, opts = {}) {
+  const nowMs = Number.isFinite(Date.parse(ui.snap && ui.snap.generatedAt))
+    ? Date.parse(ui.snap.generatedAt)
+    : Date.now();
+  const opState = operatorState(
+    agent,
+    nowMs,
+    stallThresholdMs(ui.snap),
+    ackedAgent(agent, ui.snap),
+  );
   return [
     agentRecordSig(agent),
     rowStalenessText(agent),
@@ -7725,12 +7736,11 @@ function agentRowSig(agent, ui, opts = {}) {
     // this signature moving, so it has to be in here or the row keeps its
     // cached, unmarked node.
     opts.alerting ? "alert-mark" : "",
-    operatorState(
-      agent,
-      Number.isFinite(Date.parse(ui.snap && ui.snap.generatedAt)) ? Date.parse(ui.snap.generatedAt) : Date.now(),
-      stallThresholdMs(ui.snap),
-      ackedAgent(agent, ui.snap),
-    ) || "",
+    opState || "",
+    /* Quiet-row age is lastThreadAt. Working rows tick duration from
+       workingSince in place; a later tool must not rebuild the row or the
+       verb shimmer restarts. */
+    opState === "working" ? "" : (agent.lastThreadAt || ""),
     ui.momentumMagnify
       ? (momentumPopulation(agent, ui.snap) ? "mom-hot" : "mom-recede")
       : "",
@@ -9389,6 +9399,28 @@ function historyChips(agent) {
   })];
 }
 
+function renderRowTimeBand(agent, nowMs, thresholdMs, alertMuted) {
+  const band = rowTimeBand(agent, nowMs, thresholdMs, alertMuted);
+  if (!band) return null;
+  if (band.kind === "doing") {
+    return el("span", { class: "row-time-band is-working" },
+      el("span", { class: "row-time-band-verb", text: band.verb }),
+      agent.workingSince
+        ? el("span", {
+          class: "row-time-band-clock",
+          text: band.duration,
+          dataset: { workingSince: agent.workingSince },
+        })
+        : null);
+  }
+  return el("span", { class: "row-time-band is-" + band.tone },
+    el("span", {
+      class: "row-time-band-clock",
+      text: band.age,
+      dataset: agent.lastThreadAt ? { compactAgo: agent.lastThreadAt } : undefined,
+    }));
+}
+
 function renderAgentRow(agent, program, opts = {}) {
   const activity = deriveActivity(agent);
   const outcome = deriveOutcome(agent);
@@ -9494,6 +9526,7 @@ function renderAgentRow(agent, program, opts = {}) {
          the fact still reaches this row's aria-label below, because a screen
          reader arrowing row-to-row may never visit the heading between them. */
       null),
+    renderRowTimeBand(agent, Number.isFinite(nowMs) ? nowMs : Date.now(), thresholdMs, alertMuted),
     el("span", { class: "row-identity-tags" },
       /* SYNC-NF. The ack mark leads the line — it is the reason this row is not
          in the strip where the operator last saw it, so it has to be the first
@@ -10033,7 +10066,7 @@ function findSelected() {
    repaint. Only its one clock-like field (`confirmedAt`, the moment a persisted
    binding was last re-confirmed) is dropped, because that moves on its own
    without changing anything the operator reads. */
-const AGENT_SIG_TICKED = new Set(["elapsedMs", "updatedAt", "lastCheckedAt", "confirmedAt"]);
+const AGENT_SIG_TICKED = new Set(["elapsedMs", "updatedAt", "lastCheckedAt", "confirmedAt", "lastThreadAt"]);
 
 /* The agent drawer paints very nearly the whole agent record — status, gates,
    tokens, cwd, git, messages, artifacts, transcript tail, target
@@ -13646,6 +13679,14 @@ function tickClocks(frozen = feedFrozen(), now = Date.now()) {
   // stuck. Freezing it would replace one lie with another.
   for (const node of document.querySelectorAll("[data-ago]")) {
     node.textContent = agoText(node.dataset.ago);
+  }
+  for (const node of document.querySelectorAll("[data-working-since]")) {
+    const start = Date.parse(node.dataset.workingSince);
+    node.textContent = Number.isFinite(start) ? fmtWorkingDuration(now - start) : "";
+  }
+  for (const node of document.querySelectorAll("[data-compact-ago]")) {
+    const at = Date.parse(node.dataset.compactAgo);
+    node.textContent = Number.isFinite(at) ? fmtCompactAge(now - at) : "";
   }
 }
 

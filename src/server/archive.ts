@@ -308,6 +308,8 @@ function archiveCopy(
     nickname: agent.nickname,
     lastHumanMessage: agent.lastHumanMessage,
     lastHumanFacingAt: agent.lastHumanFacingAt,
+    lastThreadAt: agent.lastThreadAt,
+    workingSince: agent.workingSince,
     lastUserMessage: agent.lastUserMessage,
     lastAgentMessage: agent.lastAgentMessage,
     lastUserChatBody: agent.lastUserChatBody,

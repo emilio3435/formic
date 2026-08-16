@@ -33,6 +33,49 @@ export function agoText(iso) {
   return fmtElapsed(Date.now() - t) + " ago";
 }
 
+/* Working-streak duration for the row time band. Fresh work stays blank
+   rather than printing `0s`. Minutes keep leftover seconds (`1m 12s`) so a
+   live streak can be read at a glance; hours keep leftover minutes. */
+export function fmtWorkingDuration(ms) {
+  if (ms == null || !Number.isFinite(ms) || ms < 1000) return "";
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return sec + "s";
+  const min = Math.floor(sec / 60);
+  const remSec = sec % 60;
+  if (min < 60) return remSec ? min + "m " + remSec + "s" : min + "m";
+  const hr = Math.floor(min / 60);
+  const remMin = min % 60;
+  if (hr < 24) return remMin ? hr + "h " + remMin + "m" : hr + "h";
+  return Math.floor(hr / 24) + "d";
+}
+
+/* Quiet-row age: compact integer units, never a sentence, never `0s`. */
+export function fmtCompactAge(ms) {
+  if (ms == null || !Number.isFinite(ms) || ms < 1000) return "";
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return sec + "s";
+  const min = Math.floor(sec / 60);
+  if (min < 60) return min + "m";
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return hr + "h";
+  return Math.floor(hr / 24) + "d";
+}
+
+export const ROW_TIME_VERBS = Object.freeze([
+  "percolating", "foraging", "sifting", "tracing", "stitching",
+]);
+
+/* Stable per agent id so a tick cannot invent a new verb. */
+export function rowTimeVerb(id) {
+  const key = String(id ?? "");
+  let hash = 2166136261;
+  for (let i = 0; i < key.length; i++) {
+    hash ^= key.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return ROW_TIME_VERBS[(hash >>> 0) % ROW_TIME_VERBS.length];
+}
+
 const MODEL_SHORT = [
   ["fable", "fable 5"], ["sol", "sol 5.6"], ["luna", "luna 5.6"],
 ];

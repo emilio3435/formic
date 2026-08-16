@@ -26,6 +26,7 @@ function cursorContextWindow(model: string | undefined): number | undefined {
 }
 
 import { resolveAgentName } from "./naming";
+import { contentHasPartType, observeTranscriptMessage, ThreadClock } from "./thread-clock";
 import { DEFAULT_LIFECYCLE_THRESHOLDS, type LifecycleThresholds } from "./lifecycle";
 import { instanceIdFor } from "./collector-instances";
 import {
@@ -83,6 +84,8 @@ interface CursorTranscript {
   transcriptTail?: string;
   humanMessages: HumanMessageCandidate[];
   lastHumanFacingAt?: string;
+  lastThreadAt?: string;
+  workingSince?: string;
   turnStatus?: string;
 }
 
@@ -184,8 +187,16 @@ function cursorTranscript(jsonl: string): CursorTranscript {
   let user: { index: number; candidate: HumanMessageCandidate } | undefined;
   let assistant: { index: number; candidate: HumanMessageCandidate } | undefined;
   let lastHumanFacingAt: string | undefined;
+  const clock = new ThreadClock();
   for (const [index, row] of jsonlRecords(jsonl).entries()) {
     const text = messageText(row);
+    if (row.type === "turn_ended") {
+      clock.observe(row.timestamp, "system", { endsTurn: true });
+    } else if (contentHasPartType(row.message?.content, "tool_result") || contentHasPartType(row.message?.content, "tool_use")) {
+      clock.observe(row.timestamp, "tool");
+    } else {
+      observeTranscriptMessage(clock, row.timestamp, row.role, row.message?.content);
+    }
     if (row.role === "user" && text && !task) task = cursorUserTask(text).slice(0, 500);
     if ((row.role === "user" || row.role === "assistant") && row.message?.content !== undefined) {
       const candidate: HumanMessageCandidate = {
@@ -213,6 +224,8 @@ function cursorTranscript(jsonl: string): CursorTranscript {
       .sort((left, right) => left.index - right.index)
       .map(({ candidate }) => candidate),
     lastHumanFacingAt,
+    lastThreadAt: clock.lastThreadAt,
+    workingSince: clock.workingSince,
     turnStatus,
   };
 }
@@ -241,7 +254,7 @@ export function parseCursorSession(input: CursorSessionInput): CollectedAgent | 
   if (input.store?.agentId && input.store.agentId !== input.sessionId) return null;
 
   const transcript = input.transcript ?? cursorTranscript(input.transcriptJsonl ?? "");
-  const { task, transcriptTail, humanMessages, lastHumanFacingAt, turnStatus } = transcript;
+  const { task, transcriptTail, humanMessages, lastHumanFacingAt, lastThreadAt, workingSince, turnStatus } = transcript;
 
   const createdAtMs = Number(meta.createdAtMs);
   const updatedAtMs = Number(meta.updatedAtMs);
@@ -334,6 +347,8 @@ export function parseCursorSession(input: CursorSessionInput): CollectedAgent | 
     subagentCount: input.subagentCount,
     lastHumanMessage: extractLastHumanMessage("cursor", humanMessages, task, statusReason),
     lastHumanFacingAt: lastHumanFacingAt ?? extractLastHumanFacingAt("cursor", humanMessages),
+    lastThreadAt,
+    workingSince,
     lastUserMessage: extractLastMessageByRole("cursor", humanMessages, "user"),
     lastAgentMessage: extractLastMessageByRole("cursor", humanMessages, "assistant"),
     lastAgentClosing: extractClosingByRole("cursor", humanMessages, "assistant"),
@@ -358,7 +373,7 @@ export function parseCursorSession(input: CursorSessionInput): CollectedAgent | 
 export function parseCursorChildSession(input: CursorChildSessionInput): CollectedAgent | null {
   if (!UUID_PATTERN.test(input.sessionId) || !UUID_PATTERN.test(input.parentSessionId)) return null;
   const transcript = input.transcript ?? cursorTranscript(input.transcriptJsonl);
-  const { task, transcriptTail, humanMessages, lastHumanFacingAt, turnStatus } = transcript;
+  const { task, transcriptTail, humanMessages, lastHumanFacingAt, lastThreadAt, workingSince, turnStatus } = transcript;
 
   const nowMs = input.nowMs ?? Date.now();
   const ageMs = Math.max(0, nowMs - input.updatedAtMs);
@@ -432,6 +447,8 @@ export function parseCursorChildSession(input: CursorChildSessionInput): Collect
     threadDepth: 1,
     lastHumanMessage: extractLastHumanMessage("cursor", humanMessages, task, statusReason),
     lastHumanFacingAt: lastHumanFacingAt ?? extractLastHumanFacingAt("cursor", humanMessages),
+    lastThreadAt,
+    workingSince,
     lastUserMessage: extractLastMessageByRole("cursor", humanMessages, "user"),
     lastAgentMessage: extractLastMessageByRole("cursor", humanMessages, "assistant"),
     lastAgentClosing: extractClosingByRole("cursor", humanMessages, "assistant"),

@@ -47,6 +47,8 @@ describe("a Factory session becomes an agent", () => {
 
     expect(agent?.lastHumanFacingAt).toBe("2026-08-04T11:51:00.000Z");
     expect(agent?.updatedAt).toBe("2026-08-04T11:52:00.000Z");
+    expect(agent?.lastThreadAt).toBe("2026-08-04T11:52:00.000Z");
+    expect(agent?.workingSince).toBe("2026-08-04T11:50:00.000Z");
     expect(agent?.lastUserMessage).toBe("Please inspect Factory.");
     expect(agent?.lastAgentClosing).toBeTruthy();
     expect(agent?.status).toBe("waiting");

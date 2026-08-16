@@ -17,6 +17,7 @@ import {
   readableHumanMessage,
   type HumanMessageCandidate,
 } from "./human-message";
+import { observeTranscriptMessage, ThreadClock } from "./thread-clock";
 
 function recencyStatus(
   updatedAt: string,
@@ -118,6 +119,7 @@ export function createFactoryParser(): IncrementalParser {
   let lastAssistantText: string | undefined;
   let lastHumanFacingAt: string | undefined;
   const humanMessages: HumanMessageCandidate[] = [];
+  const clock = new ThreadClock();
   let messages = 0;
 
   const append = (rows: readonly Record<string, unknown>[]): void => {
@@ -137,6 +139,9 @@ export function createFactoryParser(): IncrementalParser {
       updatedAt = new Date(stamp).toISOString();
     }
     const message = (row.message ?? {}) as Record<string, unknown>;
+    if (message.role === "user" || message.role === "assistant" || message.role === "tool" || message.role === "system") {
+      observeTranscriptMessage(clock, stamp, message.role, message.content);
+    }
     if (message.role === "user" || message.role === "assistant") {
       const candidate: HumanMessageCandidate = {
         role: message.role,
@@ -238,6 +243,8 @@ export function createFactoryParser(): IncrementalParser {
     updatedAt: sourceUpdatedAt,
     tokens,
     lastHumanFacingAt,
+    lastThreadAt: clock.lastThreadAt,
+    workingSince: clock.workingSince,
     lastHumanMessage: extractLastHumanMessage("factory", humanMessages, task),
     lastUserMessage: extractLastMessageByRole("factory", humanMessages, "user"),
     lastAgentMessage: extractLastMessageByRole("factory", humanMessages, "assistant"),

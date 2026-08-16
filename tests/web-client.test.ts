@@ -6002,7 +6002,11 @@ describe("motion + responsive conformance for the restyled body (A6)", () => {
        blank. Live verification of that variant is impossible here — the harness
        cannot emulate prefers-reduced-motion — so it is asserted at rule level
        and recorded as unverified rather than claimed. */
-    expect(keyframes).toEqual(["chat-message-enter", "chat-tool-enter", "chat-tool-reveal", "cleanup-spin", "conn-beat", "drawer-in", "dw-pulse", "sheet-up", "sk-pulse", "sun-pulse"]);
+    /* row-time-verb-shimmer is the working-row infinitive. The universal
+       guard kills it; the same reduce block also freezes the verb on working
+       blue and drops the indigo glow so reduced-motion users still get the
+       word without a walk through the palette. */
+    expect(keyframes).toEqual(["chat-message-enter", "chat-tool-enter", "chat-tool-reveal", "cleanup-spin", "conn-beat", "drawer-in", "dw-pulse", "row-time-verb-shimmer", "sheet-up", "sk-pulse", "sun-pulse"]);
     const staticVariant = styles.slice(styles.lastIndexOf("@media (prefers-reduced-motion: reduce)"));
     expect(staticVariant).toContain(".verdict-cleanup.is-running .verdict-cleanup-mark");
     expect(staticVariant).toContain("animation: none");

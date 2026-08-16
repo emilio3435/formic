@@ -19,6 +19,7 @@ import {
   readableHumanMessage,
   type HumanMessageCandidate,
 } from "./human-message";
+import { observeTranscriptMessage, ThreadClock } from "./thread-clock";
 
 function recencyStatus(
   updatedAt: string,
@@ -63,6 +64,7 @@ export function createPrimeParser(): IncrementalParser {
   let task: string | undefined;
   let tail: string | undefined;
   let lastHumanFacingAt: string | undefined;
+  const clock = new ThreadClock();
   const humanMessages: HumanMessageCandidate[] = [];
   let messages = 0;
   let lastUsage: { input?: number; output?: number; cachedInput?: number; total?: number } | undefined;
@@ -100,6 +102,11 @@ export function createPrimeParser(): IncrementalParser {
       }
       const msg = (row as any).message as Record<string, unknown> | undefined;
       if (!msg) continue;
+      if (msg.role === "user" || msg.role === "assistant" || msg.role === "tool" || msg.role === "system") {
+        const humanTimestamp = [row.timestamp, msg.timestamp]
+          .find((value) => typeof value === "string" && Number.isFinite(Date.parse(value)));
+        observeTranscriptMessage(clock, humanTimestamp, msg.role, msg.content);
+      }
       if (msg.role === "user" || msg.role === "assistant") {
         const humanTimestamp = [row.timestamp, msg.timestamp]
           .find((value) => typeof value === "string" && Number.isFinite(Date.parse(value)));
@@ -201,6 +208,8 @@ export function createPrimeParser(): IncrementalParser {
       updatedAt: sourceUpdatedAt,
       tokens,
       lastHumanFacingAt,
+      lastThreadAt: clock.lastThreadAt,
+      workingSince: clock.workingSince,
       lastHumanMessage: extractLastHumanMessage("prime", humanMessages, task),
       lastUserMessage: extractLastMessageByRole("prime", humanMessages, "user"),
       lastAgentMessage: extractLastMessageByRole("prime", humanMessages, "assistant"),
