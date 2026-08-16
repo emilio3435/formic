@@ -1,10 +1,10 @@
 /* The Settings dialog.
 
-   One modal: time thresholds, Collectors, Advanced, this-browser prefs, and
-   repository colours. Extracted from app.js with no visual change — later
-   tasks restyle and reorder. app.js opens, closes, and re-exports the test
-   seam. Functions that still live in app.js arrive through bindSettingsPanel
-   so this file does not import the entry point. */
+   One modal. After the title: Collectors, Time, This browser, Advanced, then
+   Save. Collectors and colours apply immediately; Save posts Time + Advanced.
+   app.js opens, closes, and re-exports the test seam. Functions that still
+   live in app.js arrive through bindSettingsPanel so this file does not
+   import the entry point. */
 
 import { state } from "./client-state.js";
 import { $, el, icon } from "./dom-primitives.js";
@@ -232,26 +232,62 @@ function renderSettingsPanel() {
         dataset: { fkey: "settings-close" },
         onclick: closeSettingsPanel,
       }, "×")),
-    el("p", { class: "settings-lede", text: "How long silence has to last before this board changes what it calls a session." }),
-    el("div", { class: "settings-presets" },
-      el("span", { class: "settings-help", text: "Presets fill the fields below:" }),
-      ...SETTINGS_PRESETS.map((preset) => el("button", {
-        type: "button", class: "btn", dataset: { fkey: "preset-" + preset.id },
-        onclick: () => {
-          const freshNode = $("setting-activityFreshMinutes");
-          const quietNode = $("setting-activityQuietMinutes");
-          if (freshNode) freshNode.value = String(preset.fresh);
-          if (quietNode) quietNode.value = String(preset.quiet);
-          renderSettingsPreview();
-        },
-      }, preset.label))),
-    settingsField("activityFreshMinutes", "Working means activity in the last…",
-      "Sessions with activity newer than this read as Working. Minutes, 1–30.", fresh, 1, 30),
-    settingsField("activityQuietMinutes", "Quiet after…",
-      "After this much silence a session stops reading as recent: Waiting if its process is live, Unverified if unknown. Minutes, 5–480.",
-      quiet, 5, 480),
-    el("p", { class: "settings-preview", id: "settings-preview" }),
-    renderCollectorsBlock(),
+    el("section", { class: "settings-section" },
+      renderCollectorsBlock()),
+    el("section", { class: "settings-section" },
+      el("h3", { text: "Time" }),
+      el("p", { class: "settings-lede", text: "How long silence has to last before this board changes what it calls a session." }),
+      el("div", { class: "settings-presets" },
+        el("span", { class: "settings-help", text: "Presets fill the fields below:" }),
+        ...SETTINGS_PRESETS.map((preset) => el("button", {
+          type: "button", class: "btn", dataset: { fkey: "preset-" + preset.id },
+          onclick: () => {
+            const freshNode = $("setting-activityFreshMinutes");
+            const quietNode = $("setting-activityQuietMinutes");
+            if (freshNode) freshNode.value = String(preset.fresh);
+            if (quietNode) quietNode.value = String(preset.quiet);
+            renderSettingsPreview();
+          },
+        }, preset.label))),
+      settingsField("activityFreshMinutes", "Working means activity in the last…",
+        "Sessions with activity newer than this read as Working. Minutes, 1–30.", fresh, 1, 30),
+      settingsField("activityQuietMinutes", "Quiet after…",
+        "After this much silence a session stops reading as recent: Waiting if its process is live, Unverified if unknown. Minutes, 5–480.",
+        quiet, 5, 480),
+      el("p", { class: "settings-preview", id: "settings-preview" })),
+    el("section", { class: "settings-section" },
+      el("h3", { text: "This browser" }),
+      /* Per-browser display preference, deliberately OUTSIDE the Save flow: every
+         Time field is a fleet-shared server setting, this one is where THIS
+         browser draws the board's alerting rows. It applies the moment it is
+         clicked, writes localStorage rather than POSTing, and Save and Reset
+         leave it alone. */
+      el("fieldset", { class: "settings-local" },
+        el("legend", { text: "Needs-you display" }),
+        el("p", { class: "settings-help", text: "Saved in this browser only. Applies immediately — Save below does not affect it." }),
+        ...[
+          ["pane", "Pinned pane", "Alerting sessions are collected in the strip at the top of the board."],
+          ["inline", "Inline", "Alerting sessions stay in their program groups, marked in place."],
+        ].map(([value, label, help]) => el("label", { class: "settings-radio" },
+          el("input", {
+            type: "radio",
+            name: "needs-you-display",
+            value,
+            checked: state.needsYouDisplay === value ? "" : null,
+            dataset: { fkey: "needs-you-display-" + value },
+            onchange: () => setNeedsYouDisplay(value),
+          }),
+          el("span", { text: label }),
+          el("span", { class: "settings-help", text: help })))),
+      /* TINT-F. Fleet-shared like Time, but written per repository through its
+         own endpoint the moment a swatch changes — so it sits outside the Save
+         flow, the way the display preference above does, and for the same
+         reason: Save posts a fixed set of scalars and would have nothing to
+         say about a colour. */
+      el("fieldset", { class: "settings-local" },
+        el("legend", { text: "Repository colours" }),
+        el("p", { class: "settings-help", text: "A colour you pick here follows the repository name on the board, including every clone of that GitHub repo, and travels to its cmux workspaces." }),
+        el("div", { id: "repo-colors-host", class: "repo-colors-host" }))),
     el("details", { class: "settings-advanced" },
       el("summary", { text: "Advanced" }),
       /* Keeps the `scan-window` focus key the filter bar used to carry: the
@@ -267,37 +303,6 @@ function renderSettingsPanel() {
       settingsField("historyRecordLimit", "History record cap",
         "At most this many History records are kept. 100–50000.",
         s.historyRecordLimit ?? 5000, 100, 50000)),
-    /* Per-browser display preference, deliberately OUTSIDE the Save flow: every
-       field above is a fleet-shared server setting, this one is where THIS
-       browser draws the board's alerting rows. It applies the moment it is
-       clicked, writes localStorage rather than POSTing, and Save and Reset
-       leave it alone. */
-    el("fieldset", { class: "settings-local" },
-      el("legend", { text: "Needs-you display" }),
-      el("p", { class: "settings-help", text: "Saved in this browser only. Applies immediately — Save below does not affect it." }),
-      ...[
-        ["pane", "Pinned pane", "Alerting sessions are collected in the strip at the top of the board."],
-        ["inline", "Inline", "Alerting sessions stay in their program groups, marked in place."],
-      ].map(([value, label, help]) => el("label", { class: "settings-radio" },
-        el("input", {
-          type: "radio",
-          name: "needs-you-display",
-          value,
-          checked: state.needsYouDisplay === value ? "" : null,
-          dataset: { fkey: "needs-you-display-" + value },
-          onchange: () => setNeedsYouDisplay(value),
-        }),
-        el("span", { text: label }),
-        el("span", { class: "settings-help", text: help })))),
-    /* TINT-F. Fleet-shared like the fields above, but written per repository
-       through its own endpoint the moment a swatch changes — so it sits outside
-       the Save flow, the way the display preference above does, and for the
-       same reason: Save posts a fixed set of scalars and would have nothing to
-       say about a colour. */
-    el("fieldset", { class: "settings-local" },
-      el("legend", { text: "Repository colours" }),
-      el("p", { class: "settings-help", text: "A colour you pick here follows the repository name on the board, including every clone of that GitHub repo, and travels to its cmux workspaces." }),
-      el("div", { id: "repo-colors-host", class: "repo-colors-host" })),
     /* The two answers a save can give, said where the save happened. A stable
        node rather than a conditional child, so it can appear, change and expire
        without rebuilding the form around it. */
@@ -329,7 +334,11 @@ function renderSettingsPanel() {
       el("button", {
         type: "button", class: "btn", dataset: { fkey: "settings-done" },
         onclick: closeSettingsPanel,
-      }, "Done"))));
+      }, "Done")),
+    el("p", {
+      class: "settings-help",
+      text: "Save applies to Time and Advanced. Collectors and colours apply when you change them.",
+    })));
   renderSettingsPreview();
   renderSettingsVerdict();
   paintRepoColorSettings();
