@@ -9068,7 +9068,7 @@ function humanReadableAgentText(value) {
   if (ROW_MACHINE_TEXT.test(text)) return "";
   if (/<\/?\w/.test(text)) return "";
   if (/^[\w./-]+\.(md|ts|js|mjs|json|html)\)?\.?$/i.test(text)) return "";
-  if (text.length < 28 && /\]$/.test(text)) return "";
+  if (text.length < 28 && (/\]$/.test(text) || !/\s/.test(text))) return "";
   return text;
 }
 
