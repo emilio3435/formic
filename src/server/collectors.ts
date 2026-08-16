@@ -597,7 +597,6 @@ function createOmpParser(): IncrementalParser {
         activeMs: activeTime.value,
         humanMessages: humanMessages(messages),
         lastHumanFacingAt: messages.lastHumanFacingAt,
-        statusReason: "Legacy OMP history is read-only; file timestamps are not treated as a live runtime signal.",
         exited,
         // OMP's session_exit is the real thing: a record that the session, not a
         // turn, is over.

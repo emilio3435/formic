@@ -146,7 +146,7 @@ describe("collector identity and usage truth", () => {
     expect(agent?.status).toBe("stale");
     expect(agent?.endEvidence).toBeUndefined();
     expect(agent?.transcriptEndedCleanly).toBeUndefined();
-    expect(agent?.statusReason).toContain("Legacy OMP history");
+    expect(agent?.statusReason).toContain("No source activity in the last");
     expect(agent?.tokens).toEqual({
       input: 570,
       output: 385,
