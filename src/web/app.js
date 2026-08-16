@@ -242,23 +242,15 @@ bindSettingsPanel({
    operator could not see which rows are watch-only without opening a drawer.
    This restores it as a compact mark plus a title/aria sentence, never a column.
 
-   A dot on EVERY row carries no information, so it is shown only where it
-   changes what the operator can do:
-     - quarantined       always. Ambiguous identity is a real, fixable problem.
-     - observed-only     only when control could otherwise have worked: cmux is
-                         reachable and the session has not ended.
-   Suppressed when cmux is unreachable (the header already says controls are
-   offline fleet-wide — per-row dots would just restate it on every row) and on
-   ended sessions (a finished session is uncontrollable by definition, and
-   deriveControlState reports every one of them as observed-only). */
-function watchOnlyMark(control, activity, snap) {
+   A dot on EVERY row carries no information. Observed-only is the common
+   case (Grok Build, no cmux surface) and Send already stays disabled —
+   painting a hollow ring restates the drawer. Quarantine is the remaining
+   mark: a real, fixable identity conflict. */
+function watchOnlyMark(control) {
   if (control === "quarantined") {
     return { key: "quarantined", label: "Controls quarantined", hint: CONTROL_HINTS.quarantined };
   }
-  if (control !== "observed-only" || activity === "ended") return null;
-  const health = snap && snap.controlHealth;
-  if (!health || health.cmuxReachable !== true) return null;
-  return { key: "observed", label: "Watch only", hint: CONTROL_HINTS["observed-only"] };
+  return null;
 }
 const CONTROL_HINTS = {
   linked: "This session is linked to an exact cmux target; controls route safely.",
@@ -1525,7 +1517,7 @@ globalThis.TheAntHill = {
   totalsOf, issuesOf, alerting, alertFirst, viewMatches, matchesQuery, buildClusters, tokenSummary,
   issueLifecycle, issueStateLabel, recentlyResolvedOf,
   contextUsage, contextDisplayValue, typicalRequestOf,
-  roleView, formatLastHumanMessage, rowSummary, NO_READABLE_MESSAGE,
+  roleView, formatLastHumanMessage, rowSummary, rowSummaryParts, NO_READABLE_MESSAGE,
   // Message provenance and role confidence: the parser is pure and lives in
   // presentation.js; these are re-exported here so the client's own test
   // surface can drive parser and renderer through one handle.
@@ -9046,16 +9038,40 @@ function renderSwarmAnchor(agent, depth, activeChildren, pinned = false, board =
 }
 
 function rowSummary(agent) {
-  // Row stability: prefer the provider-recorded task over fast-changing transcript prose.
-  // Header per-repo TL;DR lives in prime:ant-heartbeat-monitor transcriptTail (fleet-wide, repo-specific),
-  // rendered by renderHealthTldrLane() — row keeps Task so the collapsed roster stays readable.
-  // transcriptTail [TL;DR] is still surfaced in drawer Chat (renderChat) and header, not here.
+  const parts = rowSummaryParts(agent);
+  return parts.kickoff ? parts.primary + " " + parts.kickoff : parts.primary;
+}
+
+/* Machine data that survived cleaning. Same pattern as the server's
+   readableClosingText: a closing that is JSON / a diff hunk / a log line
+   is not something the roster should quote. */
+const ROW_MACHINE_TEXT = /\{"|"\}|":\s*"|\[\{|\}\]|^\s*[+-]{3}\s|\b[\w./-]+:\d+:\d+\b|\{\s*\w+\s*=|\w+="[^"]*"/;
+
+function rowClosingText(agent) {
+  const closing = String(agent.lastAgentClosing || "").trim();
+  if (closing && !ROW_MACHINE_TEXT.test(closing)) return closing;
+  const spoken = String(agent.lastAgentMessage || "").trim();
+  if (spoken && !spoken.endsWith("…") && !ROW_MACHINE_TEXT.test(spoken)) return spoken;
+  return "";
+}
+
+function sameRowLine(a, b) {
+  return a.replace(/\s+/g, " ").trim().toLowerCase() === b.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function rowSummaryParts(agent) {
+  const closing = rowClosingText(agent);
   const task = agent.task ? withoutSenderHeader(agent.task).trim() : "";
-  if (task) return conciseText(task, 120);
+  const kickoff = task ? conciseText(task, 120) : "";
+  if (closing) {
+    const primary = conciseText(closing, 160);
+    return { primary, kickoff: kickoff && !sameRowLine(kickoff, primary) ? kickoff : "" };
+  }
+  if (kickoff) return { primary: kickoff, kickoff: "" };
   const message = formatLastHumanMessage(agent);
-  if (message !== NO_READABLE_MESSAGE) return message;
-  if (agent.statusReason) return conciseText(agent.statusReason, 120);
-  return NO_READABLE_MESSAGE;
+  if (message !== NO_READABLE_MESSAGE) return { primary: message, kickoff: "" };
+  if (agent.statusReason) return { primary: conciseText(agent.statusReason, 120), kickoff: "" };
+  return { primary: NO_READABLE_MESSAGE, kickoff: "" };
 }
 
 /* Codex uses the official ChatGPT/Codex app mark (raster, own background);
@@ -9379,11 +9395,12 @@ function renderAgentRow(agent, program, opts = {}) {
   const opState = operatorState(agent, Number.isFinite(nowMs) ? nowMs : Date.now(), thresholdMs, alertMuted);
   const opLabel = opState ? OPERATOR_STATE_LABELS[opState] : null;
   const control = deriveControlState(agent);
-  const watchOnly = watchOnlyMark(control, activity, state.snap);
+  const watchOnly = watchOnlyMark(control);
   const role = roleView(agent.role);
   const selected = state.selectedId === agent.id;
   const clusterNote = swarmNote(agent, opts);
-  const summary = rowSummary(agent);
+  const summaryParts = rowSummaryParts(agent);
+  const summary = summaryParts.primary;
   const description = [clusterNote, summary].filter(Boolean).join(" · ");
   // Status column shows the activity word colored by state (the color already
   // encodes working/idle/ended, so no separate dot), with any alert suffix on
@@ -9572,7 +9589,15 @@ function renderAgentRow(agent, program, opts = {}) {
          without lying about the session. */
       cmuxBadgeNode(agent, state.snap),
       syncAckButton(agent, state.snap)),
-    description ? el("span", { class: "row-identity-tags row-summary row-description", title: "Latest human message or current status summary. Select for full details.", text: description }) : null);
+    description || summaryParts.kickoff
+      ? el("span", { class: "row-copy" },
+        description
+          ? el("span", { class: "row-identity-tags row-summary row-description", title: "Last thing this session said or asked. Select for full details.", text: description })
+          : null,
+        summaryParts.kickoff
+          ? el("span", { class: "row-kickoff", title: "Original kickoff", text: summaryParts.kickoff })
+          : null)
+      : null);
 
   // Right-side instrument cluster: status word · outcome, model + ctx%, tokens,
   // elapsed. Values ride --font-mono with tabular-nums; each cell is omitted
