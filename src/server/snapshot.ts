@@ -31,6 +31,7 @@ import {
   classifyIdentityConflicts,
   controlDebrisFor,
 } from "./snapshot-operator-issues";
+import { isLive } from "./live";
 import { agentSortRank, programFor, rollupFor, type ProgramHint } from "./snapshot-programs";
 /* Re-exported so the program-resolution move stays invisible to callers:
    state.ts imports ProgramHint from "./snapshot". */
@@ -685,7 +686,7 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
         return 0;
       }),
     }))
-    .map((program) => ({ ...program, rollup: rollupFor(program.agents) }))
+    .map((program) => ({ ...program, rollup: rollupFor(program.agents, nowMs) }))
     .sort((left, right) =>
       (right.rollup.needsYou - left.rollup.needsYou) ||
       (right.rollup.working - left.rollup.working) ||
@@ -722,7 +723,7 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
     finished: countLifecycle("finished"),
   };
   const retained = allAgents.filter((agent) => agent.scope === "retained").length;
-  const liveAgents = observedAgents.filter((agent) => agent.activity === "working" || agent.activity === "idle");
+  const liveAgents = observedAgents.filter((agent) => isLive(agent, nowMs));
   const workingAgents = observedAgents.filter((agent) => agent.activity === "working");
   const tokenValues = workingAgents
     .map((agent) => agent.tokens.total)

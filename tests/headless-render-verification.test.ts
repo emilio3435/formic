@@ -23,7 +23,7 @@ import type { AgentSnapshot, HubSnapshot } from "../src/shared/types";
 interface Client {
   usageCostReading: (summary: unknown) => { value: string; sub: string };
   emptyBoardVerdict: (snap: unknown) => { message: string; hint: string; sources: string | null };
-  summaryWidgetData: (id: string, snap: unknown, conn?: string) => { value: string; sublabel: string };
+  summaryWidgetData: (id: string, snap: unknown, conn?: string) => { value: string; sublabel: string; unit?: string };
 }
 interface Presentation {
   controlUnavailableText: (controlState: string, agent?: unknown) => string;
@@ -272,19 +272,15 @@ describe("a quiet board does not promise a number that is never coming", () => {
     observedWindowMs: 0, stalled: 0, stalledAgentIds: [], stallThresholdMs: 900_000,
   };
 
-  test("completions read as not measured, never as not yet", () => {
-    /* "No completion data yet" promises a number that is never coming: the
-       server withholds completions permanently — success is unverifiable and
-       completion undetectable for most providers — and says so in
-       completionsProvenance, which nothing read.
-
-       On a busy board the stall text fills this line, so the promise never
-       showed. On a quiet or brand-new one it is the first thing a newcomer
-       reads about the counter, which is exactly where it is worst. */
+  test("completions are omitted when provenance is not-observable, never promised as not yet", () => {
+    /* Completions are permanently unobservable. A "not measured" filler chip
+       and a "not yet" promise are the same overclaim. Omit the reading. */
     const card = client.summaryWidgetData("momentum", momentumBoard(WITHHELD) as never, "live");
 
-    expect(card.sublabel).toMatch(/not measured/i);
+    expect(card.sublabel).not.toMatch(/not measured/i);
     expect(card.sublabel).not.toMatch(/yet/i);
+    expect(card.sublabel).not.toMatch(/↑\d+ done/);
+    expect(card.unit).toMatch(/need you/);
   });
 
   test("a board that reports stalls still shows them rather than the notice", () => {

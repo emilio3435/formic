@@ -135,6 +135,9 @@ export const state = {
      at boot; only an explicit toggle ever writes it — snapshots and viewport
      changes must never move it. */
   headerCollapsed: false,
+  /* Momentum CTA arm. Sticky on click: needs-you rows lift, the rest recede.
+     Session-scoped like the other board lenses — not a preference. */
+  momentumMagnify: false,
   renameDraft: "",
   renamePending: false,
   renameError: "",

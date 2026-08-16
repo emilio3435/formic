@@ -39,7 +39,14 @@ export const PROVENANCE_LABELS = {
   "no-evidence": "No process evidence",
   recency: "",
 };
-export const OUTCOME_LABELS = { healthy: "Healthy", "needs-you": "Alert", blocked: "Blocked", failed: "Failed" };
+export const OUTCOME_LABELS = { healthy: "Healthy", "needs-you": "Needs you", blocked: "Blocked", failed: "Failed" };
+export const OPERATOR_STATE_LABELS = {
+  "needs-you": "Needs you",
+  working: "Working",
+  waiting: "Waiting",
+  stalled: "Stalled",
+  done: "Done",
+};
 /* "Unverified pane" sits between Linked and Observed only: cmux can route a
    Focus there, but cannot attest which session is on it, so nothing may be typed
    into it. Its own word, because it is its own state — see deriveControlState. */

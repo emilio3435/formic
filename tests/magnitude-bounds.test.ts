@@ -211,22 +211,45 @@ describe("rollups partition the population they count", () => {
     collected({ sourceSessionId: "e2", status: "archived" }),
   ]);
 
-  test("a program's total is exactly its live plus its ended", () => {
-    /* "220 agents" was 38 live plus 182 ended. The count is arithmetically
-       right and the label is what misleads, so this cannot catch the labelling
-       — but it does catch the arithmetic failure that would look identical to
-       an operator: a total that exceeds its own parts because something was
-       counted twice. */
+  test("a program's activity buckets partition its total", () => {
+    /* live is no longer the in-flight sum: stalled waiters stay in idle and
+       leave live, so total === live + ended is the old equality under a new
+       name. The activity partition still has to add up. */
     const rollup = mixedFleet().programs[0]?.rollup;
 
     expect(rollup).toBeDefined();
-    expect(rollup!.total).toBe(rollup!.live + rollup!.ended);
+    expect(rollup!.total).toBe(rollup!.working + rollup!.idle + rollup!.ended);
   });
 
-  test("live is exactly working plus idle", () => {
+  test("live is at most the in-flight activity plus needs-you", () => {
+    /* live ⊆ working ∪ waiting_fresh ∪ needs_you. Equality holds on this
+       mixed fleet because every waiter is still inside the stall window. */
     const rollup = mixedFleet().programs[0]?.rollup;
 
+    expect(rollup!.live).toBeLessThanOrEqual(rollup!.working + rollup!.idle + rollup!.needsYou);
     expect(rollup!.live).toBe(rollup!.working + rollup!.idle);
+  });
+
+  test("a stalled waiter leaves live and stays in idle", () => {
+    const snap = snapshotOf([
+      collected({ sourceSessionId: "fresh", status: "waiting", updatedAt: "2026-08-02T09:55:00.000Z" }),
+      collected({
+        sourceSessionId: "zombie",
+        status: "waiting",
+        updatedAt: "2026-08-01T06:00:00.000Z",
+        processAlive: true,
+        processIds: [4242],
+      }),
+    ]);
+    const rollup = snap.programs[0]!.rollup!;
+    const totals = snap.totals;
+
+    expect(rollup.idle).toBe(2);
+    expect(rollup.working).toBe(0);
+    expect(rollup.live).toBe(1);
+    expect(rollup.live).toBeLessThan(rollup.working + rollup.idle);
+    expect(totals.live).toBe(1);
+    expect(totals.idle).toBe(2);
   });
 
   test("the fleet totals partition the same way", () => {
@@ -241,6 +264,7 @@ describe("rollups partition the population they count", () => {
     expect(ended).toBeDefined();
     expect(tracked).toBe(working! + idle! + ended!);
     expect(live).toBeLessThanOrEqual(tracked);
+    expect(live).toBeLessThanOrEqual(working! + idle! + (totals.needsYou ?? 0));
   });
 
   test("no sub-count exceeds the total it belongs to", () => {

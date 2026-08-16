@@ -66,13 +66,52 @@ export function isTerminal(agent) {
   return lifecycleOf(agent) === "finished" || scopeOf(agent) === "retained";
 }
 
-/* And its opposite, which is what "live" means everywhere on this board.
-   Unverified is in NEITHER: it is not live, because nothing can vouch for it,
-   and it is not terminal, because nothing ended it. */
-export function isLive(agent) {
+export const DEFAULT_STALL_THRESHOLD_MS = 15 * 60_000;
+
+export function stallThresholdMs(snapOrPulse) {
+  const pulse = snapOrPulse && snapOrPulse.momentum ? snapOrPulse : snapOrPulse && snapOrPulse.pulse;
+  const ms = pulse && pulse.momentum && Number(pulse.momentum.stallThresholdMs);
+  return Number.isFinite(ms) && ms > 0 ? ms : DEFAULT_STALL_THRESHOLD_MS;
+}
+
+/* Same exclusions as pulse.ts: waiting, healthy, no attention, not turn-complete,
+   quiet past the stall threshold. Needs-you wins — an alerting row is never stalled. */
+export function isStalled(agent, nowMs = Date.now(), thresholdMs = DEFAULT_STALL_THRESHOLD_MS) {
   if (scopeOf(agent) === "retained") return false;
+  if (declaredDone(agent)) return false;
+  if (alerting(agent)) return false;
+  if (lifecycleOf(agent) !== "waiting") return false;
+  const provenance = provenanceOf(agent);
+  if (provenance === "turn-complete" || provenance === "turn-complete-aged") return false;
+  if (agent.attention === true || agent.attentionSignal) return false;
+  if (deriveOutcome(agent) !== "healthy") return false;
+  const updatedAtMs = Date.parse(agent.updatedAt);
+  if (!Number.isFinite(updatedAtMs)) return false;
+  return nowMs - updatedAtMs >= thresholdMs;
+}
+
+/* One operator state per row. Precedence: needs-you, done, working, stalled, waiting. */
+export function operatorState(agent, nowMs = Date.now(), thresholdMs = DEFAULT_STALL_THRESHOLD_MS, alertMuted = false) {
+  if (!alertMuted && alerting(agent)) return "needs-you";
+  if (declaredDone(agent) || (isTerminal(agent) && deriveOutcome(agent) === "healthy")) return "done";
+  if (scopeOf(agent) === "observed" && lifecycleOf(agent) === "working") return "working";
+  if (isStalled(agent, nowMs, thresholdMs)) return "stalled";
+  if (scopeOf(agent) === "observed" && lifecycleOf(agent) === "waiting") return "waiting";
+  return null;
+}
+
+/* live ⊆ working ∪ waiting_fresh ∪ needs_you
+   stalled ∩ live = ∅
+   processAlive is orthogonal to live.
+   Unverified is in NEITHER live nor terminal. */
+export function isLive(agent, nowMs = Date.now(), thresholdMs = DEFAULT_STALL_THRESHOLD_MS) {
+  if (scopeOf(agent) === "retained") return false;
+  if (declaredDone(agent)) return false;
   const state = lifecycleOf(agent);
-  return state === "working" || state === "waiting";
+  if (state === "working") return true;
+  if (alerting(agent)) return true;
+  if (state === "waiting" && !isStalled(agent, nowMs, thresholdMs)) return true;
+  return false;
 }
 
 export function deriveOutcome(agent) {
@@ -392,13 +431,13 @@ export function alertFirst(list, isAlerting) {
   return list.sort((left, right) => (isAlerting(left) ? 0 : 1) - (isAlerting(right) ? 0 : 1));
 }
 
-export function deriveRollup(agents) {
+export function deriveRollup(agents, nowMs = Date.now(), thresholdMs = DEFAULT_STALL_THRESHOLD_MS) {
   const state = (a) => lifecycleOf(a);
   const out = (a) => deriveOutcome(a);
   const observed = agents.filter((a) => scopeOf(a) === "observed");
   return {
     total: agents.length,
-    live: agents.filter(isLive).length,
+    live: agents.filter((a) => isLive(a, nowMs, thresholdMs)).length,
     working: observed.filter((a) => state(a) === "working").length,
     /* `idle` keeps its wire name and means Waiting. The rollup is read by name
        in several places and by the server's own rollupFor; renaming it is a
@@ -437,11 +476,9 @@ export function viewMatches(view, agent) {
      that exists to answer "where did the row I was just looking at go". */
   const observed = scopeOf(agent) === "observed" && !declaredDone(agent);
   switch (view) {
-    /* One scroll over the whole live fleet: working, waiting and unverified,
-       plus anything alerting() rescues (an ended transcript whose process is
-       still up and still asking for a person). It is the union of the three
-       tabs it replaced, so no agent that was reachable before is unreachable
-       now — which is the property that makes collapsing the tabs safe. */
+    /* Board membership is not the live count. Stalled waiting rows stay here
+       so they can be dyed and aged; they drop out of isLive / totals.live.
+       The idle lens below also keeps them — idle ≠ live. */
     case "board":
       return (observed && (state === "working" || state === "waiting" || state === "unverified"))
         || alerting(agent);

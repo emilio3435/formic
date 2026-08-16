@@ -79,10 +79,12 @@ canonical file provides them.
 
 | State meaning | Visual role | Mark/tint aliases | Text/control alias | Business rule |
 |---|---|---|---|---|
-| Live, working, healthy, all clear | success | `--color-status-success`, `--color-status-success-tint` | `--color-status-success-text` | `LIVE` is green; calm health is not a warning |
-| Waiting, needs-you, stale, reconnecting, advisory | warning | `--color-status-warning`, `--color-status-warning-tint` | `--color-status-warning-text` | TL;DR needs-you uses warning amber, not brand clay or danger red |
+| Working, informational, in flight | info | `--color-status-info`, `--color-status-info-tint` | `--color-status-info-text` | Working is blue; green is settled, not in-flight |
+| Needs you | warning | `--color-status-warning`, `--color-status-warning-tint` | `--color-status-warning-text` | Needs-you is amber (act). Waiting and stalled are not amber |
+| Waiting, stalled | graphite | `--ended-ink` / `--gray-500` | secondary text | Same hue; stalled is dimmer + age. Not a second red, not amber |
+| Done, settled, healthy, all clear | success | `--color-status-success`, `--color-status-success-tint` | `--color-status-success-text` | Green is settled. A done lane that still needs a read is needs-you |
 | Blocked, failed, break, person-blocker | danger | `--color-status-danger`, `--color-status-danger-tint` | `--color-status-danger-text` | red means an operational intervention is required |
-| Informational, idle, neutral signal | info | `--color-status-info`, `--color-status-info-tint` | `--color-status-info-text` | informational blue never implies failure |
+| Informational, neutral signal | info | `--color-status-info`, `--color-status-info-tint` | `--color-status-info-text` | informational blue never implies failure |
 | Ended | neutral | `--ended-ink` | neutral/secondary text | ended is a lifecycle fact, not a brand treatment |
 | Unverified | unresolved information | info-derived ink and dashed treatment | secondary text | unverified is not ended; the board did not establish liveness |
 

@@ -104,8 +104,13 @@ describe("PulseTracker", () => {
       now,
     );
 
-    expect(tracker.report(now).momentum).toMatchObject({ stalled: 1, stalledAgentIds: ["stalled"] });
-    expect(tracker.report(now).momentum.stallThresholdMs).toBe(15 * 60_000);
+    const report = tracker.report(now);
+    expect(report.momentum).toMatchObject({ stalled: 1, stalledAgentIds: ["stalled"] });
+    expect(report.momentum.stallThresholdMs).toBe(15 * 60_000);
+    /* stalled leaves the live set used as the burn denominator: attention +
+       the fresh worker remain; the 15-minute waiter does not. */
+    expect(report.burn.coverage.eligible).toBe(2);
+    expect(report.burn.coverage.reporting).toBe(2);
   });
 
   test("a session waiting on its operator is not stalled, however long it has been quiet", () => {
@@ -136,7 +141,43 @@ describe("PulseTracker", () => {
       now,
     );
 
-    expect(tracker.report(now).momentum).toMatchObject({ stalled: 1, stalledAgentIds: ["silent"] });
+    const report = tracker.report(now);
+    expect(report.momentum).toMatchObject({ stalled: 1, stalledAgentIds: ["silent"] });
+    /* turn-complete stays live (waiting on the operator). The silent
+       process-live-quiet waiter is stalled and drops out of live/burn. */
+    expect(report.burn.coverage.eligible).toBe(1);
+    expect(report.burn.coverage.reporting).toBe(1);
+  });
+
+  test("stalled leaves the live set and stays listed in stalledAgentIds", () => {
+    const now = base + HOUR_MS;
+    const tracker = new PulseTracker(undefined, base);
+    tracker.observe(
+      snapshot([
+        agent({
+          id: "zombie",
+          lifecycle: "waiting",
+          provenance: "process-live-quiet",
+          activity: "idle",
+          status: "waiting",
+          processState: "running",
+          updatedAt: iso(now - 28 * HOUR_MS),
+        }),
+        agent({
+          id: "fresh-wait",
+          lifecycle: "waiting",
+          activity: "idle",
+          status: "waiting",
+          updatedAt: iso(now - 5 * 60_000),
+        }),
+      ]),
+      now,
+    );
+
+    const report = tracker.report(now);
+    expect(report.momentum).toMatchObject({ stalled: 1, stalledAgentIds: ["zombie"] });
+    expect(report.burn.coverage.eligible).toBe(1);
+    expect(report.burn.coverage.reporting).toBe(1);
   });
 
   test("pulse.blocked counts live person-blockers once and publishes no dead-time field", () => {
