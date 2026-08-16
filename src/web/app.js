@@ -9059,10 +9059,16 @@ function stripRowMachineTrailer(value) {
 }
 
 function humanReadableAgentText(value) {
-  const text = stripRowMachineTrailer(value);
+  let text = stripRowMachineTrailer(value);
+  /* End-anchored Codex closes often start INSIDE the citation trailer, so
+     there is no opening tag to strip — only MEMORY.md:N|note=[…] residue. */
+  const cite = text.search(/MEMORY\.md\b|\|note=\[|oai-mem-citation|citation_entries|rollout_ids/i);
+  if (cite !== -1) text = text.slice(0, cite).replace(/[<\s\[\|]+$/, "").trim();
   if (!text) return "";
   if (ROW_MACHINE_TEXT.test(text)) return "";
   if (/<\/?\w/.test(text)) return "";
+  if (/^[\w./-]+\.(md|ts|js|mjs|json|html)\)?\.?$/i.test(text)) return "";
+  if (text.length < 28 && (/\]$/.test(text) || !/\s/.test(text))) return "";
   return text;
 }
 

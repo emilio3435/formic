@@ -1816,6 +1816,27 @@ describe("row last-close (#73) and observed-only mark (#78)", () => {
     expect(parts.kickoff).toBe("");
   });
 
+  test("a close that starts inside the Codex citation trailer uses the spoken line", () => {
+    const parts = M.rowSummaryParts(agent({
+      task: "Port the rate limiter",
+      lastAgentClosing: "…ce guidance] MEMORY.md:532-534|note=[used host ortools] </citation_entries> <rollout_ids> 019f </rollout_ids> </oai-mem-citation>",
+      lastAgentMessage: "Lane implementation is complete and locally committed, but Docker is down.",
+    }));
+    expect(parts.primary).toContain("Lane implementation is complete");
+    expect(parts.primary).not.toContain("MEMORY.md");
+    expect(parts.primary).not.toContain("note=[");
+  });
+
+  test("a filename stump after stripping the trailer is not a close", () => {
+    const parts = M.rowSummaryParts(agent({
+      task: "Port the rate limiter",
+      lastAgentClosing: "…PORT-rrb-worker.md). <oai-mem-citation> <citation_entries> MEMORY.md:1-2|note=[x] </citation_entries> </oai-mem-citation>",
+      lastAgentMessage: "Implementation and verification are complete; the local commit is sandbox-blocked.",
+    }));
+    expect(parts.primary).toContain("Implementation and verification are complete");
+    expect(parts.primary).not.toContain("PORT-rrb-worker.md");
+  });
+
   test("does not paint a kickoff line", () => {
     const row = withDom(() => M.renderAgentRow(agent({
       task: "Port the rate limiter",
