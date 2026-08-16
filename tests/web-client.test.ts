@@ -1476,12 +1476,16 @@ describe("summary status and widgets", () => {
   test("program rollup names live and ended separately, and only when they add up", () => {
     const labels = (cells: Array<{ value: string; label: string }>) =>
       cells.map((c) => c.value + " " + c.label);
+    /* Fresh timestamps: an idle fixture dated July 22 is stalled against
+       Date.now() and would make live + ended miss the roster — the same
+       disappearing-population guard this test exists to keep. */
+    const now = new Date().toISOString();
 
     const mixed = [
-      agent({ id: "a", activity: "working" }),
-      agent({ id: "b", activity: "idle" }),
-      agent({ id: "c", activity: "ended" }),
-      agent({ id: "d", activity: "ended" }),
+      agent({ id: "a", activity: "working", updatedAt: now }),
+      agent({ id: "b", activity: "idle", updatedAt: now }),
+      agent({ id: "c", activity: "ended", updatedAt: now }),
+      agent({ id: "d", activity: "ended", updatedAt: now }),
     ];
     expect(labels(M.programRollupCells(mixed))).toEqual(
       expect.arrayContaining(["2 live", "2 ended"]),
@@ -1489,8 +1493,27 @@ describe("summary status and widgets", () => {
     expect(labels(M.programRollupCells(mixed)).join(" ")).not.toContain("4 agents");
 
     // Nothing ended yet: one population, so one word is honest.
-    const allLive = [agent({ id: "a", activity: "working" }), agent({ id: "b", activity: "idle" })];
+    const allLive = [
+      agent({ id: "a", activity: "working", updatedAt: now }),
+      agent({ id: "b", activity: "idle", updatedAt: now }),
+    ];
     expect(labels(M.programRollupCells(allLive))).toContain("2 agents");
+
+    /* A stalled waiter is a fourth cohort: live + ended no longer sum, so the
+       header keeps the total rather than silently dropping the zombie. */
+    const withStalled = [
+      agent({ id: "a", activity: "working", updatedAt: now }),
+      agent({
+        id: "b",
+        activity: "idle",
+        lifecycle: "waiting",
+        updatedAt: "2026-07-01T00:00:00.000Z",
+      }),
+      agent({ id: "c", activity: "ended", updatedAt: now }),
+    ];
+    const stalledCells = labels(M.programRollupCells(withStalled));
+    expect(stalledCells).toContain("3 agents");
+    expect(stalledCells.join(" ")).not.toContain("live");
 
     /* An unaccounted-for cohort means the split cannot be trusted to sum, so the
        total is the only true claim. This is the guard, not an edge case: naming
@@ -1563,10 +1586,11 @@ describe("summary status and widgets", () => {
     expect(priced.sublabel).toContain("$12.50 last hour");
     expect(priced.value).toBe("840");
 
-    // Unknown cost states its ignorance and never renders as free.
+    // Unknown cost is omitted entirely — never a dash, never a fabricated $0.
     const unknown = M.summaryWidgetData("burn", burnSnap({ costLastHourUsd: null }), "live", "percent", [], false);
-    expect(unknown.sublabel).toContain("cost unavailable");
+    expect(unknown.sublabel).not.toContain("cost unavailable");
     expect(unknown.sublabel).not.toContain("$");
+    expect(unknown.sublabel).not.toMatch(/—/);
 
     // A real zero is a real number and must survive as one.
     const free = M.summaryWidgetData("burn", burnSnap({ costLastHourUsd: 0 }), "live", "percent", [], false);
@@ -1677,11 +1701,15 @@ describe("summary status and widgets", () => {
     const withMomentum = (momentum: Record<string, unknown>) => snapshot({ pulse: { momentum } });
     /* The shipping count opens the sub now that attention holds the headline;
        every window-honest sentence keeps its exact wording after it. */
-    expect(M.summaryWidgetData("momentum", snapshot()).sublabel).toContain("shipping · No completion data yet.");
+    expect(M.summaryWidgetData("momentum", snapshot()).sublabel).toMatch(/shipping$/);
+    expect(M.summaryWidgetData("momentum", snapshot()).sublabel).not.toContain("No completion data");
+    expect(M.summaryWidgetData("momentum", snapshot()).sublabel).not.toContain("not measured");
     // Under one completed 5-min bucket there is no completion window to report,
     // but stall detection (updatedAt-based) is valid immediately.
     expect(M.summaryWidgetData("momentum", withMomentum({ completionsLastHour: 0, observedWindowMs: 0, stalled: 0 })).sublabel)
-      .toContain("shipping · No completion data yet.");
+      .toMatch(/shipping$/);
+    expect(M.summaryWidgetData("momentum", withMomentum({ completionsLastHour: null, completionsProvenance: "not-observable" })).sublabel)
+      .not.toContain("not measured");
     expect(M.summaryWidgetData("momentum", withMomentum({ completionsLastHour: 0, observedWindowMs: 0, stalled: 2 })).sublabel)
       .toContain("shipping · 2 quiet 15m+");
     // A young tracker reports its real window, never a fabricated "this hour".
@@ -3141,12 +3169,12 @@ describe("calm program and agent list rendering", () => {
     expect(M.rowStateWords("ended", "healthy", "history")).toEqual([]);    // pinned by the tab
 
     // An exceptional outcome is never silent, in any view.
-    expect(M.rowStateWords("working", "needs-you", "now")).toEqual(["Alert"]);
+    expect(M.rowStateWords("working", "needs-you", "now")).toEqual(["Needs you"]);
     expect(M.rowStateWords("working", "failed", "working")).toEqual(["Failed"]);
     // A mixed view still distinguishes a non-dominant activity.
     // "Idle" is spelled Waiting now: idle blamed the agent for a silence that is
     // usually the operator's move.
-    expect(M.rowStateWords("idle", "needs-you", "now")).toEqual(["Waiting", "Alert"]);
+    expect(M.rowStateWords("idle", "needs-you", "now")).toEqual(["Waiting", "Needs you"]);
 
     const row = source.match(/function renderAgentRow\(agent, program, opts = \{\}\) \{[\s\S]*?\n\}/)?.[0];
     expect(row).toBeDefined();
@@ -3156,27 +3184,112 @@ describe("calm program and agent list rendering", () => {
     expect(row).not.toContain("act-glyph act-");
     expect(row).toContain('"row-state-alert"');
     expect(styles).toContain(".row-state-alert { color: var(--needs); }");
+    expect(styles).toContain("--working: var(--color-status-info);");
+    expect(styles).toContain("--needs: var(--color-status-warning);");
+    expect(styles).toContain(".agent-row.is-stalled { opacity: 0.62; }");
+    expect(styles).toContain(".row-state-blocked { color: var(--blocked); }");
+    expect(styles).toContain(".row-state-failed { color: var(--failed); }");
   });
 
-  test("an alerting row says Alert even when Waiting got there first", () => {
+  test("an alerting row says Needs you even when Waiting got there first", () => {
     /* Sweep audit §2: the group head said "6 alerts" while most of its rows
        printed only "Waiting" — a hook-shaped alert has a HEALTHY outcome, so
        the attention word was gated behind !words.length and lost on exactly
        the rows where it was the only signal. It appends now; it never depends
        on being the only word. */
     const hooked = agent({ status: "waiting", lifecycle: "waiting", hookLifecycle: "needsInput" });
-    expect(M.rowStateWords("idle", "healthy", "now", hooked)).toEqual(["Waiting", "Alert"]);
-    expect(M.rowStateWords("working", "healthy", "now", hooked)).toEqual(["Alert"]);
-    // Never doubled when the outcome already carries the word.
-    expect(M.rowStateWords("idle", "needs-you", "now", hooked)).toEqual(["Waiting", "Alert"]);
+    expect(M.rowStateWords("idle", "healthy", "now", hooked)).toEqual(["Needs you"]);
+    expect(M.rowStateWords("working", "healthy", "now", hooked)).toEqual(["Needs you"]);
+    // One operator state per row — needs-you wins over Waiting.
+    expect(M.rowStateWords("idle", "needs-you", "now", hooked)).toEqual(["Needs you"]);
 
-    /* And the ink follows the words: outcome-picked ink painted "Alert" in
-       the healthy activity green — the safe color — on those same rows. */
+    /* And the ink follows the words: needs-you is amber, not the waiting
+       graphite and not the working blue. */
     const program = { id: "p1", name: "P", agents: [hooked] };
     const rendered = withDom(() => M.renderAgentRow(hooked, program));
     const word = byClass(rendered, "row-state-alert");
     expect(word).not.toBe(null);
-    expect(textOf(word)).toContain("Alert");
+    expect(textOf(word)).toContain("Needs you");
+    expect(String(rendered.className)).toContain("is-needs-you");
+  });
+
+  test("a 28h quiet waiter is Stalled, not live, and stays on the Board", async () => {
+    const zombie = agent({
+      id: "codex:zombie",
+      status: "waiting",
+      lifecycle: "waiting",
+      activity: "idle",
+      outcome: "healthy",
+      provenance: "process-live-quiet",
+      processState: "running",
+      updatedAt: "2026-07-21T00:00:00.000Z",
+    });
+    const snap = snapshot({
+      generatedAt: "2026-07-22T04:00:00.000Z",
+      programs: [{ id: "p", name: "P", agents: [zombie] }],
+    });
+    expect(M.isLive(zombie, Date.parse(snap.generatedAt), M.DEFAULT_STALL_THRESHOLD_MS)).toBe(false);
+    expect(M.isStalled(zombie, Date.parse(snap.generatedAt), M.DEFAULT_STALL_THRESHOLD_MS)).toBe(true);
+    expect(M.viewMatches("board", zombie)).toBe(true);
+    expect(M.rowStateWords("idle", "healthy", "board", zombie, false, Date.parse(snap.generatedAt))).toEqual(["Stalled"]);
+
+    await withState({ snap, view: "board" }, () => {
+      const row = withDom(() => M.renderAgentRow(zombie, { id: "p", name: "P", agents: [zombie] }));
+      expect(String(row.className)).toContain("is-stalled");
+      expect(String(row.className)).not.toContain("is-needs-you");
+      expect(textOf(byClass(row, "row-state"))).toContain("Stalled");
+    });
+  });
+
+  test("armed Momentum lifts needs-you rows and recedes the rest", async () => {
+    const now = new Date().toISOString();
+    const asking = agent({
+      id: "codex:ask",
+      status: "waiting",
+      lifecycle: "waiting",
+      hookLifecycle: "needsInput",
+      updatedAt: now,
+    });
+    const working = agent({ id: "codex:w", status: "running", lifecycle: "working", updatedAt: now });
+    const stalled = agent({
+      id: "codex:z",
+      status: "waiting",
+      lifecycle: "waiting",
+      activity: "idle",
+      outcome: "healthy",
+      provenance: "process-live-quiet",
+      updatedAt: "2026-07-01T00:00:00.000Z",
+    });
+    const snap = snapshot({
+      generatedAt: now,
+      programs: [{ id: "p", name: "P", agents: [asking, working, stalled] }],
+    });
+    const program = { id: "p", name: "P", agents: [asking, working, stalled] };
+
+    expect(M.momentumPopulation(asking, snap)).toBe(true);
+    expect(M.momentumPopulation(working, snap)).toBe(false);
+    expect(M.momentumPopulation(stalled, snap)).toBe(false);
+
+    await withState({ snap, view: "board", momentumMagnify: true }, () => {
+      const hot = withDom(() => M.renderAgentRow(asking, program));
+      const work = withDom(() => M.renderAgentRow(working, program));
+      const dim = withDom(() => M.renderAgentRow(stalled, program));
+      expect(String(hot.className)).toContain("is-momentum-hot");
+      expect(String(hot.className)).not.toContain("is-momentum-recede");
+      expect(String(work.className)).toContain("is-momentum-recede");
+      expect(String(dim.className)).toContain("is-momentum-recede");
+      expect(String(dim.className)).toContain("is-stalled");
+    });
+
+    await withState({ snap, view: "board", momentumMagnify: false }, () => {
+      const cold = withDom(() => M.renderAgentRow(asking, program));
+      expect(String(cold.className)).not.toContain("is-momentum-hot");
+      expect(String(cold.className)).not.toContain("is-momentum-recede");
+    });
+
+    expect(styles).toContain(".agent-row.is-momentum-hot");
+    expect(styles).toContain(".agent-row.is-momentum-recede");
+    expect(styles).toContain("prefers-reduced-motion");
   });
 
   test("selected rows retain an accessible full-text inspector path", () => {
@@ -9215,7 +9328,7 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(root.children[1]).not.toBe(betaSection);
     const newBetaBody = root.children[1].children[root.children[1].children.length - 1];
     expect(newBetaBody.children.length).toBe(2);
-    expect(textOf(newBetaBody.children[1])).toContain("Waiting");
+    expect(textOf(newBetaBody.children[1])).toContain("Needs you");
     expect(newBetaBody.children[1]).not.toBe(rowS3); // its own signature moved too
     // Alpha is untouched by Beta's rebuild.
     expect(alphaBody.children[2]).toBe(rowS2);
@@ -9444,7 +9557,7 @@ describe("FE-B: harness-backed client behavior", () => {
        two rows up already carries it — so the rescued row identifies itself as
        "Codex" here. What this test is about is that it PAINTS at all. */
     expect(rowText).toContain("Codex");
-    expect(rowText).toContain("Alert"); // and it reads as needing a human
+    expect(rowText).toContain("Needs you"); // and it reads as needing a human
 
     // The guard: a program of finished, healthy agents still collapses, so this
     // cannot expand the 60+ done programs on a real board.
@@ -9592,7 +9705,12 @@ describe("FE-B: harness-backed client behavior", () => {
     test("acknowledging an alert returns the row to its lifecycle section", () => {
       // The plan's open question, answered: ack means "I have seen it", so the
       // row leaves the strip and rejoins the fleet rather than vanishing.
-      const acked = agent({ id: "codex:a-alert", status: "waiting", lifecycle: "waiting" });
+      const acked = agent({
+        id: "codex:a-alert",
+        status: "waiting",
+        lifecycle: "waiting",
+        updatedAt: new Date().toISOString(),
+      });
       const program = { id: "alpha", name: "Alpha", agents: [acked] };
       const visible = [{ program, agents: [acked] }];
       const root = newNode("div");
@@ -15559,15 +15677,17 @@ describe("Burn and Cost render their provenance rather than implying it", () => 
   });
   const sub = (burn: Record<string, unknown>) => M.summaryWidgetData("burn", withBurn(burn), "live").sublabel;
 
-  test("an unavailable cost says so, even when a number rides beside it", () => {
+  test("an unavailable cost is omitted, even when a number rides beside it", () => {
     /* The defect costProvenance exists to prevent. Reading the number's
        null-ness and inferring the rest is one inference away from printing
        "$0.00 last hour" for an hour nobody could price — a fabricated total,
-       which is exactly what "never $0" forbids. The provenance wins. */
+       which is exactly what "never $0" forbids. The provenance wins, and a
+       blind reading is skipped rather than replaced with a dash. */
     const text = sub({ tokensPerMin: 1000, windowMs: 600_000, costLastHourUsd: 0, costProvenance: "unavailable" });
-    expect(text).toContain("cost unavailable");
+    expect(text).not.toContain("cost unavailable");
     expect(text).not.toContain("$0");
     expect(text).not.toContain("$0.00");
+    expect(text).not.toMatch(/—/);
     // A measured zero from a source that DID answer is a real reading and prints.
     expect(sub({ tokensPerMin: 1000, windowMs: 600_000, costLastHourUsd: 0, costProvenance: "burnbar" }))
       .toContain("$0.00 last hour");
@@ -15595,7 +15715,7 @@ describe("Burn and Cost render their provenance rather than implying it", () => 
     expect(text).toMatch(/\$4\.12 last hour \([^)]+\)/);
     // An unavailable cost has no instant to be as-of, and does not invent one.
     expect(sub({ tokensPerMin: 1, windowMs: 600_000, costLastHourUsd: null, costProvenance: "unavailable", costAsOf: new Date().toISOString() }))
-      .toContain("cost unavailable");
+      .not.toContain("cost unavailable");
     expect(sub({ tokensPerMin: 1, windowMs: 600_000, costLastHourUsd: null, costProvenance: "unavailable", costAsOf: new Date().toISOString() }))
       .not.toMatch(/\(/);
     // Nor does a malformed instant.
@@ -15632,15 +15752,19 @@ describe("Burn and Cost render their provenance rather than implying it", () => 
        was unknown or $19.54. */
     const rateOnly = M.summaryWidgetData("burn", withBurn({ tokensPerMin: 500, windowMs: 600_000, costLastHourUsd: null, costProvenance: "unavailable" }), "live");
     expect(rateOnly.value).toBe("500");
-    expect(rateOnly.sublabel).toContain("cost unavailable");
+    expect(rateOnly.sublabel).not.toContain("cost unavailable");
+    expect(rateOnly.sublabel).not.toMatch(/—/);
     const costOnly = M.summaryWidgetData("burn", withBurn({ tokensPerMin: null, costLastHourUsd: 9.5, costProvenance: "burnbar" }), "live");
     expect(costOnly.value).toBe("Token rate unavailable");
     expect(costOnly.sublabel).toContain("$9.50 last hour");
-    // Both gone is "No data", and it KEEPS the honest cost phrasing.
+    // Both gone is omitted: missing tone so the painter skips the chip.
     const neither = M.summaryWidgetData("burn", withBurn({ tokensPerMin: null, costLastHourUsd: null, costProvenance: "unavailable" }), "live");
     expect(neither.value).toBe("No data");
     expect(neither.tone).toBe("missing");
-    expect(neither.sublabel).toContain("cost unavailable");
+    expect(neither.sublabel).not.toContain("cost unavailable");
+    expect(neither.sublabel).not.toMatch(/—/);
+    expect(M.pulseStripModel(withBurn({ tokensPerMin: null, costLastHourUsd: null, costProvenance: "unavailable" }), "live", [], "percent", "")
+      .cells.map((c: { id: string }) => c.id)).not.toContain("burn");
   });
 });
 

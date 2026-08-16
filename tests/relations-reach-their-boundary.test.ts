@@ -115,6 +115,13 @@ const POPULATION: readonly { label: string; snapshot: unknown }[] = [
   { label: "a live fleet gone quiet", snapshot: board(many(4, () => ({
     updatedAt: new Date(T0 - 3 * 60 * 60_000).toISOString(), status: "waiting", processAlive: true,
   }))) },
+  /* Separates stalled from idle: recent enough to still be waiting, inside
+     the 15-minute stall window, so live and idle and not stalled. */
+  { label: "a waiter inside the stall window", snapshot: board([agent({
+    status: "waiting",
+    updatedAt: new Date(T0 - 5 * 60_000).toISOString(),
+    processAlive: true,
+  })]) },
   { label: "a fleet that has finished", snapshot: board(many(3, () => ({
     status: "stale", processAlive: false, processIds: [4_242],
     updatedAt: new Date(T0 - 6 * 60 * 60_000).toISOString(),
@@ -141,12 +148,17 @@ const RELATIONS: readonly Relation[] = [
     left: (s) => s.pulse.burn.coverage.reporting, right: (s) => s.pulse.burn.coverage.eligible },
   { label: "attention <= tracked", kind: "le",
     left: (s) => s.totals.attention, right: (s) => s.totals.tracked },
-  /* Declared as an EQUALITY, not <=. The instrument caught this as my own
-     modelling error: `live` is DEFINED as working + idle, so writing it as <=
-     was an inequality that could never be strict. Stating it as === is both
-     honest and stronger — it fails if either side drifts. */
-  { label: "working + idle === live", kind: "eq",
-    left: (s) => s.totals.working + s.totals.idle, right: (s) => s.totals.live },
+  /* live ⊆ working ∪ waiting_fresh ∪ needs_you. Once stalled ⊆ idle, the old
+     equality `working + idle === live` is false on purpose: a 3h quiet waiter
+     stays in idle and leaves live. <= against the activity bags plus needsYou
+     is the honest bound; "a live fleet gone quiet" is the strict case. */
+  { label: "live <= working + idle + needsYou", kind: "le",
+    left: (s) => s.totals.live, right: (s) => s.totals.working + s.totals.idle + s.totals.needsYou },
+  /* stalled ∩ live = ∅ is pinned in operator-live / pulse tests. Here: every
+     stalled row is still a waiter, so the count cannot exceed idle. Tight on
+     the all-quiet fleet; strict when idle waiters are still inside the window. */
+  { label: "stalled <= idle", kind: "le",
+    left: (s) => s.pulse.momentum.stalled, right: (s) => s.totals.idle },
   { label: "stalled === stalledAgentIds.length", kind: "eq",
     left: (s) => s.pulse.momentum.stalled, right: (s) => s.pulse.momentum.stalledAgentIds.length },
   { label: "needsYou === agents carrying an attention signal", kind: "eq",

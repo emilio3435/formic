@@ -235,7 +235,7 @@ describe("the dashboard's burn widget separates no spend from no reading", () =>
     pulse: { burn },
   });
 
-  test("a failed burn query reads as No data and cost unavailable", () => {
+  test("a failed burn query omits the burn chip instead of printing a placeholder", () => {
     const widget = M.summaryWidgetData("burn", snapshotWith({
       tokensPerMin: null,
       costLastHourUsd: null,
@@ -243,8 +243,9 @@ describe("the dashboard's burn widget separates no spend from no reading", () =>
     }));
 
     expect(widget.value).toBe("No data");
-    expect(widget.sublabel).toContain("cost unavailable");
+    expect(widget.sublabel).not.toContain("cost unavailable");
     expect(widget.sublabel).not.toContain("$");
+    expect(widget.sublabel).not.toMatch(/—/);
     expect(widget.tone).toBe("missing");
   });
 

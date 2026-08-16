@@ -21,6 +21,7 @@ import type {
   RepoIdentity,
 } from "../shared/types";
 import { fnvKey } from "./repo-identity";
+import { isLive } from "./live";
 import { taskStateWantsHuman } from "./task-state";
 import type { CmuxSurface, CollectedAgent } from "./types";
 
@@ -45,11 +46,13 @@ function slug(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "unassigned";
 }
 
-export function rollupFor(agents: readonly AgentSnapshot[]): ProgramRollup {
+export function rollupFor(agents: readonly AgentSnapshot[], nowMs = Date.now()): ProgramRollup {
   const outcomeCount = (outcome: OutcomeState): number => agents.filter((agent) => agent.outcome === outcome).length;
   return {
     total: agents.length,
-    live: agents.filter((agent) => agent.activity === "working" || agent.activity === "idle").length,
+    /* Stall-aware live. idle/working keep their wire names (schema-2 to rename
+       idle→waiting). live ⊆ working ∪ waiting_fresh ∪ needs_you. */
+    live: agents.filter((agent) => isLive(agent, nowMs)).length,
     working: agents.filter((agent) => agent.activity === "working").length,
     idle: agents.filter((agent) => agent.activity === "idle").length,
     ended: agents.filter((agent) => agent.activity === "ended").length,

@@ -156,6 +156,10 @@ import {
   deriveOutcome,
   deriveRollup,
   isLive,
+  isStalled,
+  operatorState,
+  stallThresholdMs,
+  DEFAULT_STALL_THRESHOLD_MS,
   isReviewWorker,
   sessionKindOf,
   agentClassOf,
@@ -195,6 +199,7 @@ import {
   LOOKBACK_STORAGE_KEY,
   NEEDS_YOU_DISPLAY_KEY,
   OPS_VIEWS,
+  OPERATOR_STATE_LABELS,
   OUTCOME_LABELS,
   RETIRED_WIDGET_IDS,
   ROSTER_ROLE_ORDER,
@@ -311,7 +316,12 @@ const RESOLUTION_LABELS = { exact: "exact match", "unique-cwd": "matched by fold
    instead of summing its own. Until then it sums, and says which quantity it
    summed. */
 function programRollupCells(agents, rollup = null, snap = null) {
-  const r = deriveRollup(agents);
+  const nowMs = snap && Date.parse(snap.generatedAt);
+  const r = deriveRollup(
+    agents,
+    Number.isFinite(nowMs) ? nowMs : Date.now(),
+    stallThresholdMs(snap),
+  );
   if (snap) r.needsYou = agents.filter((agent) => stripAlerting(agent, snap)).length;
   const cells = [
     /* "230 agents" was 33 live and 197 ended — 5.8x the operational population
@@ -597,7 +607,9 @@ function totalsOf(snap) {
     unverified: byLifecycle.unverified ?? count(isUnverified),
     history: t.history ?? count(isTerminal),
     retained: t.retained ?? count((a) => scopeOf(a) === "retained"),
-    live: t.live ?? count(isLive),
+    /* Wrap the predicate: Array#filter would pass the index as nowMs and
+       treat every waiting row as years past the stall threshold. */
+    live: t.live ?? count((a) => isLive(a)),
     tracked: t.tracked ?? agents.length,
     tokens: t.tokens,
     tokenMedian: t.tokenMedian,
@@ -1146,27 +1158,17 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
      instead of two truncated titles and a number. */
   if (id === "momentum") {
     const momentum = snap.pulse && snap.pulse.momentum;
-    /* "yet" promises a number that is never coming. The server withholds
-       completions permanently — success is unverifiable and completion is
-       undetectable for most providers — and says so in `completionsProvenance`,
-       which nothing read. On a busy board the stall text fills this line so the
-       promise never showed; on a quiet or brand-new one it is the first thing a
-       newcomer reads about the counter. Saying "not measured" once is honest;
-       saying "not yet" forever is the same overclaim in a patient voice. */
-    let sublabel = momentum && momentum.completionsProvenance === "not-observable"
-      ? "Completions are not measured — no source reports them reliably."
-      : "No completion data yet.";
+    /* Completions are not-observable on the wire. Do not mount a filler chip
+       or a "not measured" sentence — omit that reading. The CTA stays the
+       needs-you count; stall and shipping facts may still ride the sublabel. */
+    const parts = [];
     if (momentum) {
-      // Window honesty: a freshly restarted tracker says how long it has
-      // actually watched, never a fabricated "this hour". Below one full
-      // 5-min bucket there is no completion window to report at all; stall
-      // detection reads updatedAt directly, so it stays valid immediately.
-      const parts = [];
-      const windowText = completionWindowText(momentum);
+      const windowText = momentum.completionsProvenance === "not-observable"
+        ? ""
+        : completionWindowText(momentum);
       if (windowText) parts.push(windowText);
       const stall = stallText(snap, momentum.stalled);
       if (stall) parts.push(stall);
-      if (parts.length) sublabel = parts.join(" · ");
     }
     /* Attention leads. The strip was the one surface with zero attention
        information — a header that summarizes everything except what needs a
@@ -1180,7 +1182,7 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
     return {
       value: String(asking),
       unit: asking === 1 ? "needs you" : "need you",
-      sublabel: totals.working + " shipping · " + sublabel,
+      sublabel: [totals.working + " shipping", ...parts].filter(Boolean).join(" · "),
       tone: asking ? "hot" : "ok",
     };
   }
@@ -1200,9 +1202,12 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
        travels with the number when the sublabel is skimmed or read aloud, and it
        is what stops a measured floor being banked as the hour's total spend. */
     const costKnown = burn.costProvenance !== "unavailable" && burn.costLastHourUsd != null;
+    /* Blind cost is omitted, not replaced with "cost unavailable", a dash, or
+       $0. Provenance wins: a payload that says unavailable beside a numeric 0
+       still must not print a dollar figure. */
     const cost = costKnown
       ? (burn.costIsFloor ? "≥$" : "$") + burn.costLastHourUsd.toFixed(2) + " last hour"
-      : "cost unavailable";
+      : "";
     /* Cost is the one figure on this card that does NOT come from this board's
        own collection cycle — BurnBar computes it over its own hour, which is why
        the guide warns against dividing the rate by it. So the as-of is not
@@ -1233,11 +1238,10 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
        spend was unknown or $19.54. Only the missing half says it is missing. */
     const hasRate = burn.tokensPerMin != null;
     const hasCost = costKnown;
-    /* Both missing is still "No data", but it keeps the sublabel rather than
-       swapping in a generic one: "cost unavailable" is the honest phrasing for a
-       failed BurnBar query and must never degrade into a rendered $0. */
-    const sub = cost + asOf + coverage + (burn.costNote ? " · " + burn.costNote : "");
-    if (!hasRate && !hasCost) return { value: "No data", unit: "", sublabel: sub, tone: "missing" };
+    /* Both missing: skip the chip. A missing-tone cell is how the painter
+       omits a reading; do not mount a dash or an "unavailable" sentence. */
+    const sub = [cost + asOf, coverage, burn.costNote].filter(Boolean).join(" · ");
+    if (!hasRate && !hasCost) return noDataWidget("No burn data yet.");
     /* The rate is an average over a window the payload carries and the widget
        never printed. windowMs is 300000 here — a five-minute average shown as a
        bare "/min" invites reading it as an instantaneous rate, which is how a
@@ -1457,9 +1461,7 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
     const burn = snap.pulse && snap.pulse.burn;
     if (!burn) return noDataWidget("No spend data yet.");
     const costKnown = burn.costProvenance !== "unavailable" && burn.costLastHourUsd != null;
-    if (!costKnown) {
-      return { value: "No data", unit: "", sublabel: "cost unavailable", tone: "missing" };
-    }
+    if (!costKnown) return noDataWidget("No spend data yet.");
     const value = (burn.costIsFloor ? "≥$" : "$") + Number(burn.costLastHourUsd).toFixed(2);
     const asOf = burn.costAsOf && !Number.isNaN(Date.parse(burn.costAsOf))
       ? agoText(burn.costAsOf)
@@ -1509,7 +1511,7 @@ const STAGE_BY_WORK = {
 
 globalThis.TheAntHill = {
   deriveActivity, deriveOutcome, deriveControlState, deriveRollup, programRollup,
-  lifecycleOf, provenanceOf, scopeOf, isTerminal, isLive, isUnverified, wantsHuman,
+  lifecycleOf, provenanceOf, scopeOf, isTerminal, isLive, isStalled, operatorState, stallThresholdMs, DEFAULT_STALL_THRESHOLD_MS, isUnverified, wantsHuman,
   declaredQuiet, declaredDone,
   controlUnavailableText,
   totalsOf, issuesOf, alerting, alertFirst, viewMatches, matchesQuery, buildClusters, tokenSummary,
@@ -2646,14 +2648,27 @@ function peakContext(snap) {
   return peak;
 }
 
-function reading(label, valueNode, subNode, extraClass) {
+function reading(label, valueNode, subNode, extraClass, attrs = {}) {
   const labelNode = label && label.nodeType
     ? label
     : el("span", { class: "reading-label", text: label });
-  return el("div", { class: "reading" + (extraClass ? " " + extraClass : "") },
+  return el("div", { class: "reading" + (extraClass ? " " + extraClass : ""), ...attrs },
     labelNode,
     valueNode,
     subNode || null);
+}
+
+function toggleMomentumMagnify(event) {
+  if (event && event.type === "keydown" && event.key !== "Enter" && event.key !== " ") return;
+  if (event && event.type === "keydown") event.preventDefault();
+  state.momentumMagnify = !state.momentumMagnify;
+  render();
+}
+
+/* Who Momentum is counting — and therefore who it magnifies. Defaults to the
+   strip population so a future CTA number can reuse the same set. */
+function momentumPopulation(agent, snap = state.snap) {
+  return stripAlerting(agent, snap);
 }
 
 function toggleContextDisplay() {
@@ -3002,7 +3017,24 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
      — the same rule that retired the finding links. They are in the
      notification center's instrument block now, together, next to the sentence
      that says what is wrong. */
-  return reading(widgetLabelNode(id, meta.label, !compact), valueNode, subNode, cellClass);
+  const momentumAttrs = id === "momentum"
+    ? {
+      role: "button",
+      tabindex: "0",
+      "aria-pressed": String(Boolean(state.momentumMagnify)),
+      "aria-label": state.momentumMagnify
+        ? "Stop magnifying needs-you rows"
+        : "Magnify needs-you rows",
+      title: "Lift sessions that need you; the rest of the Board recedes",
+      dataset: { fkey: "momentum-magnify" },
+      onclick: toggleMomentumMagnify,
+      onkeydown: toggleMomentumMagnify,
+    }
+    : {};
+  const momentumClass = id === "momentum"
+    ? " momentum-cta" + (state.momentumMagnify ? " is-momentum-armed" : "")
+    : "";
+  return reading(widgetLabelNode(id, meta.label, !compact), valueNode, subNode, cellClass + momentumClass, momentumAttrs);
 }
 
 function setWidgetEnabled(id, enabled) {
@@ -3853,7 +3885,8 @@ function renderWidgetCustomizer() {
    not have two phrasings depending on whether the band happens to be collapsed.
    Absent when BurnBar priced nothing, never a fabricated $0. */
 function calmSpendText(burn) {
-  const cost = burn && burn.costLastHourUsd;
+  if (!burn || burn.costProvenance === "unavailable") return "";
+  const cost = burn.costLastHourUsd;
   return typeof cost === "number" ? "$" + cost.toFixed(2) + " last hour" : "";
 }
 
@@ -3882,7 +3915,9 @@ function renderPulseCalm(healthData, watch = watchClauses(state.snap)) {
      vanishing. (Day-one review.) */
   const parts = totals.tracked > 0 ? [totals.working + " shipping"] : [];
   if (pulse && totals.tracked > 0) {
-    const windowText = completionWindowText(pulse.momentum);
+    const windowText = pulse.momentum && pulse.momentum.completionsProvenance === "not-observable"
+      ? ""
+      : completionWindowText(pulse.momentum);
     if (windowText) parts.push(windowText);
     if (pulse.burn.tokensPerMin != null) parts.push(fmtTok(pulse.burn.tokensPerMin) + " tok/min");
     const spend = calmSpendText(pulse.burn);
@@ -4058,6 +4093,7 @@ function renderHealthRail() {
        the hidden states below and then hit an unchanged signature — leaving
        the newly shown face empty until the next snapshot moved a number. */
     state.headerCollapsed ? "collapsed" : "expanded",
+    state.momentumMagnify ? "mom-on" : "mom-off",
   ].join("\u001f");
   /* AHEAD of the widgets guard, deliberately. The scan window is not a widget
      and does not belong behind a widget signature: it changes when Settings
@@ -7689,6 +7725,15 @@ function agentRowSig(agent, ui, opts = {}) {
     // this signature moving, so it has to be in here or the row keeps its
     // cached, unmarked node.
     opts.alerting ? "alert-mark" : "",
+    operatorState(
+      agent,
+      Number.isFinite(Date.parse(ui.snap && ui.snap.generatedAt)) ? Date.parse(ui.snap.generatedAt) : Date.now(),
+      stallThresholdMs(ui.snap),
+      ackedAgent(agent, ui.snap),
+    ) || "",
+    ui.momentumMagnify
+      ? (momentumPopulation(agent, ui.snap) ? "mom-hot" : "mom-recede")
+      : "",
     /* Signal's tick. It arrives on the colour endpoint's clock rather than the
        snapshot's, so nothing else in this signature moves when it lands. */
     opts.repoTint || "",
@@ -7750,6 +7795,7 @@ function programsPaintSig(visible, ui) {
        radio writes needsYouDisplay and nothing else, so without this the strip
        would neither leave nor return until something unrelated repainted. */
     needsYouDisplayOf(ui),
+    ui.momentumMagnify ? "mom-on" : "mom-off",
     ui.selected ? ui.selected.kind + ":" + ui.selected.id : "",
     [...ui.programOverrides].map(([id, mode]) => id + "=" + mode).join(","),
     /* Third instance of the same failure class: toggleRepo mutates nothing else
@@ -9149,7 +9195,19 @@ const CONTROL_ICONS = { linked: "linked", quarantined: "quarantine", "observed-o
    not the dominant case. Healthy working rows in Now say nothing. */
 const ACTIVITY_PINNED_VIEWS = new Set(["waiting", "history"]);
 
-function rowStateWords(activity, outcome, view, agent, alertMuted = false) {
+function rowStateWords(activity, outcome, view, agent, alertMuted = false, nowMs = Date.now(), thresholdMs = DEFAULT_STALL_THRESHOLD_MS) {
+  if (agent) {
+    const words = [];
+    const shown = operatorState(agent, nowMs, thresholdMs, alertMuted);
+    if (shown === "needs-you") words.push(OPERATOR_STATE_LABELS["needs-you"]);
+    else if (shown === "stalled") words.push(OPERATOR_STATE_LABELS.stalled);
+    else if (shown === "done" && view !== "history") words.push(OPERATOR_STATE_LABELS.done);
+    else if (shown === "working" && view !== "now" && view !== "working") words.push(OPERATOR_STATE_LABELS.working);
+    else if (shown === "waiting" && view !== "waiting") words.push(OPERATOR_STATE_LABELS.waiting);
+    if (outcome === "blocked") words.push(OUTCOME_LABELS.blocked);
+    if (outcome === "failed") words.push(OUTCOME_LABELS.failed);
+    return words;
+  }
   const words = [];
   if (!ACTIVITY_PINNED_VIEWS.has(view) && activity !== "working") {
     words.push(ACTIVITY_LABELS[activity] || activity);
@@ -9157,12 +9215,6 @@ function rowStateWords(activity, outcome, view, agent, alertMuted = false) {
   if (outcome !== "healthy" && !(alertMuted && outcome === "needs-you")) {
     words.push(OUTCOME_LABELS[outcome] || outcome);
   }
-  /* An alerting row always says so — even when another word got there first. A
-     healthy-outcome session that wantsHuman used to print only "Waiting": the
-     group head counted it among "6 alerts" while the row corroborated nothing,
-     which teaches the operator the count is decorative. Appended, never
-     duplicated — a needs-you outcome already put the word there. */
-  if (!alertMuted && outcome === "healthy" && agent && wantsHuman(agent)) words.push(OUTCOME_LABELS["needs-you"]);
   return words;
 }
 
@@ -9338,6 +9390,10 @@ function renderAgentRow(agent, program, opts = {}) {
   const outcome = deriveOutcome(agent);
   const alertMuted = ackedAgent(agent, state.snap);
   const presentedOutcome = alertMuted && outcome === "needs-you" ? "healthy" : outcome;
+  const nowMs = state.snap && Date.parse(state.snap.generatedAt);
+  const thresholdMs = stallThresholdMs(state.snap);
+  const opState = operatorState(agent, Number.isFinite(nowMs) ? nowMs : Date.now(), thresholdMs, alertMuted);
+  const opLabel = opState ? OPERATOR_STATE_LABELS[opState] : null;
   const control = deriveControlState(agent);
   const watchOnly = watchOnlyMark(control);
   const role = roleView(agent.role);
@@ -9349,7 +9405,8 @@ function renderAgentRow(agent, program, opts = {}) {
   // Status column shows the activity word colored by state (the color already
   // encodes working/idle/ended, so no separate dot), with any alert suffix on
   // its own red span. Full state stays in the tooltip + row aria-label.
-  const stateText = ACTIVITY_LABELS[activity] + (presentedOutcome !== "healthy" ? " · " + OUTCOME_LABELS[presentedOutcome] : "");
+  const stateText = (opLabel || ACTIVITY_LABELS[activity])
+    + (presentedOutcome !== "healthy" && presentedOutcome !== "needs-you" ? " · " + OUTCOME_LABELS[presentedOutcome] : "");
 
   const nameTarget = preferredRenameTarget(agent);
   const nameKey = presentationLabelKey(nameTarget);
@@ -9559,17 +9616,25 @@ function renderAgentRow(agent, program, opts = {}) {
        the title and the row's aria-label, so nothing is lost to a reader who
        asks — it just stops being printed 275 times. */
     (() => {
-      const words = rowStateWords(activity, outcome, state.view, agent, alertMuted);
+      const words = rowStateWords(activity, outcome, state.view, agent, alertMuted, Number.isFinite(nowMs) ? nowMs : Date.now(), thresholdMs);
       if (!words.length) return null;
       return el("span", {
-        class: "row-state state-" + activity + (presentedOutcome !== "healthy" ? " outcome-" + presentedOutcome : ""),
+        class: "row-state state-" + activity + (presentedOutcome !== "healthy" ? " outcome-" + presentedOutcome : "")
+          + (opState === "stalled" ? " is-stalled" : "")
+          + (opState === "done" ? " is-done" : ""),
         title: stateText,
         "aria-label": "Status: " + stateText,
       }, el("span", {
-        // The ink follows the words, not the outcome alone: a hook-shaped alert
-        // has a HEALTHY outcome, so "Alert" was printing in the activity's own
-        // green — the safe color, on the rows where the word is the only signal.
-        class: presentedOutcome !== "healthy" || (!alertMuted && agent && wantsHuman(agent)) ? "row-state-alert" : "act-" + activity,
+        // The ink follows the operator state: needs-you is amber, stalled is
+        // the same graphite as waiting (dimmed on the row), working is blue.
+        class: opState === "needs-you" ? "row-state-alert"
+          : presentedOutcome === "blocked" ? "row-state-blocked"
+            : presentedOutcome === "failed" ? "row-state-failed"
+              : opState === "stalled" ? "act-idle is-stalled"
+                : opState === "done" ? "act-ended is-done"
+                  : opState === "working" ? "act-working"
+                    : opState === "waiting" ? "act-idle"
+                      : "act-" + activity,
         text: words.join(" · "),
       }));
     })(),
@@ -9641,6 +9706,18 @@ function renderAgentRow(agent, program, opts = {}) {
        A row can be in the set with a healthy outcome (hook needsInput), so
        this mark and is-needs-you are two different facts. */
     (opts.alerting ? " is-alerting" : "") +
+    /* Strip rows already sit inside the needs-you pane — the strip IS the
+       signal. Adding is-needs-you here would double-mark and let a healthy
+       hook-shaped alert wear identity paint the :not() selectors cannot catch
+       if we ever offered a tick. Board rows still take the class. */
+    (opState === "needs-you" && !opts.programChip ? " is-needs-you" : "") +
+    (opState === "working" ? " is-working" : "") +
+    (opState === "waiting" ? " is-waiting" : "") +
+    (opState === "stalled" ? " is-stalled" : "") +
+    (opState === "done" ? " is-done" : "") +
+    (state.momentumMagnify && state.view === "board"
+      ? (momentumPopulation(agent) ? " is-momentum-hot" : " is-momentum-recede")
+      : "") +
     (liveness && liveness.key === "died" ? " is-died" : "") +
     (lineageContradicted ? " is-lineage-disputed" : "") +
     (activity === "ended" ? " is-ended" : "") +
@@ -14258,6 +14335,7 @@ Object.assign(globalThis.TheAntHill, {
      cleared notification staying on screen has to be exercised directly. */
   unreadCmuxByWorkspace, unreadCmuxNotifications, agentUnreadCmux,
   ackedIds, ackedAgent, stripAlerting, acknowledgedCount,
+  momentumPopulation, toggleMomentumMagnify,
   cmuxBadgeNode, ackedMarkNode, syncAckButton, acknowledgedClause,
   renderCmuxNotifySection, cmuxNotifyRow, notifyPanelPaintSig,
   clearCmuxNotification, applySyncAck, syncRequest, syncFailureText, syncPending,
