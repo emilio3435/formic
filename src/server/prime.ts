@@ -1,16 +1,39 @@
 import { readFileSync } from "node:fs";
 import type { CollectedAgent } from "./types";
 import type { IncrementalParser, ParseMetadata } from "./collectors";
-import type { TokenUsage } from "../shared/types";
+import type { AgentStatus, TokenUsage } from "../shared/types";
 import { resolveAgentName } from "./naming";
 import { MAX_HEARTBEAT_TAIL_CHARS, capTranscriptTail } from "./types";
 import { MODEL_CONFIG } from "./model-config";
 import { claudeContextWindow } from "./collectors";
 import {
+  DEFAULT_LIFECYCLE_THRESHOLDS,
+  spokenMinutes,
+  type LifecycleThresholds,
+} from "./lifecycle";
+import {
+  extractClosingByRole,
   extractLastHumanFacingAt,
+  extractLastHumanMessage,
+  extractLastMessageByRole,
   readableHumanMessage,
   type HumanMessageCandidate,
 } from "./human-message";
+
+function recencyStatus(
+  updatedAt: string,
+  nowMs: number,
+  thresholds: LifecycleThresholds = DEFAULT_LIFECYCLE_THRESHOLDS,
+): { status: AgentStatus; reason: string } {
+  const ageMs = Math.max(0, nowMs - Date.parse(updatedAt));
+  if (ageMs < thresholds.freshMs) {
+    return { status: "running", reason: `Source activity within ${spokenMinutes(thresholds.freshMs)}.` };
+  }
+  if (ageMs < thresholds.quietMs) {
+    return { status: "waiting", reason: `No source activity in the last ${spokenMinutes(thresholds.freshMs)}.` };
+  }
+  return { status: "stale", reason: `No source activity in the last ${spokenMinutes(thresholds.quietMs)}.` };
+}
 
 const PRIME_HEARTBEAT_MONITOR_SESSION_ID = "ant-heartbeat-monitor";
 
@@ -40,6 +63,7 @@ export function createPrimeParser(): IncrementalParser {
   let task: string | undefined;
   let tail: string | undefined;
   let lastHumanFacingAt: string | undefined;
+  const humanMessages: HumanMessageCandidate[] = [];
   let messages = 0;
   let lastUsage: { input?: number; output?: number; cachedInput?: number; total?: number } | undefined;
   let sessionTotal = 0;
@@ -84,6 +108,7 @@ export function createPrimeParser(): IncrementalParser {
           content: msg.content,
           timestamp: humanTimestamp,
         };
+        humanMessages.push(candidate);
         if (readableHumanMessage("prime", candidate.content)) {
           const candidateAt = extractLastHumanFacingAt("prime", [candidate]);
           if (candidateAt && (!lastHumanFacingAt || candidateAt > lastHumanFacingAt)) {
@@ -131,6 +156,8 @@ export function createPrimeParser(): IncrementalParser {
     if (!sessionId) return null;
     if (!messages) return null; // no turns yet
     const fallback = new Date(meta.mtimeMs ?? meta.nowMs ?? Date.now()).toISOString();
+    const sourceUpdatedAt = updatedAt ?? fallback;
+    const recency = recencyStatus(sourceUpdatedAt, meta.nowMs ?? Date.now(), meta.thresholds);
     const agentModel = model || "prime";
     const contextWindow = claudeContextWindow(agentModel, MODEL_CONFIG) ?? (agentModel.toLowerCase().includes("spark") ? 1_000_000 : agentModel.toLowerCase().includes("grok") ? 131_072 : undefined);
     const tokens: TokenUsage = lastUsage
@@ -171,12 +198,16 @@ export function createPrimeParser(): IncrementalParser {
       model: agentModel,
       task,
       startedAt: startedAt ?? fallback,
-      updatedAt: updatedAt ?? fallback,
+      updatedAt: sourceUpdatedAt,
       tokens,
       lastHumanFacingAt,
+      lastHumanMessage: extractLastHumanMessage("prime", humanMessages, task),
+      lastUserMessage: extractLastMessageByRole("prime", humanMessages, "user"),
+      lastAgentMessage: extractLastMessageByRole("prime", humanMessages, "assistant"),
+      lastAgentClosing: extractClosingByRole("prime", humanMessages, "assistant"),
       transcriptTail: capTranscriptTail(tail),
-      humanMessages: [],
-      statusReason: "Prime agent — harness prime, agent " + agentModel,
+      status: recency.status,
+      statusReason: recency.reason,
       transcriptEndedCleanly: false,
       endEvidence: undefined,
       meta,
