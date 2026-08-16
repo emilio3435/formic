@@ -1,14 +1,37 @@
 import { readFileSync } from "node:fs";
 import type { CollectedAgent } from "./types";
 import type { IncrementalParser, ParseMetadata } from "./collectors";
-import type { TokenUsage } from "../shared/types";
+import type { AgentStatus, TokenUsage } from "../shared/types";
 import { resolveAgentName } from "./naming";
 import { MODEL_CONFIG } from "./model-config";
 import {
+  DEFAULT_LIFECYCLE_THRESHOLDS,
+  spokenMinutes,
+  type LifecycleThresholds,
+} from "./lifecycle";
+import {
+  extractClosingByRole,
   extractLastHumanFacingAt,
+  extractLastHumanMessage,
+  extractLastMessageByRole,
   readableHumanMessage,
   type HumanMessageCandidate,
 } from "./human-message";
+
+function recencyStatus(
+  updatedAt: string,
+  nowMs: number,
+  thresholds: LifecycleThresholds = DEFAULT_LIFECYCLE_THRESHOLDS,
+): { status: AgentStatus; reason: string } {
+  const ageMs = Math.max(0, nowMs - Date.parse(updatedAt));
+  if (ageMs < thresholds.freshMs) {
+    return { status: "running", reason: `Source activity within ${spokenMinutes(thresholds.freshMs)}.` };
+  }
+  if (ageMs < thresholds.quietMs) {
+    return { status: "waiting", reason: `No source activity in the last ${spokenMinutes(thresholds.freshMs)}.` };
+  }
+  return { status: "stale", reason: `No source activity in the last ${spokenMinutes(thresholds.quietMs)}.` };
+}
 
 /* Factory (droid) sessions.
 
@@ -94,6 +117,7 @@ export function createFactoryParser(): IncrementalParser {
   let firstUserText: string | undefined;
   let lastAssistantText: string | undefined;
   let lastHumanFacingAt: string | undefined;
+  const humanMessages: HumanMessageCandidate[] = [];
   let messages = 0;
 
   const append = (rows: readonly Record<string, unknown>[]): void => {
@@ -119,6 +143,7 @@ export function createFactoryParser(): IncrementalParser {
         content: message.content,
         timestamp: row.timestamp,
       };
+      humanMessages.push(candidate);
       const readable = readableHumanMessage("factory", candidate.content);
       if (readable) {
         const candidateAt = extractLastHumanFacingAt("factory", [candidate]);
@@ -148,8 +173,12 @@ export function createFactoryParser(): IncrementalParser {
   const input = num(usage.inputTokens);
   const output = num(usage.outputTokens);
   const cachedInput = num(usage.cacheReadTokens);
-  const total = [input, output].some((value) => value !== undefined)
-    ? (input ?? 0) + (output ?? 0)
+  const cacheWrite = num(usage.cacheCreationTokens);
+  /* Settings are session-lifetime consumption, not a latest-call SIZE.
+     Publishing that sum as `total` lets contextPctFor treat spend as occupancy.
+     `sessionTotal` is the consumption field; leave `total` unset. */
+  const sessionTotal = [input, output, cacheWrite].some((value) => value !== undefined)
+    ? (input ?? 0) + (output ?? 0) + (cacheWrite ?? 0)
     : undefined;
   const modelStr = text(settings.model);
   const win = (() => {
@@ -160,22 +189,23 @@ export function createFactoryParser(): IncrementalParser {
     }
     return undefined;
   })();
-  const tokens: TokenUsage = total === undefined
+  const tokens: TokenUsage = sessionTotal === undefined
     ? { provenance: "unknown", contextWindow: win }
     : {
-      total,
       input,
       output,
       cachedInput,
+      sessionTotal,
+      sessionCachedInput: cachedInput,
       contextWindow: win,
-      /* Factory's settings file accumulates across the whole session rather
-         than reporting the latest call, so this is `session` — the field the
-         board uses to decide whether a number may be added to a rollup. */
       scope: "session",
       provenance: "observed",
     };
 
   const fallbackStamp = new Date(meta.mtimeMs ?? meta.nowMs ?? Date.now()).toISOString();
+  const sourceUpdatedAt = updatedAt ?? fallbackStamp;
+  const recency = recencyStatus(sourceUpdatedAt, meta.nowMs ?? Date.now(), meta.thresholds);
+  const task = title ?? firstUserText;
   return {
     id: `factory:${sessionId}`,
     provider: "factory",
@@ -196,18 +226,22 @@ export function createFactoryParser(): IncrementalParser {
       sourceSessionId: sessionId,
       authored: titleAuthored && title ? { name: title, by: "factory-title" } : undefined,
       originCwd: cwd,
-      taskName: title ?? firstUserText,
+      taskName: task,
     }),
     cwd,
     originCwd: cwd,
     model: text(settings.model),
-    task: title ?? firstUserText,
-    status: "running",
-    statusReason: "Factory session activity.",
+    task,
+    status: recency.status,
+    statusReason: recency.reason,
     startedAt,
-    updatedAt: updatedAt ?? fallbackStamp,
+    updatedAt: sourceUpdatedAt,
     tokens,
     lastHumanFacingAt,
+    lastHumanMessage: extractLastHumanMessage("factory", humanMessages, task),
+    lastUserMessage: extractLastMessageByRole("factory", humanMessages, "user"),
+    lastAgentMessage: extractLastMessageByRole("factory", humanMessages, "assistant"),
+    lastAgentClosing: extractClosingByRole("factory", humanMessages, "assistant"),
     transcriptTail: lastAssistantText?.slice(-800),
     artifacts: meta.sourcePath ? [{ label: "Factory transcript", path: meta.sourcePath }] : [],
     gates: [],
