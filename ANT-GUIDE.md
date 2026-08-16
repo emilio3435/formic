@@ -419,6 +419,16 @@ For Grok Build, Formic reads `$GROK_HOME/sessions/<encoded-cwd>/<session-id>/`
 and `grok -c`. A Grok model hosted by `cursor-agent` remains a Cursor session;
 the `grok` binary is the Grok Build harness.
 
+For Muse Code, Formic reads `${XDG_DATA_HOME:-~/.local/share}/muse/sessions/YYYY/MM/DD/<uuid>/session.jsonl`
+and recognizes `muse resume <uuid>` (including the versioned `muse-bin-*` wrapper).
+Child logs under `subagent/` are their own rows. There is no session store on a
+machine that has never run Muse — that is absence, not a fault.
+
+For Antigravity, Formic reads the three conversation trees under `~/.gemini/antigravity{-cli,-ide,}/conversations/*.db`
+through a read-only SQLite open and prefers `brain/<uuid>/…/transcript.jsonl` for speech.
+One Google key: `antigravity`. The leftover Gemini parent home is not a session source.
+`agy --conversation <uuid>` is the resume identity. Tokens stay unknown in v1 (protobuf).
+
 **That is the whole loop:** read the Needs-you strip → click the row → deal with it →
 `Escape`.
 

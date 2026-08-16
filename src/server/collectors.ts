@@ -27,6 +27,8 @@ import { createPrimeParser, parsePrimeJsonl } from "./prime";
 import { collectGrokSessions } from "./grok";
 import { collectGrokBotSessions } from "./grok-bot";
 import { createHermesParser, parseHermesJsonl } from "./hermes";
+import { collectMuseSessions } from "./muse";
+import { collectAntigravitySessions, defaultAntigravityTrees } from "./antigravity";
 import { readHookSessionStores, type HookSessionRecord } from "./cmux-hook-sessions";
 import { readProcessLineage, type ProcessLineageExec } from "./process-lineage";
 import { livenessOf, processAliveFrom } from "./process-liveness";
@@ -1384,18 +1386,17 @@ export async function collectSessionProvider(
       return collectProvider("hermes", sessions, 1, parseHermesJsonl, windowMs, thresholds);
     }
     case "muse": {
-      const root = join(home, ".local/share/muse");
-      if (!existsSync(root)) return { value: [], errors: [], absent: true };
-      return { value: [], errors: [] };
+      const override = home === homedir() ? process.env.XDG_DATA_HOME?.trim() : undefined;
+      const root = override ? join(override, "muse") : join(home, ".local/share/muse");
+      return collectMuseSessions(root, windowMs, thresholds);
     }
     case "antigravity": {
-      const trees = [
-        join(home, ".gemini/antigravity-cli"),
-        join(home, ".gemini/antigravity"),
-        join(home, ".gemini/antigravity-ide"),
-      ];
-      if (!trees.some((tree) => existsSync(tree))) return { value: [], errors: [], absent: true };
-      return { value: [], errors: [] };
+      return collectAntigravitySessions(
+        defaultAntigravityTrees(home).map((tree) => tree.root),
+        Date.now(),
+        windowMs,
+        thresholds,
+      );
     }
   }
 }
