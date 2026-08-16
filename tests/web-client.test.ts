@@ -3102,16 +3102,16 @@ describe("redesigned network contracts (source-level)", () => {
 
   /* The row's own pencil renames the DISPLAY name — a board derivation stored
      as a presentation label. The cmux workspace title is a different field
-     entirely, living on the terminal and written through /api/sync/rename, and
-     until now it was only reachable from the drawer. Two names, two stores, two
-     write paths; the row now shows both and labels which is which.
+     entirely, living on the terminal and written through /api/sync/rename.
+     The board used to print both (and a second pencil); that strip is gone
+     because the title is often the same string as the display name. Rename
+     stays in the inspector.
 
-     The signature assertion at the end is the load-bearing one: the workspace
-     title arrives from cmux on the event stream, so nothing else on the row
-     moves when somebody renames the terminal from the other side. Without the
-     title in agentRowSig the row keeps its cached node and the rename simply
-     never appears. */
-  test("a routed row carries the cmux workspace line, distinct from the display-name rename", () => {
+     The signature assertion at the end is the load-bearing one: display name
+     still derives from workspaceTitle when preferredRenameTarget is workspace,
+     and the title arrives from cmux on the event stream. Without it in
+     agentRowSig the row keeps its cached node and the new name never appears. */
+  test("a routed row does not carry the cmux workspace line; the drawer still does", () => {
     const routed = agent({
       id: "codex:ws1",
       target: { resolution: "exact", workspaceId: "WORKSPACE-9", workspaceTitle: "CAND · F-measured · opus5h" },
@@ -3119,19 +3119,19 @@ describe("redesigned network contracts (source-level)", () => {
     const program = { id: "p1", name: "P", agents: [routed] };
     const row = withDom(() => M.renderAgentRow(routed, program));
 
-    const line = byClass(row, "row-workspace");
+    expect(byClass(row, "row-workspace")).toBeNull();
+    expect(byClass(row, "row-workspace-rename")).toBeNull();
+    expect(byClass(row, "agent-rename")).not.toBeNull();
+
+    const drawer = withDom(() => {
+      const pane = newNode("div");
+      M.renderAgentDrawer(pane, { kind: "agent", agent: routed, program });
+      return pane;
+    });
+    const line = byClass(drawer, "drawer-workspace");
     expect(line).not.toBeNull();
     expect(textOf(line)).toContain("CAND · F-measured · opus5h");
-    expect(textOf(line)).toMatch(/workspace/i);
-
-    /* Both pencils present, and distinguishable. Sharing an fkey would make the
-       focus restore in render() pick whichever the walker reached first. */
-    const nameBtn = byClass(row, "agent-rename");
-    const wsBtn = byClass(row, "row-workspace-rename");
-    expect(nameBtn).not.toBeNull();
-    expect(wsBtn).not.toBeNull();
-    expect(wsBtn.dataset.fkey).not.toBe(nameBtn.dataset.fkey);
-    expect(String(wsBtn.attributes["aria-label"])).toMatch(/workspace/i);
+    expect(byClass(drawer, "drawer-workspace-rename")).not.toBeNull();
 
     /* No resolved workspace, no line — the board never guesses which terminal a
        rename would land on. */
