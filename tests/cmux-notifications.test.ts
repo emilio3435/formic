@@ -104,6 +104,8 @@ const emptySessions = () => ({
   cursor: { value: [], errors: [] },
   factory: { value: [], errors: [] },
   prime: { value: [], errors: [] },
+  grok: { value: [], errors: [] },
+  hermes: { value: [], errors: [] },
 });
 
 async function eventually(assertion: () => void): Promise<void> {

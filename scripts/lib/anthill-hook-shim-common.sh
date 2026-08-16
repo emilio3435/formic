@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Shared helpers for anthill cursor-agent / droid hook-store shims.
-# Sourced by scripts/anthill-cursor-agent and scripts/anthill-droid.
+# Shared helpers for anthill cursor-agent / droid / grok hook-store shims.
+# Sourced by scripts/anthill-cursor-agent, scripts/anthill-droid, and scripts/anthill-grok.
 
 anthill_hook_shim_repo_root() {
   local here

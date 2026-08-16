@@ -1009,7 +1009,7 @@ describe("day one on a machine without cmux", () => {
     expect(fresh.degraded, "a fresh machine is being reported as faulty again").toBe(false);
     expect(fresh.message).toBe("Watching. No sessions running yet.");
     expect(fresh.sources, "the day-one screen went silent again")
-      .toBe("No collectors installed yet — Claude Code, Codex or Cursor will appear here");
+      .toBe("No collectors installed yet — Claude Code, Codex, Cursor or Grok Build will appear here");
   });
 
   test("a machine with one tool installed names the one and the absences", () => {
@@ -1064,7 +1064,7 @@ describe("day one on a machine without cmux", () => {
   });
 
   test("QUICKSTART names every collector the code has, with the path it reads", () => {
-    expect(providers.length, "the Provider union changed shape; re-read the roster").toBe(6);
+    expect(providers.length, "the Provider union changed shape; re-read the roster").toBe(8);
     const table = quickstart.slice(quickstart.indexOf("| Collector |"));
     for (const provider of providers) {
       expect(table.toLowerCase(), `QUICKSTART's collector table omits "${provider}"`)
@@ -1085,7 +1085,7 @@ describe("day one on a machine without cmux", () => {
     expect(quickstart, "QUICKSTART no longer names absence separately from health")
       .toMatch(/not installed/i);
     expect(quickstart, "QUICKSTART stopped telling the reader cmux is not a collector")
-      .toMatch(/cmux is not one of the (?:four|five|six)/i);
+      .toMatch(/cmux is not one of the (?:four|five|six|eight)/i);
   });
 
   /* The last wire, still open. state.ts sets #cmuxAbsent from cmux.absent, which
@@ -1776,46 +1776,30 @@ describe("the archive backlog is described as fixed, not as a shortfall", () => 
   });
 });
 
-/* The only finding of the evening that costs money nobody can observe. Pinned
-   against the code that would make it stale: the collector roster. If a Hermes
-   collector is ever added, this paragraph is wrong and should fail here rather
-   than sit in a handover telling someone to go look.
-
-   It already worked once. Factory was named here as billed-and-uncollected
-   until it gained a collector on 2026-08-04, and this test failed on the same
-   commit that added it — which is the whole reason the guard was written
-   against the Provider union instead of against prose. */
-describe("TODAY.md names the providers the board cannot see", () => {
+/* The dated report carries a current correction above its historical findings.
+   Once Hermes gained collectors, that correction had to say which of its two
+   shapes becomes an agent and which remains spend-only. */
+describe("TODAY.md keeps the Hermes correction current", () => {
   const today = () => read("TODAY.md").replace(/\s+/g, " ");
 
-  test("the roster the board collects still excludes the providers named", () => {
+  test("the roster includes Hermes and the correction names both collectors", () => {
     const providers = read("src/shared/types.ts").match(/export type Provider = ([^;]+);/)?.[1] ?? "";
     expect(providers, "the Provider union could not be read").toBeTruthy();
-    for (const absent of ["hermes"]) {
-      expect(providers.toLowerCase(), `${absent} gained a collector — TODAY.md's blind-spot paragraph is now wrong`)
-        .not.toContain(absent);
-    }
-    expect(today(), "TODAY.md stopped naming the uncollected providers")
-      .toMatch(/Hermes is billed and uncollected/i);
+    expect(providers.toLowerCase(), "Hermes left the provider roster").toContain("hermes");
+    expect(today(), "TODAY.md stopped naming the interactive Hermes collector")
+      .toMatch(/Hermes interactive JSONL sessions are collected as agents/i);
+    expect(today(), "TODAY.md stopped naming Hermes cron as scheduled spend")
+      .toMatch(/Hermes cron is collected separately as scheduled spend on Usage/i);
   });
 
-  test("it says this is an absent number, not a wrong one", () => {
-    /* The distinction is the whole point: a wrong number announces itself by
-       disagreeing with something, and an absent one agrees with everything. */
+  test("it keeps cron out of the agent contract and names the remaining disclosure", () => {
     const t = today();
-    /* The section must LEAD with what the board is blind to, not with what the
-       number is not. A reader who takes away one sentence must take away that
-       one, so it is pinned as the opening claim rather than as a caveat. */
-    expect(t, "the summary stopped leading with what the board is blind to")
-      .toMatch(/blind to two billed providers and one recurring job/i);
-    expect(t, "the summary stopped saying the health card contradicts it")
-      .toMatch(/asserts nothing is missing/i);
-    expect(t, "the summary stopped distinguishing an absent number from a wrong one")
-      .toMatch(/An absent one agrees with everything/i);
-    expect(t, "the summary stopped saying the spend has no row, agent or collector")
-      .toMatch(/no row, no agent,\s*no session, and no collector/i);
-    expect(t, "the summary stopped explaining why 4 of 4 healthy is not a contradiction")
-      .toMatch(/true of their own population and false of the question/i);
+    expect(t, "the summary stopped saying health can remain green")
+      .toMatch(/Health can still read `8 of 8 collectors healthy`/i);
+    expect(t, "the summary made cron look controllable as an agent")
+      .toMatch(/A cron job has no Focus, Send, lifecycle, or Board row/i);
+    expect(t, "the summary stopped naming the billed-provider disclosure")
+      .toMatch(/Unmodelled billed providers/i);
   });
 });
 
@@ -1893,8 +1877,8 @@ describe("ANT-GUIDE teaches the provider blind spot as a check, not a complaint"
     const g = guide();
     expect(g, "the guide stopped saying the cost figure is bounded by which tools it watches")
       .toMatch(/second boundary/i);
-    expect(g, "the guide stopped warning that unwatched spend leaves no gap behind")
-      .toMatch(/no gap where one should be/i);
+    expect(g, "the guide stopped naming the unmodelled billed-provider disclosure")
+      .toMatch(/Unmodelled billed providers/i);
   });
 
   test("it gives the reader the check rather than the grievance", () => {
@@ -1903,8 +1887,8 @@ describe("ANT-GUIDE teaches the provider blind spot as a check, not a complaint"
       .toMatch(/read the provider list/i);
     expect(g, "the guide stopped saying the list comes from billing, not from collectors")
       .toMatch(/from your billing source rather than from the board's collectors/i);
-    expect(g, "the guide stopped naming what an unmatched provider means")
-      .toMatch(/cannot find as a row is a tool the board is not watching/i);
+    expect(g, "the guide stopped naming what an unmodelled provider means")
+      .toMatch(/anything under Unmodelled billed providers is a tool the board is not watching/i);
   });
 
   test("it explains why a green health line does not cover this", () => {
@@ -1914,8 +1898,8 @@ describe("ANT-GUIDE teaches the provider blind spot as a check, not a complaint"
     const g = guide();
     expect(g, "the guide stopped explaining that the green line is accurate but narrower")
       .toMatch(/accurate and simply does not cover the question/i);
-    expect(g, "the guide stopped saying an unwatched tool has no collector to fail")
-      .toMatch(/no collector, so there is nothing to report as unhealthy/i);
+    expect(g, "the guide stopped saying an unmodelled spend source has no health slot to fail")
+      .toMatch(/no health slot, so there is nothing to report as unhealthy/i);
     /* And the glossary must carry the same qualifier, since that is where a
        reader looks up what a collector is. */
     expect(g, "the Collector glossary entry lost the taught-about qualifier")
@@ -1934,11 +1918,11 @@ describe("ANT-GUIDE tells a reader how to find their own blind spot", () => {
   test("the collectors it tells them to compare against are the real ones", () => {
     const union = read("src/shared/types.ts").match(/export type Provider = ([^;]+);/)?.[1] ?? "";
     const names = [...union.matchAll(/"([a-z]+)"/g)].map((m) => m[1]);
-    expect(names.length, "the Provider union changed shape").toBe(6);
+    expect(names.length, "the Provider union changed shape").toBe(8);
     const g = guide();
     /* The guide names them in reader-facing form, so check the mapping rather
        than the identifiers. */
-    for (const shown of ["Claude Code", "Codex", "Cursor", "OMP", "Factory", "Prime"]) {
+    for (const shown of ["Claude Code", "Codex", "Cursor", "OMP", "Factory", "Prime", "Grok", "Hermes"]) {
       expect(g, `the guide stopped listing ${shown} among the collectors to compare against`)
         .toContain(shown);
     }

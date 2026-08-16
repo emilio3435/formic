@@ -13,7 +13,7 @@ import { join } from "node:path";
 import type { HookLifecycle } from "../src/shared/types";
 import { atomicWriteJson } from "./lib/atomic-json";
 
-export const HOOK_STORE_PROVIDERS = ["cursor", "factory"] as const;
+export const HOOK_STORE_PROVIDERS = ["cursor", "factory", "grok"] as const;
 export type HookStoreProvider = (typeof HOOK_STORE_PROVIDERS)[number];
 
 export interface HookStoreLaunchCommand {
@@ -64,7 +64,7 @@ export function isHookLifecycle(value: string): value is HookLifecycle {
   return LIFECYCLES.has(value as HookLifecycle);
 }
 
-/** Extract a session UUID from cursor-agent / droid argv when present. */
+/** Extract a session UUID from cursor-agent / droid / grok argv when present. */
 export function extractSessionIdFromArgs(
   provider: HookStoreProvider,
   args: readonly string[],
@@ -81,12 +81,17 @@ export function extractSessionIdFromArgs(
       }
       continue;
     }
-    // factory / droid
-    if (arg === "-r" || arg === "--resume" || arg === "--fork") {
+    const flags = provider === "factory"
+      ? ["-r", "--resume", "--fork"]
+      : ["-r", "--resume"];
+    if (flags.includes(arg)) {
       const next = args[i + 1];
       if (next && UUID_RE.test(next)) return next;
     }
-    for (const prefix of ["--resume=", "--fork="] as const) {
+    const prefixes = provider === "factory"
+      ? ["--resume=", "--fork="]
+      : ["--resume="];
+    for (const prefix of prefixes) {
       if (arg.startsWith(prefix) && UUID_RE.test(arg.slice(prefix.length))) {
         return arg.slice(prefix.length);
       }
@@ -205,7 +210,7 @@ export function upsertHookSessionRecord(
 
 function usage(): never {
   console.error(`Usage:
-  bun scripts/cmux-hook-store.ts upsert --provider <cursor|factory> --session-id <uuid> \\
+  bun scripts/cmux-hook-store.ts upsert --provider <cursor|factory|grok> --session-id <uuid> \\
     --surface-id <id> --workspace-id <id> --cwd <path> --pid <n> --lifecycle <HookLifecycle> \\
     [--root <dir>] [--executable-path <path>] [--arg <string>]...
 

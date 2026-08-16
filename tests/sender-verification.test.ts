@@ -215,7 +215,9 @@ describe("agent message provenance", () => {
         claude: { value: [sender], errors: [] },
         cursor: { value: [], errors: [] },
         factory: { value: [], errors: [] },
-      prime: { value: [], errors: [] },
+        prime: { value: [], errors: [] },
+        grok: { value: [], errors: [] },
+        hermes: { value: [], errors: [] },
       });
       const collectors: HubCollectors = {
         sessions: async () => sessions(),

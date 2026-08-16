@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Anthill PATH shim for the Grok Build CLI (`grok`).
+#
+# A resumed cmux session writes binding/lifecycle facts to
+# `$ANTHILL_CMUXTERM_ROOT/grok-hook-sessions.json` (default `~/.cmuxterm`).
+# Existing Grok launch paths are unchanged unless this script is ahead of the
+# real binary on PATH.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/anthill-hook-shim-common.sh
+source "$SCRIPT_DIR/lib/anthill-hook-shim-common.sh"
+
+PROVIDER="grok"
+REAL_BIN="$(anthill_hook_shim_resolve_bin grok ANTHILL_GROK_BIN || true)"
+if [[ -z "${REAL_BIN:-}" ]]; then
+  echo "anthill-grok: could not resolve real grok binary" >&2
+  exit 127
+fi
+
+SESSION_ID=""
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  arg="${args[$i]}"
+  if [[ ("$arg" == "-r" || "$arg" == "--resume") && $((i + 1)) -lt ${#args[@]} ]]; then
+    next="${args[$((i + 1))]}"
+    if [[ "$next" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+      SESSION_ID="$next"
+      break
+    fi
+  elif [[ "$arg" =~ ^--resume=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$ ]]; then
+    SESSION_ID="${BASH_REMATCH[1]}"
+    break
+  fi
+done
+
+if ! anthill_hook_shim_should_bind || [[ -z "$SESSION_ID" ]]; then
+  exec "$REAL_BIN" "$@"
+fi
+
+if [[ -t 0 ]]; then
+  # Grok is a TUI, so the real child must own the terminal foreground while
+  # this wrapper waits to publish its ending.
+  set -m
+  "$REAL_BIN" "$@" &
+  CHILD_PID=$!
+  anthill_hook_shim_upsert "$PROVIDER" "$SESSION_ID" "running" "$CHILD_PID" "$REAL_BIN" "$@"
+  code=0
+  fg %1 || code=$?
+  set +m
+  anthill_hook_shim_upsert "$PROVIDER" "$SESSION_ID" "ended" "$CHILD_PID" "$REAL_BIN" "$@"
+  exit "$code"
+fi
+
+"$REAL_BIN" "$@" &
+CHILD_PID=$!
+anthill_hook_shim_upsert "$PROVIDER" "$SESSION_ID" "running" "$CHILD_PID" "$REAL_BIN" "$@"
+code=0
+wait "$CHILD_PID" || code=$?
+anthill_hook_shim_upsert "$PROVIDER" "$SESSION_ID" "ended" "$CHILD_PID" "$REAL_BIN" "$@"
+exit "$code"

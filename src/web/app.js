@@ -9310,6 +9310,8 @@ const HARNESS_MARK = {
   factory: { src: "/icons/factory.svg", label: "Factory" },
   prime: { src: "/icons/prime-orch.svg", label: "Prime" },
   omp: { src: "/icons/omp.svg", label: "OMP" },
+  grok: { src: "/icons/grok.svg", label: "Grok Build" },
+  hermes: { src: "/icons/formic-mark.svg", label: "Hermes" },
   omni: { src: "/icons/omp.svg", label: "OMP" },
 };
 const AGENT_MARK = {
@@ -13695,7 +13697,7 @@ function emptyBoardVerdict(snap) {
       : "Watching. No sessions running yet.",
     hint: degraded
       ? "A degraded collector reports no sessions whether or not any are running, so this board is incomplete rather than empty."
-      : "Claude Code, Codex and Cursor sessions appear here on their own, within seconds of starting.",
+      : "Claude Code, Codex, Cursor and Grok Build sessions appear here on their own, within seconds of starting.",
     /* The denominator stays. I first replaced it with an absolute count, on the
        theory that "3 of 4" reads as a shortfall to a newcomer — then read the
        docs lane's QUICKSTART, which pins "4 of 4 collectors healthy" and
@@ -13722,7 +13724,7 @@ function emptyBoardVerdict(snap) {
           ? `${healthy} of ${total} collectors healthy · ${absent} not installed`
           : `${healthy} of ${total} collectors healthy`)
         : absent > 0
-          ? "No collectors installed yet — Claude Code, Codex or Cursor will appear here"
+          ? "No collectors installed yet — Claude Code, Codex, Cursor or Grok Build will appear here"
           : null,
     checkedAt: (snap && snap.generatedAt) || null,
   };
@@ -13998,6 +14000,25 @@ function renderUsageSeriesChart(series) {
   return wrap;
 }
 
+function renderSpendSources(snap) {
+  const sources = snap && Array.isArray(snap.spendSources) ? snap.spendSources : [];
+  if (!sources.length) return null;
+  const list = el("ul", { class: "usage-providers" });
+  for (const source of sources) {
+    const tokens = source.tokens && Number.isFinite(source.tokens.total)
+      ? fmtTok(source.tokens.total) + " tokens"
+      : "tokens not reported";
+    const cost = Number.isFinite(source.costUsd) ? fmtUsd(source.costUsd) : "cost not reported";
+    const ran = source.lastRunAt ? " · last ran " + agoText(source.lastRunAt) : "";
+    list.append(el("li", { class: "usage-spend-source" },
+      el("strong", { text: "Hermes · " + source.label }),
+      `${ran} · ${tokens} · ${cost}`));
+  }
+  return el("section", { class: "usage-section" },
+    el("h2", { class: "usage-title", text: "Scheduled spend" }),
+    list);
+}
+
 function renderUsagePanel(ui = state) {
   const root = $("usage-panel");
   if (!root) return;
@@ -14034,6 +14055,8 @@ function renderUsagePanel(ui = state) {
     if (ui.usageWard && ui.usageWard.quotaPressure && ui.usageWard.quotaPressure.length) {
       root.append(renderUsageWard(ui.usageWard, true));
     }
+    const spendSources = renderSpendSources(ui.snap);
+    if (spendSources) root.append(spendSources);
     return;
   }
 
@@ -14056,6 +14079,9 @@ function renderUsagePanel(ui = state) {
       }),
       el("span", { class: "reading-sub", text: usageRateWindowText(summary) }))));
 
+  const spendSources = renderSpendSources(ui.snap);
+  if (spendSources) root.append(spendSources);
+
   if (summary.byProvider && summary.byProvider.length) {
     const list = el("ul", { class: "usage-providers" });
     for (const row of summary.byProvider.slice(0, 10)) {
@@ -14066,6 +14092,12 @@ function renderUsagePanel(ui = state) {
     root.append(el("section", { class: "usage-section" },
       el("h2", { class: "usage-title", text: "By provider" }),
       list));
+  }
+
+  if (summary.unmodelledProviders && summary.unmodelledProviders.length) {
+    root.append(el("section", { class: "usage-section" },
+      el("h2", { class: "usage-title", text: "Unmodelled billed providers" }),
+      el("p", { class: "usage-empty", text: summary.unmodelledProviders.join(" · ") })));
   }
 
   root.append(el("section", { class: "usage-section" },
@@ -14470,6 +14502,7 @@ Object.assign(globalThis.TheAntHill, {
   cmuxBadgeNode, ackedMarkNode, syncAckButton, acknowledgedClause,
   renderCmuxNotifySection, cmuxNotifyRow, notifyPanelPaintSig,
   clearCmuxNotification, applySyncAck, syncRequest, syncFailureText, syncPending,
+  HARNESS_MARK, harnessKeyOf, agentKeyOf,
 });
 
 if (typeof document !== "undefined" && typeof window !== "undefined") {

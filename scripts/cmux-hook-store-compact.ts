@@ -13,10 +13,11 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { PROVIDERS } from "../src/shared/types";
 import { atomicWriteJson } from "./lib/atomic-json";
 
 export const DEFAULT_COMPACTION_DAYS = 7;
-const KNOWN_PROVIDERS = ["claude", "codex", "omp", "cursor", "factory"] as const;
+const KNOWN_PROVIDERS = PROVIDERS;
 
 export interface CompactableStore {
   version?: number;

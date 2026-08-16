@@ -15,11 +15,11 @@ import { normalizeSettings } from "../src/server/settings";
    This path only runs on a machine slow enough to miss the deadline, which is
    never the machine a test suite runs on unless the deadline is made small. So
    it had never executed, and it decides what an operator is told at the exact
-   moment the board knows least: zero agents, four providers, and one sentence
+   moment the board knows least: zero agents, every provider, and one sentence
    explaining why.
 
    The presence of the failure was already cross-checked — an empty board also
-   carries four stale sources, so nobody sees zero agents and calm. The REASON
+   carries every source as stale, so nobody sees zero agents and calm. The REASON
    was not, and that is where both defects below were living. */
 
 const runner: CommandRunner = {
@@ -36,7 +36,9 @@ const empty = (): SessionsResult => ({
   claude: { value: [], errors: [] },
   cursor: { value: [], errors: [] },
   factory: { value: [], errors: [] },
-      prime: { value: [], errors: [] },
+  prime: { value: [], errors: [] },
+  grok: { value: [], errors: [] },
+  hermes: { value: [], errors: [] },
 });
 
 /** A hub whose collectors behave exactly as described, with a 60ms deadline. */
@@ -139,7 +141,7 @@ describe("when collection runs out of time the board says so", () => {
   test("the reason given is the deadline, not another collector's failure", async () => {
     /* THE DEFECT. On a machine where cmux is not installed it fails in
        milliseconds, and where transcript reading is slow it never finishes.
-       The reason published for all four session providers was
+       The reason published for every session provider was
        `collectionErrors[0]` — whichever error landed FIRST — so Claude, Codex,
        OMP and Cursor were each reported unavailable because "cmux discovery
        failed: spawn cmux ENOENT". None of them had failed. They had not
@@ -180,7 +182,7 @@ describe("when collection runs out of time the board says so", () => {
 
   test("one fault is reported once, however many sources it stopped", async () => {
     /* The second defect. `sourceErrors` is flattened across providers and a
-       fault that stops the aggregate stops all four, so ONE deadline arrived at
+       fault that stops the aggregate stops every provider, so ONE deadline arrived at
        the health card as TEN entries. Harmless while the card only counted
        them; it now prints the first and appends "(+N more)", which turned two
        real faults into "(+9 more)" and sent an operator hunting eight problems

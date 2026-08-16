@@ -34,6 +34,7 @@ import {
   type SessionProviderResults,
 } from "./collectors";
 import { withAttentionClasses } from "./attention-signal";
+import { collectHermesSpendSources } from "./hermes";
 import { buildSnapshot, type ProgramHint, withIssueDecoration, withPulse } from "./snapshot";
 import { rollupFor } from "./snapshot-programs";
 import { PulseTracker } from "./pulse";
@@ -45,6 +46,7 @@ import type {
   CmuxWorkspaceSnapshot,
   CollectedAgent,
   CommandRunner,
+  SpendSource,
 } from "./types";
 import { enrichCmuxIdentity } from "./identity";
 import { bridgeAgentsWithBindings, updateBindingsFromScan, type IdentityBindingStore } from "./identity-bindings";
@@ -87,6 +89,7 @@ export interface HubCollectors {
   sessions: Abortable<typeof collectSessions>;
   sessionProvider?: Abortable<typeof collectSessionProvider>;
   finalizeSessions?: typeof finalizeSessionProviders;
+  spendSources?: typeof collectHermesSpendSources;
   cmux: Abortable<typeof collectCmux>;
   sidebar?: typeof collectCmuxSidebar;
   workspaceEnv?: typeof collectCmuxWorkspaceEnvs;
@@ -100,6 +103,7 @@ const DEFAULT_COLLECTORS: HubCollectors = {
   sessions: collectSessions,
   sessionProvider: collectSessionProvider,
   finalizeSessions: finalizeSessionProviders,
+  spendSources: collectHermesSpendSources,
   cmux: collectCmux,
   sidebar: collectCmuxSidebar,
   workspaceEnv: collectCmuxWorkspaceEnvs,
@@ -223,6 +227,7 @@ export class HubState {
   #cmuxReachable = false;
   #cmuxAbsent = false;
   #sourceAbsent: Partial<Record<Provider, boolean>> = {};
+  #spendSources: SpendSource[] = [];
   #cmuxLastCheckedAt = new Date(0).toISOString();
   #liveAgentProcessIds?: number[];
   #recognizedAgentProcessIds?: number[];
@@ -254,14 +259,10 @@ export class HubState {
   #issueLifecycle = new Map<string, IssueLifecycle>();
   #recentlyResolved: OperatorIssue[] = [];
   #hasSourceSnapshot = false;
-  #sourceHealth: Record<Provider, SourceHealth> = {
-    omp: { healthy: false, lastHealthyAt: null },
-    codex: { healthy: false, lastHealthyAt: null },
-    claude: { healthy: false, lastHealthyAt: null },
-    cursor: { healthy: false, lastHealthyAt: null },
-    factory: { healthy: false, lastHealthyAt: null },
-    prime: { healthy: false, lastHealthyAt: null },
-  };
+  #sourceHealth = Object.fromEntries(PROVIDERS.map((provider) => [
+    provider,
+    { healthy: false, lastHealthyAt: null },
+  ])) as Record<Provider, SourceHealth>;
 
   #scanWindowHours = DEFAULT_SCAN_WINDOW_HOURS;
   readonly #providerSettlement = new ProviderSettlementCoordinator<Provider, SessionProviderResult>(
@@ -305,6 +306,7 @@ export class HubState {
     this.#scanWindowHours = bootSettings?.scanWindowHours ?? DEFAULT_SCAN_WINDOW_HOURS;
     const initialSnapshot = withAttentionClasses(this.#withSourceHealth(buildSnapshot({
       agents: [],
+      spendSources: this.#spendSources,
       surfaces: [],
       archiveStore,
       nameTagStore: this.bindingStore,
@@ -845,6 +847,7 @@ export class HubState {
        restart. */
     const thresholds = settings ? lifecycleThresholds(settings) : undefined;
     type SessionsResult = Awaited<ReturnType<HubCollectors["sessions"]>>;
+    type SpendSourcesResult = Awaited<ReturnType<typeof collectHermesSpendSources>>;
     type CmuxResult = Awaited<ReturnType<HubCollectors["cmux"]>>;
     type SidebarResult = Awaited<ReturnType<typeof collectCmuxSidebar>>;
     type WorkspaceEnvResult = Awaited<ReturnType<typeof collectCmuxWorkspaceEnvs>>;
@@ -852,6 +855,7 @@ export class HubState {
     type SyncNotificationsResult = Awaited<ReturnType<typeof collectCmuxNotificationSummaries>>;
     type IdentityResult = Awaited<ReturnType<HubCollectors["enrichIdentity"]>>;
     let sessionsResult: SessionsResult | undefined;
+    let spendSourcesResult: SpendSourcesResult | undefined;
     const providerSettledAtMs: Partial<Record<Provider, number>> = {};
     let lastKnownAgents: CollectedAgent[] = [];
     const lastKnownSourceReasons: Partial<Record<Provider, string>> = {};
@@ -979,6 +983,15 @@ export class HubState {
     let aggregateSettled = false;
     const aggregate = Promise.all([
       providerCollection,
+      ...(this.collectors.spendSources
+        ? [capture(
+            "Hermes spend collection failed",
+            this.collectors.spendSources(homedir()),
+            (value) => {
+              spendSourcesResult = value;
+            },
+          )]
+        : []),
       ...(options.cmux
         ? [
             capture("cmux discovery failed", this.collectors.cmux(this.runner, this.cmuxExecutable, signal), (value) => {
@@ -1192,16 +1205,15 @@ export class HubState {
       collectionErrors.find((error) => error.startsWith(`${label}:`)) ?? deadlineError;
     const unavailableSessions = (): SessionsResult => {
       const reason = reasonFor("session collection failed");
-      return {
-        omp: { value: [], errors: [reason] },
-        codex: { value: [], errors: [reason] },
-        claude: { value: [], errors: [reason] },
-        cursor: { value: [], errors: [reason] },
-        prime: { value: [], errors: [reason] },
-        factory: { value: [], errors: [reason] },
-      };
+      return Object.fromEntries(PROVIDERS.map((provider): [Provider, SessionProviderResult] => [
+        provider,
+        { value: [], errors: [reason] },
+      ])) as SessionProviderResults;
     };
     const sessions = sessionsResult ?? unavailableSessions();
+    const spendSourceErrors = this.collectors.spendSources
+      ? spendSourcesResult?.errors ?? [reasonFor("Hermes spend collection failed")]
+      : [];
     const sessionCollectionComplete = sessionsResult !== undefined
       && providers.every((provider) => sessions[provider].errors.length === 0);
     const cmux = options.cmux
@@ -1222,7 +1234,10 @@ export class HubState {
     const collectedAt = new Date().toISOString();
     for (const provider of providers) {
       const source = sessions[provider];
-      this.#sourceHealth[provider] = source.errors.length === 0
+      const providerErrors = provider === "hermes"
+        ? [...source.errors, ...spendSourceErrors]
+        : source.errors;
+      this.#sourceHealth[provider] = providerErrors.length === 0
         ? {
             healthy: true,
             lastHealthyAt: providerSettledAtMs[provider] === undefined
@@ -1395,6 +1410,7 @@ export class HubState {
         provider,
         [...new Set([
           ...sessions[provider].errors,
+          ...(provider === "hermes" ? spendSourceErrors : []),
           ...(!sessionsResult ? collectionErrors : []),
           ...(historyError ? [historyError] : []),
         ])],
@@ -1410,8 +1426,10 @@ export class HubState {
     this.#sourceAbsent = Object.fromEntries(
       providers.map((provider) => [provider, sessions[provider].absent === true]),
     ) as Record<Provider, boolean>;
+    this.#spendSources = spendSourcesResult?.value ?? [];
     const built = this.#withSourceHealth(buildSnapshot({
       agents: publishedAgents,
+      spendSources: this.#spendSources,
       lastKnownAgents,
       lastKnownSourceReasons,
       surfaces: this.#surfaces,

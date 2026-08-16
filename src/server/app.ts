@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, extname, join, resolve, sep } from "node:path";
-import type { AgentSnapshot, HubSnapshot, ProgramSnapshot, TriageQueueItem } from "../shared/types";
+import { PROVIDERS, type AgentSnapshot, type HubSnapshot, type ProgramSnapshot, type Provider, type SourceHealth, type TriageQueueItem } from "../shared/types";
 import { alertFingerprintFor, MemoryAckStore, type AckStore } from "./ack";
 import { ARCHIVE_RETENTION_MS, MAX_ARCHIVE_RECORDS } from "./archive";
 import { handleBroadcastRequest } from "./broadcast";
@@ -46,7 +46,7 @@ import {
 import { folderKeyForCwd, sameHex } from "../shared/repo-color";
 import { snapshotFingerprint } from "./snapshot";
 import { handleTriageRequest, MemoryTriageQueueStore, type TriageInvestigationRunner, type TriageQueueStore } from "./triage";
-import type { ArchiveStore, CmuxSurface, CommandRunner } from "./types";
+import type { ArchiveStore, CmuxSurface, CommandRunner, FormicHubSnapshot } from "./types";
 
 export interface MountainAppState {
   get(): HubSnapshot;
@@ -1720,7 +1720,7 @@ async function serveStatic(pathname: string, webRoot: string, headOnly: boolean)
 
 export function emptySnapshot(): HubSnapshot {
   const now = new Date().toISOString();
-  return {
+  const snapshot: FormicHubSnapshot = {
     schemaVersion: 1,
     generatedAt: now,
     scanWindowHours: DEFAULT_SCAN_WINDOW_HOURS,
@@ -1740,23 +1740,21 @@ export function emptySnapshot(): HubSnapshot {
       sourceHealth: {
         healthy: 0,
         // A snapshot that could not be built has read nothing, which is a real
-        // fault in all four — not four absent providers.
-        degraded: 4,
+        // fault in every provider — not an absent provider.
+        degraded: PROVIDERS.length,
         absent: 0,
-        total: 4,
-        byProvider: {
-          omp: { healthy: false, lastHealthyAt: null },
-          codex: { healthy: false, lastHealthyAt: null },
-          claude: { healthy: false, lastHealthyAt: null },
-          cursor: { healthy: false, lastHealthyAt: null },
-          factory: { healthy: false, lastHealthyAt: null },
-          prime: { healthy: false, lastHealthyAt: null },
-        },
+        total: PROVIDERS.length,
+        byProvider: Object.fromEntries(PROVIDERS.map((provider) => [
+          provider,
+          { healthy: false, lastHealthyAt: null },
+        ])) as Record<Provider, SourceHealth>,
       },
     },
     issues: [],
     recentlyResolved: [],
     triageSummaries: [],
     programs: [],
+    spendSources: [],
   };
+  return snapshot;
 }

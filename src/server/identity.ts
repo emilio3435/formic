@@ -29,6 +29,8 @@ const PROVIDER_BINARIES: Record<Provider, string> = {
   cursor: "cursor-agent",
   factory: "droid",
   prime: "prime-agent",
+  grok: "grok",
+  hermes: "hermes",
 };
 const AGENT_BINARIES = Object.values(PROVIDER_BINARIES).join("|");
 const RESUME_PROVIDERS = PROVIDERS.join("|");
@@ -124,6 +126,7 @@ export function identityFromSessionPath(path: string): IdentityHint | null {
        sibling from matching as a second identity for the same session. */
     ["factory", new RegExp(`\\/.factory\\/sessions\\/.+?\\/(${UUID})\\.jsonl$`, "i")],
     ["prime", new RegExp(`\\/.prime\\/agent\\/sessions\\/(${UUID})\\.jsonl$`, "i")],
+    ["grok", new RegExp(`\\/.grok\\/sessions\\/.+\\/(${UUID})\\/(?:updates\\.jsonl|summary\\.json)$`, "i")],
   ];
   for (const [provider, pattern] of patterns) {
     const match = path.match(pattern);
@@ -143,6 +146,7 @@ export function identitiesFromCommand(command: string): IdentityHint[] {
        follows it, exactly like the other two. */
     ["factory", new RegExp(`(?:^|[\\s/])droid\\b[^\\n]{0,160}?\\s(?:-r|--resume|--fork)\\s+(${UUID})(?:\\s|$)`, "i")],
     ["prime", new RegExp(`(?:^|[\\s/])prime-agent\\b[^\\n]{0,160}?\\s--resume\\s+(${UUID})(?:\\s|$)`, "i")],
+    ["grok", new RegExp(`(?:^|[\\s/])grok\\b[^\\n]{0,160}?\\s(?:-r|--resume)(?:\\s+|=)(${UUID})(?:\\s|$)`, "i")],
   ];
   for (const [provider, pattern] of exactPatterns) {
     const match = command.match(pattern);

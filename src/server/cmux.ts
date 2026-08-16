@@ -297,6 +297,8 @@ export function parseCmuxTerminals(output: string): CmuxSurface[] {
       ["claude", terminal.claude_session_id],
       ["omp", terminal.omp_session_id],
       ["cursor", terminal.cursor_session_id],
+      ["grok", terminal.grok_session_id],
+      ["hermes", terminal.hermes_session_id],
     ];
     const sourceSessionClaims = [...new Map(
       rawClaims.flatMap(([provider, value]): Array<[string, SessionIdentityClaim]> =>

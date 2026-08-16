@@ -562,7 +562,9 @@ describe("binding wiring through the refresh engine", () => {
         claude: { value: [], errors: [] },
         cursor: { value: [], errors: [] },
         factory: { value: [], errors: [] },
-      prime: { value: [], errors: [] },
+        prime: { value: [], errors: [] },
+        grok: { value: [], errors: [] },
+        hermes: { value: [], errors: [] },
       }),
       cmux: async () => ({ value: [scans[Math.min(scanNumber, scans.length - 1)]], errors: [] }),
       notifications: async () => ({ value: [], errors: [] }),
@@ -644,6 +646,25 @@ describe("durable binding store", () => {
     const reopened = await JsonIdentityBindingStore.open(path, files, now);
 
     expect(reopened.get(SESSION_ID)).toEqual(binding(SESSION_ID, "2026-07-23T06:00:00.000Z"));
+  });
+
+  test("factory, prime, grok, and hermes bindings all survive a reopen", async () => {
+    const { files } = virtualFiles();
+    const path = "/virtual/identity-bindings.json";
+    const confirmedAt = "2026-07-23T06:00:00.000Z";
+    const providers = ["factory", "prime", "grok", "hermes"] as const;
+    const store = await JsonIdentityBindingStore.open(path, files, () => Date.parse(confirmedAt));
+
+    await store.putMany(providers.map((provider) => ({
+      ...binding(`${provider}-session`, confirmedAt),
+      provider,
+      target: { surfaceId: `SURFACE-${provider.toUpperCase()}` },
+    })));
+    const reopened = await JsonIdentityBindingStore.open(path, files, () => Date.parse(confirmedAt));
+
+    expect(providers.map((provider) =>
+      reopened.getForProvider(provider, `${provider}-session`)?.provider
+    )).toEqual([...providers]);
   });
 
   test("provider-qualified records sharing a UUID survive reopen independently", async () => {

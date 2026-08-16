@@ -59,6 +59,20 @@ describe("parseCmuxTerminals — the surface rename becomes the terminal title",
       { provider: "claude", sessionId },
     ]);
   });
+
+  test("preserves Grok and Hermes provider claims", () => {
+    const grokSessionId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const hermesSessionId = "11111111-2222-4333-8444-555555555555";
+    const [surface] = parseCmuxTerminals(discovery({
+      grok_session_id: grokSessionId,
+      hermes_session_id: hermesSessionId,
+    }));
+
+    expect(surface?.sourceSessionClaims).toEqual([
+      { provider: "grok", sessionId: grokSessionId },
+      { provider: "hermes", sessionId: hermesSessionId },
+    ]);
+  });
 });
 
 describe("runtime cmux executable", () => {

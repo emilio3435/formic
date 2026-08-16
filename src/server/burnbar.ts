@@ -2,7 +2,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { PROVIDERS, type Provider } from "../shared/types";
 import { MODEL_CONFIG } from "./model-config";
+import { PROVIDER_DISPLAY_NAMES } from "./naming";
 
 const KEYCHAIN_SERVICE = "com.openburnbar.database-encryption";
 const KEYCHAIN_ACCOUNT = "database-encryption-key-v1";
@@ -111,6 +113,8 @@ export interface UsageSummary {
     costProvenance?: CostProvenance;
     invocations: number;
   }>;
+  /** Billed provider names that do not match any Formic collector. */
+  unmodelledProviders?: string[];
   error?: string;
 }
 
@@ -585,6 +589,35 @@ const HEALTHY_SOURCE: UsageSourceHealth = {
   message: "OpenBurnBar cost source is available.",
 };
 
+const BURNBAR_PROVIDER_ALIASES: Partial<Record<Provider, readonly string[]>> = {
+  claude: ["Claude Code"],
+};
+
+function providerKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+/* BurnBar is the authority for which names were billed; the shared provider
+   registry is the authority for which collectors Formic models. Comparing the
+   two is what makes a new paid tool visible even though sourceHealth cannot
+   create a slot for a provider it has never heard of. */
+export function unmodelledProviders(
+  rows: readonly { provider: string }[],
+): string[] {
+  const modelled = new Set(PROVIDERS.flatMap((provider) => [
+    provider,
+    PROVIDER_DISPLAY_NAMES[provider],
+    ...(BURNBAR_PROVIDER_ALIASES[provider] ?? []),
+  ]).map(providerKey));
+  const unmodelled = new Map<string, string>();
+  for (const row of rows) {
+    const label = row.provider.trim();
+    const key = providerKey(label);
+    if (label && !modelled.has(key) && !unmodelled.has(key)) unmodelled.set(key, label);
+  }
+  return [...unmodelled.values()].sort((left, right) => left.localeCompare(right));
+}
+
 function unavailableSource(error: string): UsageSourceHealth {
   if (/database not found|SQLCipher dylib not found/i.test(error)) {
     return {
@@ -629,6 +662,7 @@ function unavailableSummary(from: string, to: string, error: string): UsageSumma
     invocations: null,
     burnRateTokensPerHour: null,
     byProvider: [],
+    unmodelledProviders: [],
     error,
   };
 }
@@ -948,6 +982,7 @@ export async function getUsageSummary(from: string, to: string): Promise<UsageSu
          travels with the number rather than the number quietly meaning less. */
       burnRateTokensPerHour: tokensKnown ? attributableTokens / hours : null,
       byProvider,
+      unmodelledProviders: unmodelledProviders(byProvider),
     };
   } catch (error) {
     return unavailableSummary(from, to, error instanceof Error ? error.message : String(error));

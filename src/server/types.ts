@@ -14,6 +14,7 @@ import type {
   SurfaceIdentityTrace,
   TokenUsage,
   HookLifecycle,
+  HubSnapshot,
 } from "../shared/types";
 
 export const MAX_TRANSCRIPT_TAIL_CHARS = 800;
@@ -235,6 +236,22 @@ export interface CollectionResult<T> {
      must not count against collector health; unreadable still is, loudly. */
   absent?: boolean;
 }
+
+/* A billed automation source is not an agent. Keeping this server-local avoids
+   widening the shared agent contract with controls/lifecycle fields that cron
+   can never truthfully provide. It still travels on the HubSnapshot as its own
+   top-level collection. */
+export interface SpendSource {
+  id: string;
+  provider: "hermes";
+  kind: "cron";
+  label: string;
+  lastRunAt?: string;
+  tokens?: TokenUsage;
+  costUsd?: number;
+}
+
+export type FormicHubSnapshot = HubSnapshot & { spendSources: SpendSource[] };
 
 export interface CommandResult {
   exitCode: number;

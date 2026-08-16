@@ -6,10 +6,10 @@
 
    `satisfies` is what makes this load-bearing: adding a provider to the union
    without adding it here fails the build rather than quietly under-counting.
-   identity-bindings.ts:59 and state.ts:188 still keep their own correct copies
-   and could read this instead — worth doing, not part of this fix. */
-export type Provider = "codex" | "omp" | "claude" | "cursor" | "factory" | "prime";
-export const PROVIDERS = ["codex", "omp", "claude", "cursor", "factory", "prime"] as const satisfies readonly Provider[];
+   Every runtime consumer imports this list so a provider cannot be taught to
+   one subsystem while remaining invisible to another. */
+export type Provider = "codex" | "omp" | "claude" | "cursor" | "factory" | "prime" | "grok" | "hermes";
+export const PROVIDERS = ["codex", "omp", "claude", "cursor", "factory", "prime", "grok", "hermes"] as const satisfies readonly Provider[];
 /* Exhaustiveness in the other direction: `satisfies` proves every entry is a
    Provider, and this proves every Provider is an entry. Adding one to the union
    without adding it to the list fails the build here rather than quietly
@@ -45,6 +45,8 @@ export type AuthoredNameSource =
   | "cursor-composer"
   | "factory-title"
   | "prime-title"
+  | "grok-title"
+  | "hermes-title"
   | "launch-env"
   | "manifest";
 /* What a session is called, decided once by src/server/naming.ts.
@@ -667,7 +669,7 @@ export interface PulseBurn {
 export interface PulseActivityBucket {
   start: string;
   /* Null when the bucket was never successfully observed — every refresh inside
-     it came back with all four collectors stale, or no refresh landed in it at
+     it came back with every collector stale, or no refresh landed in it at
      all because the process was busy or restarting.
 
      `tokens` has always been nullable for this reason; `activeSessions` was not,

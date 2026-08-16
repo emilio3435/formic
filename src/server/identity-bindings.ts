@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { Provider } from "../shared/types";
+import { PROVIDERS, type Provider } from "../shared/types";
 import type { CmuxSurface, CollectedAgent } from "./types";
 import { livenessOfAny, processAliveFrom, type ProcessRoster } from "./process-liveness";
 import {
@@ -81,8 +81,6 @@ const nodeFileOperations: BindingFileOperations = {
   },
   rename,
 };
-
-const PROVIDERS: readonly Provider[] = ["codex", "omp", "claude", "cursor"];
 
 function bindingKey(binding: Pick<IdentityBinding, "provider" | "sessionId">): string {
   return binding.provider

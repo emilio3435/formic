@@ -1245,7 +1245,7 @@ describe("snapshot control safety and SSE deduplication", () => {
        number is what made "needs you" unreadable. */
     expect(snapshot.totals.systemFindings).toBe(1);
     expect(snapshot.totals.needsYou).toBe(0);
-    /* All four collectors are reading their files fine — it is cmux that cannot
+    /* Every collector is reading its files fine — it is cmux that cannot
        tell two panes apart. The conflict is a control-plane fault and is
        reported as one, above; it used to also dock a collector, which is the
        same finding wearing a second label. */

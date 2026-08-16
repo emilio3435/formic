@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { open, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import type { AgentStatus, EndEvidence, Provider, TokenUsage } from "../shared/types";
+import { PROVIDERS, type AgentStatus, type EndEvidence, type Provider, type TokenUsage } from "../shared/types";
 import {
   DEFAULT_LIFECYCLE_THRESHOLDS,
   retirementEndEvidence,
@@ -23,6 +23,8 @@ import { MODEL_CONFIG, type ModelConfig } from "./model-config";
 import { resolveAgentName, type AuthoredNameSource } from "./naming";
 import { createFactoryParser, parseFactoryJsonl } from "./factory";
 import { createPrimeParser, parsePrimeJsonl } from "./prime";
+import { collectGrokSessions } from "./grok";
+import { createHermesParser, parseHermesJsonl } from "./hermes";
 import { readHookSessionStores, type HookSessionRecord } from "./cmux-hook-sessions";
 import { readProcessLineage, type ProcessLineageExec } from "./process-lineage";
 import { livenessOf, processAliveFrom } from "./process-liveness";
@@ -81,6 +83,8 @@ const PROVIDER_NAMES: Record<Provider, string> = {
   cursor: "Cursor",
   factory: "Factory",
   prime: "Prime",
+  grok: "Grok",
+  hermes: "Hermes",
 };
 
 const NON_TASK_PREFIXES = [
@@ -135,6 +139,7 @@ function parserFor(
   if (provider === "claude") return createClaudeParser();
   if (provider === "factory") return createFactoryParser();
   if (provider === "prime") return createPrimeParser();
+  if (provider === "hermes") return createHermesParser();
   /* Reached only by a provider added to the union without an incremental parser
      — which does NOT fail the build, because collectProvider takes the one-shot
      parser as an argument and this lookup happens at run time. Factory did
@@ -305,6 +310,8 @@ const AUTHORED_BY: Record<Provider, AuthoredNameSource> = {
   cursor: "cursor-composer",
   factory: "factory-title",
   prime: "prime-title",
+  grok: "grok-title",
+  hermes: "hermes-title",
 };
 
 function statusFrom(
@@ -353,7 +360,7 @@ function fallbackUpdatedAt(meta: ParseMetadata): string {
   return new Date(meta.mtimeMs ?? meta.nowMs ?? Date.now()).toISOString();
 }
 
-function makeAgent(input: {
+export function makeAgent(input: {
   /** Per-call processed sizes; see CollectedAgent.callSizes. */
   callSizes?: readonly number[];
   processedSnapshots?: readonly { readonly at: string; readonly total: number }[];
@@ -1297,6 +1304,18 @@ export async function collectSessionProvider(
       return collectProvider("factory", join(home, ".factory/sessions"), 2, parseFactoryJsonl, windowMs, thresholds);
     case "prime":
       return collectProvider("prime", join(home, ".prime/agent/sessions"), 1, parsePrimeJsonl, windowMs, thresholds);
+    case "grok": {
+      const override = home === homedir() ? process.env.GROK_HOME?.trim() : undefined;
+      const root = override || join(home, ".grok");
+      return collectGrokSessions(root, windowMs, thresholds);
+    }
+    case "hermes": {
+      const root = join(home, ".hermes");
+      if (!existsSync(root)) return { value: [], errors: [], absent: true };
+      const sessions = join(root, "sessions");
+      if (!existsSync(sessions)) return { value: [], errors: [] };
+      return collectProvider("hermes", sessions, 1, parseHermesJsonl, windowMs, thresholds);
+    }
   }
 }
 
@@ -1305,13 +1324,12 @@ export function finalizeSessionProviders(
   home = homedir(),
   options: CollectSessionsOptions = {},
 ): SessionProviderResults {
-  const { omp, codex, claude, cursor, factory, prime } = results;
   const hookRecords = readHookSessionStores(join(home, ".cmuxterm"));
   const recordsBySession = new Map(
     hookRecords.map((record) => [`${record.provider}:${record.sessionId.toLowerCase()}`, record]),
   );
   const knownAgentIds = new Set(
-    [omp, codex, claude, cursor, factory, prime].flatMap((result) => result.value.map((agent) => agent.id)),
+    PROVIDERS.flatMap((provider) => results[provider].value.map((agent) => agent.id)),
   );
   const processLineage = hookRecords.length > 0
     && (options.processLineageExec !== undefined || !options.hookProcessStarts)
@@ -1320,14 +1338,12 @@ export function finalizeSessionProviders(
   const starts = hookRecords.length > 0
     ? options.hookProcessStarts?.() ?? processLineage?.processStarts
     : undefined;
-  return {
-    omp: attachHookFacts(omp, recordsBySession, starts, processLineage?.observedParents, knownAgentIds),
-    codex: attachHookFacts(codex, recordsBySession, starts, processLineage?.observedParents, knownAgentIds),
-    claude: attachHookFacts(claude, recordsBySession, starts, processLineage?.observedParents, knownAgentIds),
-    cursor,
-    factory: attachHookFacts(factory, recordsBySession, starts, processLineage?.observedParents, knownAgentIds),
-    prime: attachHookFacts(prime, recordsBySession, starts, processLineage?.observedParents, knownAgentIds),
-  };
+  return Object.fromEntries(PROVIDERS.map((provider) => [
+    provider,
+    provider === "cursor"
+      ? results[provider]
+      : attachHookFacts(results[provider], recordsBySession, starts, processLineage?.observedParents, knownAgentIds),
+  ])) as SessionProviderResults;
 }
 
 export async function collectSessions(
@@ -1336,13 +1352,9 @@ export async function collectSessions(
   thresholds?: LifecycleThresholds,
   options: CollectSessionsOptions = {},
 ): Promise<SessionProviderResults> {
-  const [omp, codex, claude, cursor, factory, prime] = await Promise.all([
-    collectSessionProvider("omp", home, windowMs, thresholds),
-    collectSessionProvider("codex", home, windowMs, thresholds),
-    collectSessionProvider("claude", home, windowMs, thresholds),
-    collectSessionProvider("cursor", home, windowMs, thresholds),
-    collectSessionProvider("factory", home, windowMs, thresholds),
-    collectSessionProvider("prime", home, windowMs, thresholds),
-  ]);
-  return finalizeSessionProviders({ omp, codex, claude, cursor, factory, prime }, home, options);
+  const results = Object.fromEntries(await Promise.all(PROVIDERS.map(async (provider) => [
+    provider,
+    await collectSessionProvider(provider, home, windowMs, thresholds),
+  ]))) as SessionProviderResults;
+  return finalizeSessionProviders(results, home, options);
 }

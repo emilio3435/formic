@@ -66,7 +66,7 @@ describe("snapshot edge cases", () => {
     expect(snapshot.contextMedian).toBeUndefined();
   });
 
-  test("an empty fleet still calls all four sources healthy", () => {
+  test("an empty fleet still calls every source healthy", () => {
     const snapshot = buildSnapshot({ agents: [], surfaces: [], archiveStore, now: NOW });
 
     // No agents is not evidence of a broken collector.
@@ -133,9 +133,9 @@ describe("snapshot edge cases", () => {
 
   test("an unreachable control plane is reported as itself, not as a broken collector", () => {
     /* This used to assert { healthy: 3, degraded: 1 } — an unreachable cmux
-       pulled a COLLECTOR into the red. cmux is the control plane; the four
-       collectors are the four providers `collectSessions` returns, and all four
-       are fine here. The fault is real and still reported, once, by the field
+       pulled a COLLECTOR into the red. cmux is the control plane; the collectors
+       are the providers `collectSessions` returns, and every one is fine here.
+       The fault is real and still reported, once, by the field
        that means it. */
     const snapshot = buildSnapshot({
       agents: [],

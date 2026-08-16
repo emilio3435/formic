@@ -1,0 +1,5 @@
+{
+  "contextTokensUsed": 12345,
+  "contextWindowTokens": 500000,
+  "primaryModelId": "grok-4.6"
+}

@@ -30,7 +30,7 @@ const ID = "019fcd73-1a2b-7000-9c4d-5e6f70819aab";
 
 /* A total map: adding a Provider without a sample fails the build here, which
    is the only moment anyone is thinking about that provider's process shape. */
-const SAMPLES: Record<Provider, { path: string; command: string }> = {
+const SAMPLES: Record<Provider, { path?: string; command: string }> = {
   omp: {
     path: `/Users/me/.omp/agent/sessions/my-project/${ID}.jsonl`,
     command: "/Users/me/.local/bin/omp -p --model anthropic/claude-fable-5",
@@ -55,22 +55,36 @@ const SAMPLES: Record<Provider, { path: string; command: string }> = {
     path: `/Users/me/.prime/agent/sessions/${ID}.jsonl`,
     command: `prime-agent --resume ${ID}`,
   },
+  grok: {
+    path: `/Users/me/.grok/sessions/%2FUsers%2Fme%2Fproject/${ID}/updates.jsonl`,
+    command: `grok -r ${ID}`,
+  },
+  hermes: {
+    command: "hermes",
+  },
 };
 
 describe("every provider is visible to the process scanner", () => {
   for (const provider of PROVIDERS) {
-    test(`${provider}: an open transcript names its session`, () => {
-      expect(identityFromSessionPath(SAMPLES[provider].path)).toEqual({
-        provider,
-        value: ID,
-        full: true,
+    if (SAMPLES[provider].path) {
+      test(`${provider}: an open transcript names its session`, () => {
+        expect(identityFromSessionPath(SAMPLES[provider].path!)).toEqual({
+          provider,
+          value: ID,
+          full: true,
+        });
       });
-    });
+    }
 
     test(`${provider}: its running process is recognized as an agent`, () => {
       expect(isRecognizedAgentProcess(SAMPLES[provider].command)).toBeTrue();
     });
   }
+
+  test("grok and hermes bare binaries are recognized without resume ids", () => {
+    expect(isRecognizedAgentProcess("grok")).toBeTrue();
+    expect(isRecognizedAgentProcess("/opt/homebrew/bin/hermes")).toBeTrue();
+  });
 });
 
 describe("what an unseen provider costs", () => {
@@ -110,5 +124,32 @@ describe("Factory specifics", () => {
     // `isRecognizedAgentProcess` is what keeps it in the roster at all.
     expect(isRecognizedAgentProcess("/opt/homebrew/bin/droid --auto high")).toBeTrue();
     expect(isRecognizedAgentProcess("-zsh")).toBeFalse();
+  });
+});
+
+describe("Grok Build specifics", () => {
+  test("summary and updates paths both identify the nested session", () => {
+    const root = `/Users/me/.grok/sessions/%2FUsers%2Fme%2Fproject/${ID}`;
+    expect(identityFromSessionPath(`${root}/summary.json`)).toEqual({
+      provider: "grok", value: ID, full: true,
+    });
+    expect(identityFromSessionPath(`${root}/updates.jsonl`)).toEqual({
+      provider: "grok", value: ID, full: true,
+    });
+  });
+
+  test("-r and --resume name a Grok session; -c remains a recognized process", () => {
+    for (const command of [`grok -r ${ID}`, `grok --resume ${ID}`, `grok --resume=${ID}`]) {
+      expect(identitiesFromCommand(command)).toEqual([
+        { provider: "grok", value: ID, full: true },
+      ]);
+    }
+    expect(isRecognizedAgentProcess("grok -c")).toBeTrue();
+    expect(identitiesFromCommand("grok -c")).toEqual([]);
+  });
+
+  test("a Cursor-hosted Grok model never becomes Grok command identity", () => {
+    expect(identitiesFromCommand("cursor-agent --model cursor-grok-4.6-high")).toEqual([]);
+    expect(isRecognizedAgentProcess("cursor-agent --model cursor-grok-4.6-high")).toBeTrue();
   });
 });

@@ -103,9 +103,9 @@ it is a disclosure of what cannot be accounted for, not a list of recent things.
 
   | You have | The line reads |
   |---|---|
-  | none of the six yet | `No collectors installed yet — Claude Code, Codex or Cursor will appear here` |
-  | one of them | `1 of 1 collectors healthy · 5 not installed` |
-  | all six | `6 of 6 collectors healthy` |
+  | none of the eight yet | `No collectors installed yet — Claude Code, Codex, Cursor or Grok Build will appear here` |
+  | one of them | `1 of 1 collectors healthy · 7 not installed` |
+  | all eight | `8 of 8 collectors healthy` |
 
   That line is the proof the board is working: a stalled client cannot
   manufacture a ticking snapshot age. **It counts collectors that can SEE, not
@@ -133,10 +133,10 @@ it is a disclosure of what cannot be accounted for, not a list of recent things.
 - **Blank cost figures.** Dollar amounts come from OpenBurnBar; without it, cost
   reads unavailable rather than `$0`.
 
-### What the six collectors are
+### What the eight collectors are
 
 The count is of collectors that can **see**, not of tools you have installed.
-There are six, and they read what each tool already writes to disk:
+There are eight, and they read what each tool already writes to disk:
 
 | Collector | Reads | You have it if |
 |---|---|---|
@@ -146,17 +146,19 @@ There are six, and they read what each tool already writes to disk:
 | **Factory** | `~/.factory/sessions/` | you use Factory (droid) |
 | **OMP** | `~/.omp/agent/sessions/` | almost certainly not — it is a legacy source kept for old history |
 | **Prime** | `~/.prime/agent/sessions/` | you use Prime Agent |
+| **Grok** | `~/.grok/sessions/<encoded-cwd>/<session-id>/` or `$GROK_HOME/sessions/…` | you use Grok Build |
+| **Hermes** | `~/.hermes/` | you use Hermes |
 
 **Expect most of these to be absent, and expect that to be fine.** A directory
 that does not exist is a complete answer — *this tool never ran here* — and no
 session can be hiding behind it, so an absent collector is named separately and
 never counted as a fault. Most people run one or two of these and see a line
-like `1 of 1 collectors healthy · 5 not installed`. Watch for `degraded`
+like `1 of 1 collectors healthy · 7 not installed`. Watch for `degraded`
 instead, which means something *stopped* a collector reading — a permissions or
 I/O failure — and is the only case where sessions could exist that the board
 cannot show you.
 
-**cmux is not one of the six.** It does not collect sessions; it resolves which
+**cmux is not one of the eight.** It does not collect sessions; it resolves which
 terminal a session is sitting in, which is what Focus and Send need. Not having
 it costs you those buttons and nothing else — it cannot hide a row, so it must
 never move the collector count. If you ever see a degraded collector *caused by*

@@ -1,12 +1,12 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { HookLifecycle } from "../shared/types";
+import { PROVIDERS, type HookLifecycle, type Provider } from "../shared/types";
 
 // cursor and factory records come from the T8 shims rather than native hooks;
-// the reader treats all five stores identically.
-const HOOK_PROVIDERS = ["claude", "codex", "omp", "cursor", "factory", "prime"] as const;
-type HookProvider = (typeof HOOK_PROVIDERS)[number];
+// the reader treats every provider store identically.
+const HOOK_PROVIDERS = PROVIDERS;
+type HookProvider = Provider;
 
 export interface HookSessionRecord {
   provider: HookProvider;

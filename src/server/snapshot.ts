@@ -79,6 +79,8 @@ import {
   type CmuxWorkspaceEnv,
   type CmuxWorkspaceSnapshot,
   type CollectedAgent,
+  type FormicHubSnapshot,
+  type SpendSource,
 } from "./types";
 
 function pathIsWithin(path: string, root: string): boolean {
@@ -89,6 +91,8 @@ function pathIsWithin(path: string, root: string): boolean {
 
 export interface SnapshotInput {
   agents: readonly CollectedAgent[];
+  /** Non-interactive billed automation shown on Usage, never on the Board. */
+  spendSources?: readonly SpendSource[];
   /** Cached provider rows shown only when that provider misses this refresh's cutoff. */
   lastKnownAgents?: readonly CollectedAgent[];
   lastKnownSourceReasons?: Partial<Record<Provider, string>>;
@@ -172,7 +176,7 @@ export function summarizeNotification(title?: string, subtitle?: string): string
   return `${joined.slice(0, MAX_NOTIFICATION_SUMMARY - 1).trimEnd()}…`;
 }
 
-export function buildSnapshot(input: SnapshotInput): HubSnapshot {
+export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
   const now = input.now ?? new Date();
   const nowMs = now.getTime();
   const programs = new Map<string, ProgramSnapshot>();
@@ -781,7 +785,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
      first-time user with a working install that their board was incomplete,
      because a fresh machine has no cmux binary and no ~/.cursor.
 
-     Measured on a virgin clone with an empty HOME: all four collectors report
+     Measured on a virgin clone with an empty HOME: every collector reports
      zero errors, yet the first screen read "No sessions found — and not every
      collector can see · 1 of 4 collectors degraded". The one was cmux, missing
      because it had never been installed. This is the same honesty rule the rest
@@ -789,8 +793,8 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
      the day deleting numbers that overclaimed, and this one underclaimed. */
   /* Every provider that has a collector, not a hand-written subset of them.
      This list said codex/claude/cursor and omitted omp, while the byProvider
-     breakdown shipped on the same card is built from all four. Both sets had
-     four members — omp missing here, cmux missing there — so the totals looked
+     breakdown shipped on the same card is built from every provider. Both sets
+     once had four members — omp missing here, cmux missing there — so the totals looked
      consistent right up until an omp collector broke, at which point the header
      read "healthy" and the drawer read "broken" off the same snapshot. */
   const collectorProviders: readonly Provider[] = PROVIDERS;
@@ -802,9 +806,8 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     (input.sourceErrors?.[provider]?.length ?? 0) > 0,
   ).length;
   /* The ratio counts collectors that EXIST on this machine, and cmux is not one
-     of them. `collectSessions` returns exactly { omp, codex, claude, cursor },
-     and ANT-GUIDE tells the reader "the four collectors are the same everywhere"
-     before naming those. cmux is the control plane: it has its own
+     of them. `collectSessions` returns one result for every shared provider;
+     cmux is the control plane: it has its own
      `controlHealth.cmuxReachable`, its errors become operator issues, and it is
      rendered separately. Counting it here made an unreachable control plane
      print as a broken *collector* — the same fault under two labels, on a board
@@ -816,7 +819,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
   const knownCollectors = collectorProviders.length;
   const sourceTotal = Math.max(0, knownCollectors - absentSources);
   const scanWindowHours = input.scanWindowHours;
-  const snapshot: HubSnapshot = {
+  const snapshot: FormicHubSnapshot = {
     schemaVersion: 1,
     generatedAt: now.toISOString(),
     modelConfig: {
@@ -834,7 +837,7 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
       cmuxReachable: input.cmuxReachable ?? operationalCmuxErrors.length === 0,
       lastCheckedAt: input.cmuxLastCheckedAt ?? new Date(0).toISOString(),
       /* Deduplicated. `sourceErrors` is flattened across providers, and a fault
-         that stops the whole aggregate stops all four of them, so one deadline
+         that stops the whole aggregate stops every provider, so one deadline
          arrived here as ten entries. Harmless while this was only counted; the
          card now prints the first and appends "(+N more)", which turned two
          real faults into "(+9 more)" and sent an operator looking for eight
@@ -893,8 +896,9 @@ export function buildSnapshot(input: SnapshotInput): HubSnapshot {
     cmuxNotifications: [...(input.cmuxNotifications ?? [])],
     acks: [...(input.acks ?? [])],
     programs: orderedPrograms,
+    spendSources: [...(input.spendSources ?? [])],
   };
-  return withIssueDecoration(snapshot, input.triageSummaries);
+  return withIssueDecoration(snapshot, input.triageSummaries) as FormicHubSnapshot;
 }
 
 export function snapshotFingerprint(snapshot: HubSnapshot): string {

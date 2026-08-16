@@ -34,6 +34,8 @@ export const PROVIDER_DISPLAY_NAMES = {
   cursor: "Cursor",
   factory: "Factory",
   prime: "Prime",
+  grok: "Grok",
+  hermes: "Hermes",
 };
 
 /* Strings that arrive in a name-shaped field but are not names: OMP's periodic

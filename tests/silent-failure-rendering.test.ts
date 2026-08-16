@@ -99,17 +99,10 @@ describe("a total collection failure never renders as a calm empty fleet", () =>
       agents: [],
       surfaces: [],
       archiveStore,
-      sourceErrors: {
-        codex: ["EACCES scanning ~/.codex"],
-        claude: ["EACCES scanning ~/.claude"],
-        cursor: ["cursor state db is locked"],
-        /* "four dead sources" counted three providers and the control plane.
-           omp is the fourth collector and was missing from the fixture, so the
-           scenario this file is named for was never actually all-sources-down. */
-        omp: ["EACCES scanning ~/.omp"],
-        factory: ["EACCES scanning ~/.factory"],
-        prime: ["EACCES scanning ~/.prime"],
-      },
+      sourceErrors: Object.fromEntries(PROVIDERS.map((provider) => [
+        provider,
+        [`EACCES scanning ~/.${provider}`],
+      ])),
       cmuxErrors: ["cmux socket refused the connection"],
       cmuxReachable: false,
       now: NOW,
@@ -138,7 +131,7 @@ describe("a total collection failure never renders as a calm empty fleet", () =>
     const ids = (allSourcesDown().issues ?? []).map(({ id }) => id);
 
     /* Walked from PROVIDERS rather than listed. The listed form named three of
-       the five collectors, so omp and Factory could die, be counted in the
+       the then-five collectors, so omp and Factory could die, be counted in the
        degraded tally above, and raise nothing that said WHICH source had gone.
        A degrade with no named cause is the same silence this file exists to
        prevent — the operator sees "1 degraded" and has nowhere to look. */

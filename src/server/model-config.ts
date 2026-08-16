@@ -20,6 +20,7 @@ export const DEFAULT_MODEL_CONFIG: ModelConfig = {
     "muse-spark-1.2": 1_000_000,
     grok: 500_000,
     "grok-4.5": 500_000,
+    "grok-4.6": 500_000,
     composer: 131_072,
     "composer-2": 131_072,
     "composer-2.5": 131_072,
@@ -32,6 +33,7 @@ export const DEFAULT_MODEL_CONFIG: ModelConfig = {
   },
   modelFamilyAliases: {
     "grok-4.5": ["grok-4.5", "cursor-grok-4.5"],
+    "grok-4.6": ["grok-4.6", "cursor-grok-4.6", "grok-build"],
     "composer-2": ["composer-2"],
     "composer-2.5": ["composer-2.5"],
     "gpt-5.6-sol": ["gpt-5.6-sol"],
@@ -50,6 +52,7 @@ export const DEFAULT_MODEL_CONFIG: ModelConfig = {
     "gpt-5.6-sol": "sol 5.6",
     "gpt-5.6-terra": "terra 5.6",
     "grok-4.5": "grok 4.5",
+    "grok-4.6": "grok 4.6",
     "spark-1.2": "spark 1.2",
     "muse-spark-1.2": "spark 1.2",
   },

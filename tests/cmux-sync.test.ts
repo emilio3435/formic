@@ -313,6 +313,8 @@ async function livenessFixture() {
     cursor: { value: [], errors: [] },
     factory: { value: [], errors: [] },
     prime: { value: [], errors: [] },
+    grok: { value: [], errors: [] },
+    hermes: { value: [], errors: [] },
   });
   const collectors: HubCollectors = {
     sessions: async () => empty(),

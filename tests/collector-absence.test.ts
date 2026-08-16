@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { PROVIDERS } from "../src/shared/types";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { BunCommandRunner } from "../src/server/command";
 import { collectCmux, executableMissing } from "../src/server/cmux";
-import { collectSessions } from "../src/server/collectors";
+import { collectSessionProvider, collectSessions } from "../src/server/collectors";
+import { emptySnapshot } from "../src/server/app";
 import { buildSnapshot } from "../src/server/snapshot";
 import type { ArchiveStore, CommandResult, CommandRunner } from "../src/server/types";
 
@@ -71,6 +72,43 @@ describe("a provider that was never installed is absent, not degraded", () => {
     expect(result.codex.absent).toBe(true);
   });
 
+  test("grok distinguishes a missing home without claiming sessions", async () => {
+    const home = emptyHome();
+    expect(await collectSessionProvider("grok", home))
+      .toEqual({ value: [], errors: [], absent: true });
+    mkdirSync(join(home, ".grok"));
+    expect(await collectSessionProvider("grok", home))
+      .toEqual({ value: [], errors: [] });
+  });
+
+  test("Hermes is absent only when its home is missing", async () => {
+    const home = emptyHome();
+    expect(await collectSessionProvider("hermes", home))
+      .toEqual({ value: [], errors: [], absent: true });
+    /* Cron is a real Hermes source even when the optional interactive store is
+       dormant, so a home containing only cron is present rather than absent. */
+    mkdirSync(join(home, ".hermes/cron"), { recursive: true });
+    expect(await collectSessionProvider("hermes", home))
+      .toEqual({ value: [], errors: [] });
+  });
+
+  test("GROK_HOME overrides the default Grok home", async () => {
+    const root = join(emptyHome(), "custom-grok");
+    const previous = process.env.GROK_HOME;
+    process.env.GROK_HOME = root;
+
+    try {
+      expect(await collectSessionProvider("grok", homedir()))
+        .toEqual({ value: [], errors: [], absent: true });
+      mkdirSync(root);
+      expect(await collectSessionProvider("grok", homedir()))
+        .toEqual({ value: [], errors: [] });
+    } finally {
+      if (previous === undefined) delete process.env.GROK_HOME;
+      else process.env.GROK_HOME = previous;
+    }
+  });
+
   test("an absent provider leaves the health ratio instead of failing it", () => {
     const absent = health({
       agents: [], surfaces: [], archiveStore,
@@ -94,16 +132,16 @@ describe("a provider that was never installed is absent, not degraded", () => {
     const summary = health({
       agents: [], surfaces: [], archiveStore,
       /* A virgin HOME has no omp directory either — proved above by "an empty
-         HOME reports every provider absent", which iterates all four. The old
+         HOME reports every provider absent", which iterates the shared union. The old
          fixture left omp unstated and the accounting silently read it as
          installed-and-healthy, which is the bug this file now covers. */
-      sourceAbsent: { cursor: true, omp: true, factory: true, prime: true },
+      sourceAbsent: { cursor: true, omp: true, factory: true, prime: true, grok: true, hermes: true },
       cmuxAbsent: true,
       cmuxReachable: false,
     });
 
     // "2 of 2 collectors healthy" — calm, and true.
-    expect(summary).toMatchObject({ healthy: 2, degraded: 0, absent: 4, total: 2 });
+    expect(summary).toMatchObject({ healthy: 2, degraded: 0, absent: 6, total: 2 });
   });
 });
 
@@ -132,6 +170,15 @@ describe("the health count covers every collector that exists", () => {
        healthy while byProvider.omp.healthy was false on the same screen. */
     expect(summary.degraded).toBe(1);
     expect(summary.healthy).toBe(summary.total - 1);
+  });
+
+  test("a cold snapshot marks every known provider degraded", () => {
+    expect(emptySnapshot().totals.sourceHealth).toMatchObject({
+      healthy: 0,
+      degraded: PROVIDERS.length,
+      absent: 0,
+      total: PROVIDERS.length,
+    });
   });
 
   test("an absent omp is absent, and does not inflate the ratio", () => {

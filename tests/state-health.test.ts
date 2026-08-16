@@ -23,6 +23,8 @@ const emptySessions = () => ({
   cursor: { value: [], errors: [] },
   factory: { value: [], errors: [] },
   prime: { value: [], errors: [] },
+  grok: { value: [], errors: [] },
+  hermes: { value: [], errors: [] },
 });
 
 const ROUTING_RACE_SESSION_ID = "routing-race-session";
@@ -1598,6 +1600,8 @@ describe("what is recorded is what is published", () => {
         cursor: { value: [], errors: [] },
         factory: { value: [], errors: [] },
         prime: { value: [], errors: [] },
+        grok: { value: [], errors: [] },
+        hermes: { value: [], errors: [] },
       }),
       cmux: async () => ({ value: [], errors: [] }),
       notifications: async () => ({ value: [], errors: [] }),

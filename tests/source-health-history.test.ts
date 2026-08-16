@@ -48,14 +48,10 @@ function stateWith(scripts: ReadonlyArray<Partial<Record<Provider, CollectionRes
   const collectors = {
     sessions: async () => {
       const script = scripts[Math.min(call++, scripts.length - 1)] ?? {};
-      return {
-        omp: script.omp ?? EMPTY,
-        codex: script.codex ?? EMPTY,
-        claude: script.claude ?? EMPTY,
-        cursor: script.cursor ?? EMPTY,
-        factory: script.factory ?? EMPTY,
-        prime: script.prime ?? EMPTY,
-      };
+      return Object.fromEntries(PROVIDERS.map((provider) => [
+        provider,
+        script[provider] ?? EMPTY,
+      ]));
     },
     cmux: async () => ({ value: [], errors: [] }),
     notifications: async () => ({ value: [], errors: [] }),
@@ -138,7 +134,7 @@ describe("byProvider carries history, which one snapshot cannot", () => {
   });
 
   test("every provider the union declares appears on the wire", async () => {
-    /* A fifth collector added to Provider without being wired here would leave
+    /* A new collector added to Provider without being wired here would leave
        the client reading `undefined.healthy` on the day-one screen. */
     const state = stateWith([{}]);
     await state.refresh();

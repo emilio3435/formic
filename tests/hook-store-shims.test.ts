@@ -10,6 +10,7 @@ import { join } from "node:path";
 import {
   defaultHookStoreRoot,
   extractSessionIdFromArgs,
+  HOOK_STORE_PROVIDERS,
   hookStorePath,
   recordMatchesParserContract,
   upsertHookSessionRecord,
@@ -67,7 +68,7 @@ describe("cmux hook-store writer (T8)", () => {
     expect(defaultHookStoreRoot({ ANTHILL_CMUXTERM_ROOT: "  " })).toBe(REAL_CMUXTERM);
   });
 
-  test("extractSessionIdFromArgs reads cursor --resume and factory -r/--fork", () => {
+  test("extractSessionIdFromArgs reads cursor, factory, and Grok resume forms", () => {
     const id = "019fcd73-1a2b-7000-9c4d-5e6f70819aab";
     expect(extractSessionIdFromArgs("cursor", ["--resume", id, "hi"])).toBe(id);
     expect(extractSessionIdFromArgs("cursor", [`--resume=${id}`])).toBe(id);
@@ -76,6 +77,11 @@ describe("cmux hook-store writer (T8)", () => {
     expect(extractSessionIdFromArgs("factory", ["--resume", id])).toBe(id);
     expect(extractSessionIdFromArgs("factory", ["--fork", id])).toBe(id);
     expect(extractSessionIdFromArgs("factory", ["--auto", "high"])).toBeUndefined();
+    expect(extractSessionIdFromArgs("grok", ["-r", id])).toBe(id);
+    expect(extractSessionIdFromArgs("grok", ["--resume", id])).toBe(id);
+    expect(extractSessionIdFromArgs("grok", [`--resume=${id}`])).toBe(id);
+    expect(extractSessionIdFromArgs("grok", ["-c"])).toBeUndefined();
+    expect(HOOK_STORE_PROVIDERS).toContain("grok");
   });
 
   test("upsert writes parser-contract records under a temp root only", () => {
@@ -131,7 +137,7 @@ describe("cmux hook-store writer (T8)", () => {
   });
 });
 
-describe("anthill cursor-agent / droid shims (T8)", () => {
+describe("anthill cursor-agent / droid / grok shims (T8)", () => {
   test("cursor-agent shim binds a resume session into a temp hook store", () => {
     const root = freshFixture("shim-cursor");
     const fakeBin = join(root, "fake-bin");
@@ -276,6 +282,63 @@ describe("anthill cursor-agent / droid shims (T8)", () => {
     expect(recordMatchesParserContract(record)).toBeTrue();
     expect(record.agentLifecycle).toBe("ended");
     expect(record.cwd).toBe(root);
+  });
+
+  test("grok shim keeps an interactive resumed session in the foreground", () => {
+    const root = freshFixture("shim-grok-interactive");
+    const fakeBin = join(root, "fake-bin");
+    const hookRoot = join(root, "cmuxterm");
+    const marker = join(root, "foreground.txt");
+    mkdirSync(fakeBin, { recursive: true });
+    mkdirSync(hookRoot, { recursive: true });
+    assertNeverTouchesRealCmuxterm(hookRoot);
+
+    writeExecutable(
+      join(fakeBin, "grok"),
+      [
+        "#!/bin/bash",
+        "if [[ -t 0 ]]; then",
+        "  printf 'foreground\\n' > \"$MARKER\"",
+        "  sleep 0.5",
+        "  exit 0",
+        "fi",
+        "printf 'background\\n' > \"$MARKER\"",
+        "exit 42",
+        "",
+      ].join("\n"),
+    );
+
+    const sessionId = "a2222222-3333-4444-8555-666666666666";
+    const result = run(
+      [
+        "/usr/bin/script",
+        "-q",
+        "-e",
+        "/dev/null",
+        join(PROJECT_ROOT, "scripts/anthill-grok"),
+        "-r",
+        sessionId,
+      ],
+      root,
+      {
+        PATH: `${fakeBin}:/usr/bin:/bin`,
+        HOME: join(root, "home"),
+        MARKER: marker,
+        TERM: "xterm-256color",
+        ANTHILL_CMUXTERM_ROOT: hookRoot,
+        ANTHILL_GROK_BIN: join(fakeBin, "grok"),
+        CMUX_SURFACE_ID: "GAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE",
+        CMUX_WORKSPACE_ID: "a2222222-AAAA-4BBB-8CCC-222222222222",
+        BUN_BIN: process.execPath.includes("bun") ? process.execPath : "bun",
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(readFileSync(marker, "utf8")).toBe("foreground\n");
+    const store = JSON.parse(
+      readFileSync(join(hookRoot, "grok-hook-sessions.json"), "utf8"),
+    ) as { sessions: Record<string, Record<string, unknown>> };
+    expect(store.sessions[sessionId]).toMatchObject({ agentLifecycle: "ended" });
   });
 
   test("shim passes through without writing when CMUX_* identity is absent", () => {
