@@ -631,6 +631,8 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
          own defaults must not arrive on the board wearing a rename's authority. */
       surfaceTitle: paneRename(surface?.title, surface?.cwd),
       lastHumanFacingAt: source.lastHumanFacingAt,
+      lastThreadAt: source.lastThreadAt,
+      workingSince: source.workingSince,
       lastUserMessage: source.lastUserMessage,
       ...(senderVerified === undefined ? {} : { senderVerified }),
       lastAgentMessage: source.lastAgentMessage,

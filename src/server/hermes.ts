@@ -17,6 +17,7 @@ import {
   type LifecycleThresholds,
 } from "./lifecycle";
 import { resolveAgentName } from "./naming";
+import { observeTranscriptMessage, ThreadClock } from "./thread-clock";
 import type { CollectedAgent, CollectionResult, SpendSource } from "./types";
 
 function recencyStatus(
@@ -78,6 +79,7 @@ export function createHermesParser(): IncrementalParser {
   let tail: string | undefined;
   let lastHumanFacingAt: string | undefined;
   const humanMessages: HumanMessageCandidate[] = [];
+  const clock = new ThreadClock();
   let messages = 0;
 
   const append = (rows: readonly JsonRecord[]): void => {
@@ -89,6 +91,8 @@ export function createHermesParser(): IncrementalParser {
         startedAt = startedAt && startedAt < at ? startedAt : at;
         updatedAt = later(updatedAt, at);
       }
+      if (row.role !== "user" && row.role !== "assistant" && row.role !== "tool" && row.role !== "system") continue;
+      observeTranscriptMessage(clock, at, row.role, row.content);
       if (row.role !== "user" && row.role !== "assistant") continue;
       messages += 1;
       humanMessages.push({
@@ -140,6 +144,8 @@ export function createHermesParser(): IncrementalParser {
       updatedAt: sourceUpdatedAt,
       tokens: { provenance: "unknown" },
       lastHumanFacingAt,
+      lastThreadAt: clock.lastThreadAt,
+      workingSince: clock.workingSince,
       lastHumanMessage: extractLastHumanMessage("hermes", humanMessages, task),
       lastUserMessage: extractLastMessageByRole("hermes", humanMessages, "user"),
       lastAgentMessage: extractLastMessageByRole("hermes", humanMessages, "assistant"),

@@ -575,6 +575,29 @@ describe("snapshot control safety and SSE deduplication", () => {
       .not.toBe(snapshotFingerprint(build("2026-07-21T22:01:00.000Z")));
   });
 
+  test("publishes lastThreadAt and workingSince, and fingerprints lastThreadAt", () => {
+    const snapshot = buildSnapshot({
+      agents: [collected({
+        lastThreadAt: "2026-07-21T22:04:00.000Z",
+        workingSince: "2026-07-21T22:00:00.000Z",
+      })],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    expect(snapshot.programs[0]?.agents[0]?.lastThreadAt).toBe("2026-07-21T22:04:00.000Z");
+    expect(snapshot.programs[0]?.agents[0]?.workingSince).toBe("2026-07-21T22:00:00.000Z");
+
+    const build = (lastThreadAt: string) => buildSnapshot({
+      agents: [collected({ lastThreadAt, workingSince: "2026-07-21T22:00:00.000Z" })],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    expect(snapshotFingerprint(build("2026-07-21T22:04:00.000Z")))
+      .not.toBe(snapshotFingerprint(build("2026-07-21T22:05:00.000Z")));
+  });
+
   test("the linked pane's own title is published, separately from its workspace's", () => {
     /* The collector has read `surface.title` all along and the snapshot dropped
        it, so a terminal the operator renamed reached the board as whatever the

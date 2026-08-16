@@ -30,6 +30,7 @@ import { createHermesParser, parseHermesJsonl } from "./hermes";
 import { readHookSessionStores, type HookSessionRecord } from "./cmux-hook-sessions";
 import { readProcessLineage, type ProcessLineageExec } from "./process-lineage";
 import { livenessOf, processAliveFrom } from "./process-liveness";
+import { observeClaudeRow, ThreadClock, threadFromMessages } from "./thread-clock";
 
 export const DEFAULT_SESSION_WINDOW_MS = 36 * 60 * 60 * 1_000;
 export interface CollectSessionsOptions {
@@ -393,6 +394,7 @@ export function makeAgent(input: {
   nickname?: string;
   humanMessages?: readonly HumanMessageCandidate[];
   lastHumanFacingAt?: string;
+  thread?: { lastThreadAt?: string; workingSince?: string };
   statusReason?: string;
   exited?: boolean;
   /* What `exited` actually meant for this provider. Passing it beside the
@@ -428,6 +430,7 @@ export function makeAgent(input: {
      the other providers; keep the legacy displayName below for old clients. */
   const authoredName = usefulExplicitName ||
     (input.provider === "codex" ? input.nickname : undefined);
+  const thread = input.thread ?? threadFromMessages(input.humanMessages, input.exited);
   const identity = resolveAgentName({
     provider: input.provider,
     sourceSessionId: input.sourceSessionId,
@@ -468,6 +471,8 @@ export function makeAgent(input: {
     ),
     lastHumanFacingAt: input.lastHumanFacingAt
       ?? extractLastHumanFacingAt(input.provider, input.humanMessages ?? []),
+    lastThreadAt: thread.lastThreadAt,
+    workingSince: thread.workingSince,
     lastUserMessage: extractLastMessageByRole(input.provider, input.humanMessages ?? [], "user"),
     lastAgentMessage: extractLastMessageByRole(input.provider, input.humanMessages ?? [], "assistant"),
     // End-anchored and role-attributed: what the agent actually stopped on.
@@ -502,6 +507,7 @@ function createOmpParser(): IncrementalParser {
   let task: string | undefined;
   let tail: string | undefined;
   const messages: HumanMessageWindow = {};
+  const clock = new ThreadClock();
   let updatedAt: string | undefined;
   const activeTime = new ActiveTime();
   let latestUsage: { input: number; output: number; cachedInput: number; total: number } | undefined;
@@ -531,10 +537,21 @@ function createOmpParser(): IncrementalParser {
         const timestamp = isoTimestamp(row.timestamp ?? row.message?.timestamp);
         if (timestamp && (!updatedAt || timestamp > updatedAt)) updatedAt = timestamp;
         activeTime.observe(timestamp);
+        if (row.type === "custom" && row.data?.kind === "session_exit") {
+          clock.observe(timestamp, "system", { endsTurn: true });
+        }
         if (row.type !== "message") continue;
 
         const text = plainText(row.message?.content);
         if (row.message?.role === "user") task = nextTask(task, row.message?.content);
+        if (
+          row.message?.role === "user"
+          || row.message?.role === "assistant"
+          || row.message?.role === "tool"
+          || row.message?.role === "system"
+        ) {
+          clock.observe(timestamp, row.message.role);
+        }
         if (row.message?.role === "user" || row.message?.role === "assistant") {
           recordHumanMessage("omp", messages, {
             role: row.message.role,
@@ -600,6 +617,7 @@ function createOmpParser(): IncrementalParser {
         activeMs: activeTime.value,
         humanMessages: humanMessages(messages),
         lastHumanFacingAt: messages.lastHumanFacingAt,
+        thread: clock.snapshot(),
         exited,
         // OMP's session_exit is the real thing: a record that the session, not a
         // turn, is over.
@@ -634,6 +652,7 @@ function createCodexParser(): IncrementalParser {
   let task: string | undefined;
   let tail: string | undefined;
   const messages: HumanMessageWindow = {};
+  const clock = new ThreadClock();
   let tokens: TokenUsage = { provenance: "unknown" };
   let previousSessionUsage: {
     readonly total: number;
@@ -667,8 +686,15 @@ function createCodexParser(): IncrementalParser {
           exited = false;
           task = nextTask(task, payload.message);
           recordHumanMessage("codex", messages, { role: "user", content: payload.message, timestamp }, rowIndex);
+          clock.observe(timestamp, "user");
         }
-        if (row.type === "event_msg" && payload.type === "task_complete") exited = true;
+        if (row.type === "event_msg" && payload.type === "task_complete") {
+          exited = true;
+          clock.observe(timestamp, "system", { endsTurn: true });
+        }
+        if (payload.type === "function_call" || payload.type === "function_call_output") {
+          clock.observe(timestamp, "tool");
+        }
         if (payload.type === "token_count" && payload.info?.total_token_usage) {
           const sessionUsage = payload.info.total_token_usage;
           const lastUsage = payload.info.last_token_usage;
@@ -739,6 +765,7 @@ function createCodexParser(): IncrementalParser {
               content: payload.content,
               timestamp,
             }, rowIndex);
+            clock.observe(timestamp, payload.role);
           }
           if (text) tail = text;
         }
@@ -779,6 +806,7 @@ function createCodexParser(): IncrementalParser {
         activeMs: activeTime.value,
         humanMessages: humanMessages(messages),
         lastHumanFacingAt: messages.lastHumanFacingAt,
+        thread: clock.snapshot(),
         exited,
         // Codex `task_complete` closes a TURN. The session stays open, and the
         // next user message clears the flag again a few lines above.
@@ -839,6 +867,7 @@ function createClaudeParser(): IncrementalParser {
   let task: string | undefined;
   let tail: string | undefined;
   const messages: HumanMessageWindow = {};
+  const clock = new ThreadClock();
   const usageByMessage = new Map<string, {
     index: number;
     input: number;
@@ -885,6 +914,7 @@ function createClaudeParser(): IncrementalParser {
           if (!updatedAt || timestamp > updatedAt) updatedAt = timestamp;
         }
         activeTime.observe(timestamp);
+        observeClaudeRow(clock, row, timestamp);
         const text = plainText(row.message?.content);
         if (row.type === "user") {
           if (row.isMeta !== true) exited = false;
@@ -1022,6 +1052,7 @@ function createClaudeParser(): IncrementalParser {
         activeMs: activeTime.value,
         humanMessages: humanMessages(messages),
         lastHumanFacingAt: messages.lastHumanFacingAt,
+        thread: clock.snapshot(),
         exited,
         // Claude `stop_reason:"end_turn"` is the model yielding the floor, not
         // the session closing. The very next user message reopens it.

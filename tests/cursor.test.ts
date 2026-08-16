@@ -62,6 +62,8 @@ describe("Cursor human-facing recency", () => {
 
     expect(agent?.lastHumanFacingAt).toBe("2026-08-11T10:00:02.000Z");
     expect(agent?.updatedAt).toBe("2026-08-11T10:00:05.000Z");
+    expect(agent?.lastThreadAt).toBe("2026-08-11T10:00:03.000Z");
+    expect(agent?.workingSince).toBe("2026-08-11T10:00:01.000Z");
   });
 
   test("does not infer message time from metadata, mtimes, or a parent clock", async () => {

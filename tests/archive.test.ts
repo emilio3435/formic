@@ -166,6 +166,8 @@ describe("durable archive state", () => {
       subagentCount: 0,
       lastHumanMessage: "Review the final routing diff.",
       lastHumanFacingAt: "2026-07-21T20:04:00.000Z",
+      lastThreadAt: "2026-07-21T20:04:30.000Z",
+      workingSince: "2026-07-21T20:01:00.000Z",
       lastUserMessage: "Please review the final routing diff.",
       lastAgentMessage: "PASS with exact identity evidence.",
       lastAgentClosing: "Everything checks out, but publishing is your call.",
@@ -201,6 +203,8 @@ describe("durable archive state", () => {
       lastUserMessage: source.lastUserMessage,
       lastAgentMessage: source.lastAgentMessage,
       lastHumanFacingAt: source.lastHumanFacingAt,
+      lastThreadAt: source.lastThreadAt,
+      workingSince: source.workingSince,
     });
     /* Measured live after the restart: 133 archived agents carried
        lastAgentMessage but no closing line, because this projection dropped it.
