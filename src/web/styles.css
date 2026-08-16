@@ -2108,9 +2108,22 @@ body.feed-frozen .programs { opacity: 0.62; }
   line-height: 1.25;
 }
 .row-time-band-verb {
-  color: var(--color-status-info);
   font-weight: 500;
-  animation: row-time-verb-shimmer 12s linear infinite;
+  color: transparent;
+  background-image: linear-gradient(
+    90deg,
+    #3172c4 0%,
+    #5b4fd1 20%,
+    #c1632b 40%,
+    #d9a22e 60%,
+    #1e9e5c 80%,
+    #3172c4 100%
+  );
+  background-size: 250% 100%;
+  background-position: 0% 50%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: row-time-verb-shimmer 7s linear infinite;
   filter: drop-shadow(0 0 0.28em color-mix(in srgb, #5b4fd1 38%, transparent));
 }
 .row-time-band-clock {
@@ -2123,11 +2136,8 @@ body.feed-frozen .programs { opacity: 0.62; }
 .row-time-band.is-waiting .row-time-band-clock,
 .row-time-band.is-stalled .row-time-band-clock { color: var(--idle); }
 @keyframes row-time-verb-shimmer {
-  0%, 100% { color: #3172c4; }
-  20% { color: #5b4fd1; }
-  40% { color: #c1632b; }
-  60% { color: #d9a22e; }
-  80% { color: #1e9e5c; }
+  0% { background-position: 0% 50%; }
+  100% { background-position: 100% 50%; }
 }
 .agent-name {
   display: block;
@@ -4098,6 +4108,9 @@ body.feed-frozen .programs { opacity: 0.62; }
   .row-time-band-verb {
     animation: none;
     filter: none;
+    background-image: none;
+    -webkit-background-clip: unset;
+    background-clip: unset;
     color: var(--color-status-info);
   }
 }
