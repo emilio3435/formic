@@ -203,8 +203,11 @@ describe("Grok Bot board visibility", () => {
     const collected = await collectGrokBotSessions([FIXTURE_ROOT], NOW);
     const bot = collected.value[0];
     expect(bot).toBeDefined();
+    /* Two hours quiet — past the 45-minute band that used to file these
+       finished/process-absent because the Mac roster cannot see Grok Bot.app. */
+    const quiet = { ...bot!, updatedAt: new Date(NOW - 2 * 60 * 60 * 1000).toISOString() };
     const snap = buildSnapshot({
-      agents: [bot!],
+      agents: [quiet],
       surfaces: [],
       archiveStore,
       processRosterComplete: true,
@@ -214,7 +217,7 @@ describe("Grok Bot board visibility", () => {
     expect(published).toHaveLength(1);
     expect(published[0]?.id).toBe(bot!.id);
     expect(published[0]?.processRosterComplete).toBeUndefined();
-    expect(published[0]?.lifecycle).not.toBe("finished");
+    expect(published[0]?.lifecycle).toBe("unverified");
     expect(published[0]?.programId).not.toContain("store.db");
     expect(published[0]?.cwd).not.toMatch(/store\.db$/);
   });
