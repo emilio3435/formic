@@ -1760,13 +1760,13 @@ describe("state derivations fall back from provider-native status", () => {
 });
 
 describe("row last-close (#73) and observed-only mark (#78)", () => {
-  test("prefers lastAgentClosing over the kickoff task", () => {
+  test("prefers lastAgentClosing and never returns kickoff", () => {
     const parts = M.rowSummaryParts(agent({
       task: "Port the rate limiter",
       lastAgentClosing: "Should I land this now?",
     }));
     expect(parts.primary).toContain("Should I land");
-    expect(parts.kickoff).toContain("Port the rate limiter");
+    expect(parts.kickoff).toBe("");
     expect(M.rowSummary(agent({
       task: "Port the rate limiter",
       lastAgentClosing: "Should I land this now?",
@@ -1774,28 +1774,29 @@ describe("row last-close (#73) and observed-only mark (#78)", () => {
     expect(M.rowSummary(agent({
       task: "Port the rate limiter",
       lastAgentClosing: "Should I land this now?",
-    }))).toContain("Port the rate limiter");
+    }))).not.toContain("Port the rate limiter");
   });
 
-  test("uses unclipped lastAgentMessage when closing is absent", () => {
+  test("uses lastAgentMessage when closing is absent", () => {
     const parts = M.rowSummaryParts(agent({
       task: "Port the rate limiter",
       lastAgentMessage: "Should I land this now?",
     }));
     expect(parts.primary).toContain("Should I land");
-    expect(parts.kickoff).toContain("Port the rate limiter");
+    expect(parts.kickoff).toBe("");
   });
 
-  test("does not promote a clipped lastAgentMessage", () => {
+  test("keeps clipped prose rather than falling back to kickoff", () => {
     const parts = M.rowSummaryParts(agent({
       task: "Port the rate limiter",
       lastAgentMessage: "I reviewed the diff and…",
     }));
-    expect(parts.primary).toContain("Port the rate limiter");
+    expect(parts.primary).toContain("I reviewed the diff");
+    expect(parts.primary).not.toContain("Port the rate limiter");
     expect(parts.kickoff).toBe("");
   });
 
-  test("treats machine-text closing as absent", () => {
+  test("treats machine-text closing as absent and does not paint kickoff", () => {
     const parts = M.rowSummaryParts(agent({
       task: "Port the rate limiter",
       lastAgentClosing: '{"fingerprint":"src/foo.ts:12:3"}',
@@ -1804,24 +1805,26 @@ describe("row last-close (#73) and observed-only mark (#78)", () => {
     expect(parts.kickoff).toBe("");
   });
 
-  test("does not paint a duplicate kickoff when it matches the closing", () => {
+  test("strips citation trailers and keeps the prose", () => {
     const parts = M.rowSummaryParts(agent({
-      task: "Should I land this now?",
-      lastAgentClosing: "Should I land this now?",
+      task: "Port the rate limiter",
+      lastAgentClosing: "…Baseline is green. <oai-mem-citation> <citation_entries> MEMORY.md:1-2|note=[x] </citation_entries> <rollout_ids> 019f </rollout_ids> </oai-mem-citation>",
     }));
-    expect(parts.primary).toContain("Should I land");
+    expect(parts.primary).toContain("Baseline is green");
+    expect(parts.primary).not.toContain("citation");
+    expect(parts.primary).not.toContain("MEMORY.md");
     expect(parts.kickoff).toBe("");
   });
 
-  test("paints the kickoff as a muted second line", () => {
+  test("does not paint a kickoff line", () => {
     const row = withDom(() => M.renderAgentRow(agent({
       task: "Port the rate limiter",
       lastAgentClosing: "Should I land this now?",
     }), { id: "p1", name: "P", agents: [] }));
     const summary = findAll(row, (n) => String(n.className || "").includes("row-summary"))[0];
-    const kickoff = findAll(row, (n) => String(n.className || "").includes("row-kickoff"))[0];
+    const kickoff = findAll(row, (n) => String(n.className || "").includes("row-kickoff"));
     expect(textOf(summary)).toContain("Should I land");
-    expect(textOf(kickoff)).toContain("Port the rate limiter");
+    expect(kickoff).toHaveLength(0);
   });
 });
 
