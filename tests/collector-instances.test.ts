@@ -51,7 +51,7 @@ describe("classifyDataDir", () => {
     expect(hit?.reason).toBeUndefined();
   });
 
-  test("extra grok home is grok-cli / needs-home-list", () => {
+  test("extra grok home is grok-cli and collectable", () => {
     const root = mkdtempSync(join(tmpdir(), "ah-scan-"));
     const dataDir = join(root, ".grok-2");
     mkdirSync(join(dataDir, "sessions", "cwd", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"), { recursive: true });
@@ -59,7 +59,7 @@ describe("classifyDataDir", () => {
     const hit = classifyDataDir(dataDir, memFs(root));
     expect(hit?.kind).toBe("grok-cli");
     expect(hit?.provider).toBe("grok");
-    expect(hit?.reason).toBe("needs-home-list");
+    expect(hit?.reason).toBeUndefined();
   });
 
   test("codex-2 sessions classify as codex and are not default", () => {

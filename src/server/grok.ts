@@ -1,6 +1,7 @@
-import { readdir, readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { readdir, readFile, realpath, stat } from "node:fs/promises";
+import { basename, join, normalize } from "node:path";
 import type { TokenUsage } from "../shared/types";
+import { instanceIdFor, isGrokBotProductCache } from "./collector-instances";
 import type { LifecycleThresholds } from "./lifecycle";
 import { makeAgent, type ParseMetadata } from "./collectors";
 import type { HumanMessageCandidate } from "./human-message";
@@ -191,7 +192,16 @@ function decodedCwd(encoded: string): string | undefined {
   }
 }
 
-export async function collectGrokSessions(
+async function resolvedPath(path: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch {
+    const trimmed = path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
+    return normalize(trimmed);
+  }
+}
+
+async function collectGrokRoot(
   root: string,
   windowMs: number,
   thresholds?: LifecycleThresholds,
@@ -254,4 +264,45 @@ export async function collectGrokSessions(
   }));
 
   return { value: agents, errors };
+}
+
+export async function collectGrokSessions(
+  root: string,
+  windowMs: number,
+  thresholds?: LifecycleThresholds,
+  extraRoots: readonly string[] = [],
+): Promise<CollectionResult<CollectedAgent[]>> {
+  const primary = await collectGrokRoot(root, windowMs, thresholds);
+  const agents = [...primary.value];
+  const errors = [...primary.errors];
+  const seen = new Set(agents.map((agent) => agent.id));
+  const defaultPath = await resolvedPath(root);
+
+  for (const extra of extraRoots) {
+    if (isGrokBotProductCache(extra)) continue;
+    const extraPath = await resolvedPath(extra);
+    if (extraPath === defaultPath) continue;
+    const collected = await collectGrokRoot(extra, windowMs, thresholds);
+    if (collected.absent) {
+      errors.push(`grok extra CLI root ${extra}: not found`);
+      continue;
+    }
+    errors.push(...collected.errors);
+    for (const agent of collected.value) {
+      agent.instanceId = instanceIdFor("grok-cli", extra);
+      agent.instanceLabel = basename(extra);
+      if (seen.has(agent.id)) {
+        console.info(`grok extra CLI root ${basename(extra)}: skip duplicate ${agent.id}`);
+        continue;
+      }
+      seen.add(agent.id);
+      agents.push(agent);
+    }
+  }
+
+  return {
+    value: agents,
+    errors,
+    ...(primary.absent && extraRoots.length === 0 ? { absent: true } : {}),
+  };
 }

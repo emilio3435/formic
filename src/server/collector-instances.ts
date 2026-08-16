@@ -169,8 +169,10 @@ function candidate(
   return hit;
 }
 
-function grokCliReason(dataDir: string, fs: ScanFs): CollectorReason | undefined {
-  return isDefaultDataDir(dataDir, fs.home()) ? undefined : "needs-home-list";
+/* `~/.grokbot` is the Bot product cache. classify's `.grok*` prefix match
+   would otherwise list it as a CLI extra. */
+export function isGrokBotProductCache(dataDir: string): boolean {
+  return basename(dataDir).replace(/^\./, "").toLowerCase() === "grokbot";
 }
 
 function sessionNames(dataDir: string, fs: ScanFs): string[] {
@@ -295,7 +297,7 @@ export function classifyDataDir(dataDir: string, fs: ScanFs, deadline?: number):
     return candidate("omp", dataDir, fs);
   }
   if (isDotFamily(base, "grok") && (fs.isDirectory(join(dataDir, "sessions")) || fs.exists(join(dataDir, "sessions")))) {
-    return candidate("grok-cli", dataDir, fs, grokCliReason(dataDir, fs));
+    return candidate("grok-cli", dataDir, fs);
   }
   if (isDotFamily(base, "hermes") && (fs.isDirectory(join(dataDir, "sessions")) || fs.isDirectory(join(dataDir, "cron")))) {
     return candidate("hermes", dataDir, fs);
