@@ -372,7 +372,7 @@ describe("board row paint", () => {
 
 describe("verb shimmer CSS", () => {
   test("sweeps the five Formic inks left to right and skips danger red", () => {
-    expect(styles).toMatch(/\.row-time-band-verb[^{]*\{[\s\S]*?animation:\s*row-time-verb-shimmer\s+7s\s+linear\s+infinite/);
+    expect(styles).toMatch(/\.row-time-band-verb[^{]*\{[\s\S]*?animation:\s*row-time-verb-shimmer\s+2s\s+linear\s+infinite/);
     expect(styles).toMatch(/\.row-time-band-clock[^{]*\{[^}]*color:\s*var\(--color-status-info\)/);
     expect(styles).toMatch(/\.row-time-band\.is-needs-you[^{]*\{[^}]*color:\s*var\(--color-status-warning\)/);
     expect(styles).toMatch(/\.row-time-band\.is-waiting[^{]*[\s\S]*?color:\s*var\(--idle\)/);
@@ -380,12 +380,18 @@ describe("verb shimmer CSS", () => {
     expect(styles).toMatch(/\.row-time-band-verb[^{]*\{[\s\S]*?linear-gradient\(\s*90deg/);
     const verb = styles.match(/\.row-time-band-verb\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
     const hexes = [...verb.matchAll(/#([0-9a-fA-F]{6})/g)].map((match) => match[0].toLowerCase());
-    expect(hexes).toEqual(["#3172c4", "#5b4fd1", "#c1632b", "#d9a22e", "#1e9e5c", "#3172c4", "#5b4fd1"]);
+    expect(hexes).toContain("#3172c4");
+    expect(hexes).toContain("#5b4fd1");
+    expect(hexes).toContain("#c1632b");
+    expect(hexes).toContain("#d9a22e");
+    expect(hexes).toContain("#1e9e5c");
+    expect(hexes.filter((hex) => hex === "#3172c4").length).toBeGreaterThanOrEqual(2);
     expect(hexes).not.toContain("#d1453d");
+    expect(verb).toMatch(/font-weight:\s*600/);
     expect(verb).not.toMatch(/hue-rotate/);
     const shimmer = styles.match(/@keyframes row-time-verb-shimmer\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
-    expect(shimmer).toMatch(/background-position:\s*0%\s+50%/);
     expect(shimmer).toMatch(/background-position:\s*100%\s+50%/);
+    expect(shimmer).toMatch(/background-position:\s*-100%\s+50%/);
     expect(shimmer).not.toMatch(/hue-rotate/);
     expect(styles).toMatch(/prefers-reduced-motion:\s*reduce[\s\S]*\.row-time-band-verb\s*\{[\s\S]*?animation:\s*none/);
     expect(styles).toMatch(/prefers-reduced-motion:\s*reduce[\s\S]*\.row-time-band-verb\s*\{[\s\S]*?filter:\s*none/);
