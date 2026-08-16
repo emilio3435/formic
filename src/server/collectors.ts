@@ -33,6 +33,7 @@ export const DEFAULT_SESSION_WINDOW_MS = 36 * 60 * 60 * 1_000;
 export interface CollectSessionsOptions {
   hookProcessStarts?: () => ReadonlyMap<number, number> | undefined;
   processLineageExec?: ProcessLineageExec;
+  extraCursorGuiRoots?: readonly string[];
 }
 export type SessionProviderResult = CollectionResult<CollectedAgent[]>;
 export type SessionProviderResults = Record<Provider, SessionProviderResult>;
@@ -1290,6 +1291,7 @@ export async function collectSessionProvider(
   home = homedir(),
   windowMs = DEFAULT_SESSION_WINDOW_MS,
   thresholds?: LifecycleThresholds,
+  options: CollectSessionsOptions = {},
 ): Promise<SessionProviderResult> {
   switch (provider) {
     case "omp":
@@ -1299,7 +1301,10 @@ export async function collectSessionProvider(
     case "claude":
       return collectProvider("claude", join(home, ".claude/projects"), 3, parseClaudeJsonl, windowMs, thresholds);
     case "cursor":
-      return collectCursorSessions(home, Date.now(), windowMs, thresholds);
+      return collectCursorSessions(
+        home, Date.now(), windowMs, thresholds,
+        options.extraCursorGuiRoots ?? [],
+      );
     case "factory":
       return collectProvider("factory", join(home, ".factory/sessions"), 2, parseFactoryJsonl, windowMs, thresholds);
     case "prime":
@@ -1354,7 +1359,7 @@ export async function collectSessions(
 ): Promise<SessionProviderResults> {
   const results = Object.fromEntries(await Promise.all(PROVIDERS.map(async (provider) => [
     provider,
-    await collectSessionProvider(provider, home, windowMs, thresholds),
+    await collectSessionProvider(provider, home, windowMs, thresholds, options),
   ]))) as SessionProviderResults;
   return finalizeSessionProviders(results, home, options);
 }

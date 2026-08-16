@@ -201,6 +201,7 @@ async function readBoundedTranscriptTail(
 export interface HubStateOptions {
   collectors?: HubCollectors;
   settingsReader?: () => HubSettings;
+  guiRootsReader?: () => readonly string[];
   triageReader?: () => readonly TriageQueueSummary[];
   burnReader?: () => Promise<UsageSummary>;
   cmuxExecutable?: string;
@@ -271,6 +272,7 @@ export class HubState {
 
   private readonly collectors: HubCollectors;
   private readonly settingsReader?: () => HubSettings;
+  private readonly guiRootsReader?: () => readonly string[];
   private readonly triageReader?: () => readonly TriageQueueSummary[];
   private readonly burnReader?: () => Promise<UsageSummary>;
   private readonly cmuxExecutable: string;
@@ -291,6 +293,7 @@ export class HubState {
   ) {
     this.collectors = options.collectors ?? DEFAULT_COLLECTORS;
     this.settingsReader = options.settingsReader;
+    this.guiRootsReader = options.guiRootsReader;
     this.triageReader = options.triageReader;
     this.burnReader = options.burnReader;
     this.cmuxExecutable = options.cmuxExecutable ?? DEFAULT_CMUX_EXECUTABLE;
@@ -846,6 +849,7 @@ export class HubState {
        see the board reclassify on that refresh rather than at the next
        restart. */
     const thresholds = settings ? lifecycleThresholds(settings) : undefined;
+    const extraCursorGuiRoots = this.guiRootsReader?.() ?? [];
     type SessionsResult = Awaited<ReturnType<HubCollectors["sessions"]>>;
     type SpendSourcesResult = Awaited<ReturnType<typeof collectHermesSpendSources>>;
     type CmuxResult = Awaited<ReturnType<HubCollectors["cmux"]>>;
@@ -939,7 +943,9 @@ export class HubState {
             providers,
             async (provider) => {
               try {
-                return await this.collectors.sessionProvider!(provider, homedir(), windowMs, thresholds, signal);
+                return await this.collectors.sessionProvider!(
+                  provider, homedir(), windowMs, thresholds, { extraCursorGuiRoots }, signal,
+                );
               } catch (error) {
                 return {
                   value: [],
@@ -971,7 +977,7 @@ export class HubState {
             );
           }
         })())
-      : capture("session collection failed", this.collectors.sessions(homedir(), windowMs, thresholds, {}, signal), (value) => {
+      : capture("session collection failed", this.collectors.sessions(homedir(), windowMs, thresholds, { extraCursorGuiRoots }, signal), (value) => {
           sessionsResult = value;
         })).catch((error) => {
           if (!signal.aborted) {

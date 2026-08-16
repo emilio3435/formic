@@ -52,6 +52,9 @@ export interface CollectedAgent {
   processedSnapshots?: readonly { readonly at: string; readonly total: number }[];
   id: string;
   provider: Provider;
+  /** Extra Cursor GUI copy this row came from; absent on the default root. */
+  instanceId?: string;
+  instanceLabel?: string;
   sourceSessionId: string;
   /** Provider runtime identity when it differs from the transcript's source identity. */
   runtimeSessionId?: string;

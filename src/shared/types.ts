@@ -362,6 +362,9 @@ export interface RepoIdentity {
 export interface AgentSnapshot {
   id: string;
   provider: Provider;
+  /** Extra Cursor GUI copy this row came from; absent on the default root. */
+  instanceId?: string;
+  instanceLabel?: string;
   sourceSessionId: string;
   displayName: string;
   /* What this session is called and why, resolved server-side across the whole
