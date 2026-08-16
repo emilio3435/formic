@@ -60,7 +60,8 @@ const SAMPLES: Record<Provider, { path?: string; command: string }> = {
     command: `grok -r ${ID}`,
   },
   hermes: {
-    command: "hermes",
+    path: `/Users/me/.hermes/sessions/${ID}.jsonl`,
+    command: `hermes --resume ${ID}`,
   },
 };
 
@@ -84,6 +85,26 @@ describe("every provider is visible to the process scanner", () => {
   test("grok and hermes bare binaries are recognized without resume ids", () => {
     expect(isRecognizedAgentProcess("grok")).toBeTrue();
     expect(isRecognizedAgentProcess("/opt/homebrew/bin/hermes")).toBeTrue();
+  });
+});
+
+describe("Hermes specifics", () => {
+  test("interactive session files name the stem, including non-UUID names", () => {
+    expect(identityFromSessionPath("/Users/me/.hermes/sessions/20260815_140000_deadbeef.jsonl")).toEqual({
+      provider: "hermes",
+      value: "20260815_140000_deadbeef",
+      full: true,
+    });
+  });
+
+  test("--resume and -r name a session; the pause-lift subcommand does not", () => {
+    expect(identitiesFromCommand(`hermes --resume ${ID}`)).toEqual([
+      { provider: "hermes", value: ID, full: true },
+    ]);
+    expect(identitiesFromCommand(`hermes -r ${ID}`)).toEqual([
+      { provider: "hermes", value: ID, full: true },
+    ]);
+    expect(identitiesFromCommand("hermes resume")).toEqual([]);
   });
 });
 
