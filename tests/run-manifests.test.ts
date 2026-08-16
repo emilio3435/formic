@@ -521,6 +521,8 @@ test("the cmux refresh tick supplies manifests and workspace env to the snapshot
       prime: { value: [], errors: [] },
       grok: { value: [], errors: [] },
       hermes: { value: [], errors: [] },
+      muse: { value: [], errors: [] },
+      antigravity: { value: [], errors: [] },
     }),
     cmux: async () => ({
       value: [{

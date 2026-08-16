@@ -357,11 +357,11 @@ describe("B2 [TL;DR] render proof — prime.ts → transcriptTail → snapshot.t
     expect(agent.transcriptTail).toContain("line 99");
   });
 
-  test("8/8 healthy counts PROVIDERS (8: codex, omp, claude, cursor, factory, prime, grok, hermes) not providers+cmux", async () => {
+  test("10/10 healthy counts PROVIDERS (10: plus muse, antigravity) not providers+cmux", async () => {
     const { PROVIDERS } = await import("../src/shared/types");
-    // Exhaustive 8 — the TODAY.md bug double-counted cmux and omitted omp (4 of 4 with wrong membership)
-    expect(PROVIDERS).toEqual(["codex", "omp", "claude", "cursor", "factory", "prime", "grok", "hermes"]);
-    expect(PROVIDERS.length).toBe(8);
+    // Exhaustive 10 — the TODAY.md bug double-counted cmux and omitted omp (4 of 4 with wrong membership)
+    expect(PROVIDERS).toEqual(["codex", "omp", "claude", "cursor", "factory", "prime", "grok", "hermes", "muse", "antigravity"]);
+    expect(PROVIDERS.length).toBe(10);
     const _exhaustive: Set<typeof PROVIDERS[number]> = new Set(PROVIDERS); void _exhaustive;
 
     // Snapshot sourceHealth must agree: healthy = PROVIDERS.length when no errors and none absent

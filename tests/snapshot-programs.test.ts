@@ -216,6 +216,8 @@ test("the cmux tick keeps sidebar repo facts and they outrank spawned git branch
       prime: { value: [], errors: [] },
       grok: { value: [], errors: [] },
       hermes: { value: [], errors: [] },
+      muse: { value: [], errors: [] },
+      antigravity: { value: [], errors: [] },
     }),
     cmux: async () => ({
       value: [{

@@ -89,6 +89,8 @@ const PROVIDER_NAMES: Record<Provider, string> = {
   prime: "Prime",
   grok: "Grok",
   hermes: "Hermes",
+  muse: "Muse",
+  antigravity: "Antigravity",
 };
 
 const NON_TASK_PREFIXES = [
@@ -316,6 +318,8 @@ const AUTHORED_BY: Record<Provider, AuthoredNameSource> = {
   prime: "prime-title",
   grok: "grok-title",
   hermes: "hermes-title",
+  muse: "muse-title",
+  antigravity: "antigravity-title",
 };
 
 function statusFrom(
@@ -1341,6 +1345,20 @@ export async function collectSessionProvider(
       const sessions = join(root, "sessions");
       if (!existsSync(sessions)) return { value: [], errors: [] };
       return collectProvider("hermes", sessions, 1, parseHermesJsonl, windowMs, thresholds);
+    }
+    case "muse": {
+      const root = join(home, ".local/share/muse");
+      if (!existsSync(root)) return { value: [], errors: [], absent: true };
+      return { value: [], errors: [] };
+    }
+    case "antigravity": {
+      const trees = [
+        join(home, ".gemini/antigravity-cli"),
+        join(home, ".gemini/antigravity"),
+        join(home, ".gemini/antigravity-ide"),
+      ];
+      if (!trees.some((tree) => existsSync(tree))) return { value: [], errors: [], absent: true };
+      return { value: [], errors: [] };
     }
   }
 }

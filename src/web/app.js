@@ -9135,6 +9135,8 @@ const HARNESS_MARK = {
   omp: { src: "/icons/omp.svg", label: "OMP" },
   grok: { src: "/icons/xai.svg", label: "Grok Build" },
   hermes: { src: "/icons/formic-mark.svg", label: "Hermes" },
+  muse: { label: "Muse" },
+  antigravity: { label: "Antigravity" },
   omni: { src: "/icons/omp.svg", label: "OMP" },
 };
 const AGENT_MARK = {

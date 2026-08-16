@@ -39,6 +39,8 @@ const empty = (): SessionsResult => ({
   prime: { value: [], errors: [] },
   grok: { value: [], errors: [] },
   hermes: { value: [], errors: [] },
+  muse: { value: [], errors: [] },
+  antigravity: { value: [], errors: [] },
 });
 
 /** A hub whose collectors behave exactly as described, with a 60ms deadline. */

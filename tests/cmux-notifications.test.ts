@@ -106,6 +106,8 @@ const emptySessions = () => ({
   prime: { value: [], errors: [] },
   grok: { value: [], errors: [] },
   hermes: { value: [], errors: [] },
+  muse: { value: [], errors: [] },
+  antigravity: { value: [], errors: [] },
 });
 
 async function eventually(assertion: () => void): Promise<void> {

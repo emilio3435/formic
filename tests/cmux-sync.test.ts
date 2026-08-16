@@ -315,6 +315,8 @@ async function livenessFixture() {
     prime: { value: [], errors: [] },
     grok: { value: [], errors: [] },
     hermes: { value: [], errors: [] },
+    muse: { value: [], errors: [] },
+    antigravity: { value: [], errors: [] },
   });
   const collectors: HubCollectors = {
     sessions: async () => empty(),

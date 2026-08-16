@@ -31,6 +31,8 @@ const PROVIDER_BINARIES: Record<Provider, string> = {
   prime: "prime-agent",
   grok: "grok",
   hermes: "hermes",
+  muse: "muse",
+  antigravity: "agy",
 };
 const AGENT_BINARIES = Object.values(PROVIDER_BINARIES).join("|");
 const RESUME_PROVIDERS = PROVIDERS.join("|");

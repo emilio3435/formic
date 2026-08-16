@@ -63,6 +63,12 @@ const SAMPLES: Record<Provider, { path?: string; command: string }> = {
     path: `/Users/me/.hermes/sessions/${ID}.jsonl`,
     command: `hermes --resume ${ID}`,
   },
+  muse: {
+    command: "muse",
+  },
+  antigravity: {
+    command: "agy",
+  },
 };
 
 describe("every provider is visible to the process scanner", () => {
