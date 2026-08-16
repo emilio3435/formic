@@ -4228,11 +4228,11 @@ body.feed-frozen .programs { opacity: 0.62; }
    it answers to a different authority: this browser, not the fleet. */
 .settings-local { border: 0; border-top: 1px solid var(--rule); margin: 0.25rem 0 0; padding: 0.75rem 0 0; display: grid; gap: 0.5rem; }
 .settings-local legend { float: left; font-weight: 600; font-size: 0.9rem; padding: 0; }
-/* Inventory of scanned agent homes. Ruled off from the time fields the same
-   way the per-browser section is — same rule, same type, no new chrome. */
+/* Inventory of scanned agent homes. First under the title, so no top rule of
+   its own — sibling `.settings-section`s draw the later dividers. */
 .settings-section { display: grid; gap: 0.55rem; }
 .settings-section + .settings-section { border-top: 1px solid var(--rule); padding-top: 0.75rem; margin-top: 0.15rem; }
-.settings-collectors { border: 0; border-top: 1px solid var(--rule); margin: 0.25rem 0 0; padding: 0.75rem 0 0; display: grid; gap: 0.5rem; }
+.settings-collectors { border: 0; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
 .settings-collectors h3 { font-weight: 600; font-size: 0.9rem; margin: 0; }
 .settings-collectors-group { display: grid; gap: 0.5rem; }
 .settings-collectors-row { display: grid; grid-template-columns: auto 1fr auto; gap: 0.35rem 0.65rem; align-items: start; }
@@ -5462,8 +5462,7 @@ body.feed-frozen .programs { opacity: 0.62; }
 .dw-roster-row:hover .dw-roster-name { color: var(--color-interactive); }
 .settings-input { border-color: var(--color-border-default); background: var(--color-surface-card); color: var(--color-text-primary); }
 .settings-actions,
-.settings-local,
-.settings-collectors { border-color: var(--color-border-subtle); }
+.settings-local { border-color: var(--color-border-subtle); }
 .settings-saved { border-left-color: var(--color-status-success); background: var(--color-status-success-tint); color: var(--color-text-primary); }
 .settings-error { border-left-color: var(--color-status-danger); background: var(--color-status-danger-tint); color: var(--color-text-primary); }
 .notify-incomplete,
