@@ -339,6 +339,13 @@ describe("settings v2: the API accepts subsets and names what it refused", () =>
     expect(JSON.stringify(await response.json())).toContain("evidenceMeansEnded");
   });
 
+  test("settings POST still rejects collector instance keys", async () => {
+    const store = await JsonSettingsStore.open("/tmp/anthill-v2-instances.json", memoryFiles().ops);
+    const res = await handleSettingsRequest(post({ instances: [] }), store);
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain("instances");
+  });
+
   test("an empty body is refused, so a no-op POST cannot read as a saved change", async () => {
     const store = await JsonSettingsStore.open("/tmp/anthill-v2-empty.json", memoryFiles().ops);
     expect((await handleSettingsRequest(post({}), store)).status).toBe(400);

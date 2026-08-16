@@ -149,6 +149,8 @@ There are eight, and they read what each tool already writes to disk:
 | **Grok** | `~/.grok/sessions/<encoded-cwd>/<session-id>/` or `$GROK_HOME/sessions/…` | you use Grok Build |
 | **Hermes** | `~/.hermes/` | you use Hermes |
 
+Extra copies of these homes opt in under **Settings → Collectors**; they are not new providers.
+
 **Expect most of these to be absent, and expect that to be fine.** A directory
 that does not exist is a complete answer — *this tool never ran here* — and no
 session can be hiding behind it, so an absent collector is named separately and

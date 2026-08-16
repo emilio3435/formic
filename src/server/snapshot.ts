@@ -547,6 +547,8 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
     } = displaySource;
     const agent: AgentSnapshotWithControlRefusal = {
       ...publishable,
+      ...(source.instanceId !== undefined ? { instanceId: source.instanceId } : {}),
+      ...(source.instanceLabel !== undefined ? { instanceLabel: source.instanceLabel } : {}),
       programId: runKey ?? (program.groupPath ? `repo:${program.groupPath[0]}` : program.id),
       /* An unread notification no longer overwrites the status. It used to,
          which is how a working session came to publish `status: "attention"` —

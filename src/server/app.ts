@@ -22,6 +22,7 @@ import { sessionCallsResponse } from "./session-calls";
 import { readPublishState, type PublishState } from "./publish-state";
 import { canWriteToTarget } from "./targets";
 import { modelConfigLoadError } from "./model-config";
+import { handleCollectorInstancesRequest, type JsonCollectorInstanceStore } from "./collector-instances";
 import { handleControlRequest } from "./http";
 import { handleProgramAliasRequest, type ProgramAliasStore } from "./program-aliases";
 import {
@@ -353,6 +354,7 @@ export interface MountainAppDependencies {
   triageRunner?: TriageInvestigationRunner;
   programAliasStore?: ProgramAliasStore;
   settingsStore?: JsonSettingsStore;
+  collectorInstances?: JsonCollectorInstanceStore;
   /* TINT-F — repo colour assignments. Defaults to the shipped JSON file when
      the web root is the shipped one, and to memory everywhere else. */
   repoColorsStore?: JsonRepoColorsStore;
@@ -1286,6 +1288,14 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
         afterUpdate: async () => {
           await dependencies.state.refresh({ cmux: true });
         },
+      });
+    }
+    if (url.pathname === "/api/collector-instances") {
+      if (!dependencies.collectorInstances) {
+        return new Response("Not found", { status: 404, headers: SECURITY_HEADERS });
+      }
+      return handleCollectorInstancesRequest(request, dependencies.collectorInstances, {
+        afterUpdate: async () => { await dependencies.state.refresh({ cmux: true }); },
       });
     }
     /* TINT-F routes — repo-identity colour. GET is the board's read (and the

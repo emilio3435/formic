@@ -2035,10 +2035,21 @@ body.feed-frozen .programs { opacity: 0.62; }
 /* Dual harness+agent marks — two 1.35rem badges overlapping by 0.35rem, reading left→right as harness then model. */
 .row-identity.has-dual-marks { grid-template-columns: 2.2rem minmax(0, 1fr); }
 .dual-marks { display: inline-flex; align-items: center; gap: 0; flex: none; }
+.dual-marks.has-instance-home { gap: 0.35rem; }
 .dual-marks .provider-mark { width: 1.35rem; height: 1.35rem; padding: 0.18rem; border-radius: 50%; background: var(--raise); border: 1px solid var(--line); box-sizing: border-box; }
 .dual-marks .harness-mark { position: relative; z-index: 1; }
 .dual-marks .agent-mark { margin-left: -0.35rem; z-index: 0; opacity: 0.97; }
+.dual-marks.has-instance-home .agent-mark { margin-right: 0.05rem; }
 .dual-marks .agent-mark.is-empty { color: var(--faint); border-style: dashed; }
+.instance-home {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--faint);
+  white-space: nowrap;
+}
+.row-identity.has-dual-marks:has(.instance-home) { grid-template-columns: auto minmax(0, 1fr); }
 .swarm-anchor .dual-marks .provider-mark { width: 1.15rem; height: 1.15rem; padding: 0.14rem; }
 @media (forced-colors: active) { .dual-marks .provider-mark { border: 1px solid CanvasText; } }
 
@@ -4217,6 +4228,21 @@ body.feed-frozen .programs { opacity: 0.62; }
    it answers to a different authority: this browser, not the fleet. */
 .settings-local { border: 0; border-top: 1px solid var(--rule); margin: 0.25rem 0 0; padding: 0.75rem 0 0; display: grid; gap: 0.5rem; }
 .settings-local legend { float: left; font-weight: 600; font-size: 0.9rem; padding: 0; }
+/* Inventory of scanned agent homes. First under the title, so no top rule of
+   its own — sibling `.settings-section`s draw the later dividers. */
+.settings-section { display: grid; gap: 0.55rem; }
+.settings-section + .settings-section { border-top: 1px solid var(--rule); padding-top: 0.75rem; margin-top: 0.15rem; }
+.settings-collectors { border: 0; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
+.settings-collectors h3 { font-weight: 600; font-size: 0.9rem; margin: 0; }
+.settings-collectors-group { display: grid; gap: 0.5rem; }
+.settings-collectors-row { display: grid; grid-template-columns: auto 1fr auto; gap: 0.35rem 0.65rem; align-items: start; }
+.settings-collectors-copy { display: grid; gap: 0.12rem; }
+.settings-collectors-actions { display: flex; align-items: center; gap: 0.65rem; }
+.settings-collectors-ignore {
+  border: 0; background: none; color: var(--muted); font: inherit; font-size: 0.8rem;
+  padding: 0.15rem 0; min-height: 0; cursor: pointer;
+}
+.settings-collectors-ignore:hover { color: var(--ink); }
 .settings-radio { display: flex; align-items: baseline; gap: 0.5rem; cursor: pointer; }
 .settings-actions { display: flex; gap: 0.5rem; align-items: center; border-top: 1px solid var(--rule); padding-top: 0.75rem; margin-top: 0.15rem; }
 .settings-actions .settings-spacer { flex: 1; }

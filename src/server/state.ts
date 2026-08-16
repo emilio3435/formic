@@ -120,6 +120,17 @@ const MIN_CONTROL_AGGREGATE_TIMEOUT_MS = 10_000;
    completed provider truth reach persistence after a 10-second cutoff. */
 const PUBLISHING_TAIL_TIMEOUT_MS = 5_000;
 
+/* Settlement reuses an in-flight or staged scan when this key matches. Extra
+   Cursor GUI roots must be in it or Import's refresh keeps the previous
+   cursor result. */
+export function providerCollectionConfigKey(
+  windowMs: number,
+  thresholds: { readonly freshMs?: number; readonly quietMs?: number } | undefined,
+  extraCursorGuiRoots: readonly string[],
+): string {
+  return `${windowMs}:${thresholds?.freshMs ?? "default"}:${thresholds?.quietMs ?? "default"}:${extraCursorGuiRoots.join(",")}`;
+}
+
 function waitWithAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
   if (signal.aborted) return Promise.reject(signal.reason ?? new Error("refresh cancelled"));
   return new Promise<T>((resolve, reject) => {
@@ -201,6 +212,7 @@ async function readBoundedTranscriptTail(
 export interface HubStateOptions {
   collectors?: HubCollectors;
   settingsReader?: () => HubSettings;
+  guiRootsReader?: () => readonly string[];
   triageReader?: () => readonly TriageQueueSummary[];
   burnReader?: () => Promise<UsageSummary>;
   cmuxExecutable?: string;
@@ -271,6 +283,7 @@ export class HubState {
 
   private readonly collectors: HubCollectors;
   private readonly settingsReader?: () => HubSettings;
+  private readonly guiRootsReader?: () => readonly string[];
   private readonly triageReader?: () => readonly TriageQueueSummary[];
   private readonly burnReader?: () => Promise<UsageSummary>;
   private readonly cmuxExecutable: string;
@@ -291,6 +304,7 @@ export class HubState {
   ) {
     this.collectors = options.collectors ?? DEFAULT_COLLECTORS;
     this.settingsReader = options.settingsReader;
+    this.guiRootsReader = options.guiRootsReader;
     this.triageReader = options.triageReader;
     this.burnReader = options.burnReader;
     this.cmuxExecutable = options.cmuxExecutable ?? DEFAULT_CMUX_EXECUTABLE;
@@ -846,6 +860,7 @@ export class HubState {
        see the board reclassify on that refresh rather than at the next
        restart. */
     const thresholds = settings ? lifecycleThresholds(settings) : undefined;
+    const extraCursorGuiRoots = this.guiRootsReader?.() ?? [];
     type SessionsResult = Awaited<ReturnType<HubCollectors["sessions"]>>;
     type SpendSourcesResult = Awaited<ReturnType<typeof collectHermesSpendSources>>;
     type CmuxResult = Awaited<ReturnType<HubCollectors["cmux"]>>;
@@ -934,12 +949,14 @@ export class HubState {
     });
     const providerCollection = (this.collectors.sessionProvider && this.collectors.finalizeSessions
       ? track("providers", (async () => {
-          const configKey = `${windowMs}:${thresholds?.freshMs ?? "default"}:${thresholds?.quietMs ?? "default"}`;
+          const configKey = providerCollectionConfigKey(windowMs, thresholds, extraCursorGuiRoots);
           const selection = await this.#providerSettlement.settle(
             providers,
             async (provider) => {
               try {
-                return await this.collectors.sessionProvider!(provider, homedir(), windowMs, thresholds, signal);
+                return await this.collectors.sessionProvider!(
+                  provider, homedir(), windowMs, thresholds, { extraCursorGuiRoots }, signal,
+                );
               } catch (error) {
                 return {
                   value: [],
@@ -971,7 +988,7 @@ export class HubState {
             );
           }
         })())
-      : capture("session collection failed", this.collectors.sessions(homedir(), windowMs, thresholds, {}, signal), (value) => {
+      : capture("session collection failed", this.collectors.sessions(homedir(), windowMs, thresholds, { extraCursorGuiRoots }, signal), (value) => {
           sessionsResult = value;
         })).catch((error) => {
           if (!signal.aborted) {
