@@ -129,8 +129,9 @@ export function providerCollectionConfigKey(
   thresholds: { readonly freshMs?: number; readonly quietMs?: number } | undefined,
   extraCursorGuiRoots: readonly string[],
   extraGrokBotRoots: readonly string[] = [],
+  extraGrokCliRoots: readonly string[] = [],
 ): string {
-  return `${windowMs}:${thresholds?.freshMs ?? "default"}:${thresholds?.quietMs ?? "default"}:${extraCursorGuiRoots.join(",")}:bot=${extraGrokBotRoots.join(",")}`;
+  return `${windowMs}:${thresholds?.freshMs ?? "default"}:${thresholds?.quietMs ?? "default"}:${extraCursorGuiRoots.join(",")}:bot=${extraGrokBotRoots.join(",")}:cli=${extraGrokCliRoots.join(",")}`;
 }
 
 function waitWithAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -216,6 +217,7 @@ export interface HubStateOptions {
   settingsReader?: () => HubSettings;
   guiRootsReader?: () => readonly string[];
   botRootsReader?: () => readonly string[];
+  grokCliRootsReader?: () => readonly string[];
   triageReader?: () => readonly TriageQueueSummary[];
   burnReader?: () => Promise<UsageSummary>;
   cmuxExecutable?: string;
@@ -288,6 +290,7 @@ export class HubState {
   private readonly settingsReader?: () => HubSettings;
   private readonly guiRootsReader?: () => readonly string[];
   private readonly botRootsReader?: () => readonly string[];
+  private readonly grokCliRootsReader?: () => readonly string[];
   private readonly triageReader?: () => readonly TriageQueueSummary[];
   private readonly burnReader?: () => Promise<UsageSummary>;
   private readonly cmuxExecutable: string;
@@ -310,6 +313,7 @@ export class HubState {
     this.settingsReader = options.settingsReader;
     this.guiRootsReader = options.guiRootsReader;
     this.botRootsReader = options.botRootsReader;
+    this.grokCliRootsReader = options.grokCliRootsReader;
     this.triageReader = options.triageReader;
     this.burnReader = options.burnReader;
     this.cmuxExecutable = options.cmuxExecutable ?? DEFAULT_CMUX_EXECUTABLE;
@@ -867,6 +871,7 @@ export class HubState {
     const thresholds = settings ? lifecycleThresholds(settings) : undefined;
     const extraCursorGuiRoots = this.guiRootsReader?.() ?? [];
     const extraGrokBotRoots = this.botRootsReader?.() ?? [];
+    const extraGrokCliRoots = this.grokCliRootsReader?.() ?? [];
     type SessionsResult = Awaited<ReturnType<HubCollectors["sessions"]>>;
     type SpendSourcesResult = Awaited<ReturnType<typeof collectHermesSpendSources>>;
     type CmuxResult = Awaited<ReturnType<HubCollectors["cmux"]>>;
@@ -955,13 +960,15 @@ export class HubState {
     });
     const providerCollection = (this.collectors.sessionProvider && this.collectors.finalizeSessions
       ? track("providers", (async () => {
-          const configKey = providerCollectionConfigKey(windowMs, thresholds, extraCursorGuiRoots, extraGrokBotRoots);
+          const configKey = providerCollectionConfigKey(
+            windowMs, thresholds, extraCursorGuiRoots, extraGrokBotRoots, extraGrokCliRoots,
+          );
           const selection = await this.#providerSettlement.settle(
             providers,
             async (provider) => {
               try {
                 return await this.collectors.sessionProvider!(
-                  provider, homedir(), windowMs, thresholds, { extraCursorGuiRoots, extraGrokBotRoots }, signal,
+                  provider, homedir(), windowMs, thresholds, { extraCursorGuiRoots, extraGrokBotRoots, extraGrokCliRoots }, signal,
                 );
               } catch (error) {
                 return {
@@ -994,7 +1001,7 @@ export class HubState {
             );
           }
         })())
-      : capture("session collection failed", this.collectors.sessions(homedir(), windowMs, thresholds, { extraCursorGuiRoots, extraGrokBotRoots }, signal), (value) => {
+      : capture("session collection failed", this.collectors.sessions(homedir(), windowMs, thresholds, { extraCursorGuiRoots, extraGrokBotRoots, extraGrokCliRoots }, signal), (value) => {
           sessionsResult = value;
         })).catch((error) => {
           if (!signal.aborted) {

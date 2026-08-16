@@ -13,7 +13,7 @@ import { HubState, loadProgramHints } from "./state";
 import { JsonProcessWitnessStore } from "./process-witness";
 import { JsonSessionNameStore } from "./session-names";
 import { JsonProgramAliasStore } from "./program-aliases";
-import { JsonCollectorInstanceStore } from "./collector-instances";
+import { isGrokBotProductCache, JsonCollectorInstanceStore } from "./collector-instances";
 import { archiveLimits, JsonSettingsStore } from "./settings";
 import { JsonTriageQueueStore, NativeLunaInvestigationRunner } from "./triage";
 
@@ -60,6 +60,8 @@ const state = new HubState(runner, archiveStore, programHints, {
   settingsReader: () => settingsStore.get(),
   guiRootsReader: () => collectorInstanceStore.onboardedGuiRoots(),
   botRootsReader: () => collectorInstanceStore.onboardedRoots("grok-bot"),
+  grokCliRootsReader: () => collectorInstanceStore.onboardedRoots("grok-cli")
+    .filter((root) => !isGrokBotProductCache(root)),
   triageReader: () => triageStore.list(),
   cmuxExecutable,
   bindingStore: identityBindingStore,

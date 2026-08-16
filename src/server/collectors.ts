@@ -38,6 +38,7 @@ export interface CollectSessionsOptions {
   processLineageExec?: ProcessLineageExec;
   extraCursorGuiRoots?: readonly string[];
   extraGrokBotRoots?: readonly string[];
+  extraGrokCliRoots?: readonly string[];
 }
 export type SessionProviderResult = CollectionResult<CollectedAgent[]>;
 export type SessionProviderResults = Record<Provider, SessionProviderResult>;
@@ -1351,7 +1352,12 @@ export async function collectSessionProvider(
     case "grok": {
       const override = home === homedir() ? process.env.GROK_HOME?.trim() : undefined;
       const root = override || join(home, ".grok");
-      const cli = await collectGrokSessions(root, windowMs, thresholds);
+      const cli = await collectGrokSessions(
+        root,
+        windowMs,
+        thresholds,
+        options.extraGrokCliRoots ?? [],
+      );
       const bot = await collectGrokBotSessions(
         options.extraGrokBotRoots ?? [],
         Date.now(),
