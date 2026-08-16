@@ -2093,7 +2093,7 @@ body.feed-frozen .programs { opacity: 0.62; }
   min-width: 0;
   max-width: 100%;
 }
-/* One clock under the name — the slot `.row-workspace` used to occupy.
+/* One clock under the name — the slot the workspace strip used to occupy.
    Working rows: infinitive + streak duration. Quiet rows: compact age.
    Done rows omit the band. Never both clocks. */
 .row-time-band {
@@ -2128,13 +2128,6 @@ body.feed-frozen .programs { opacity: 0.62; }
   40% { color: #c1632b; }
   60% { color: #d9a22e; }
   80% { color: #1e9e5c; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .row-time-band-verb {
-    animation: none;
-    filter: none;
-    color: var(--color-status-info);
-  }
 }
 .agent-name {
   display: block;
@@ -4102,6 +4095,11 @@ body.feed-frozen .programs { opacity: 0.62; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
+  .row-time-band-verb {
+    animation: none;
+    filter: none;
+    color: var(--color-status-info);
+  }
 }
 @media (prefers-reduced-motion: no-preference) {
   .agent-row.is-momentum-hot { transform: translateY(-1px); }

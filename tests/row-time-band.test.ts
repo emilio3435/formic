@@ -182,7 +182,7 @@ describe("row time formatters", () => {
     const first = M.rowTimeVerb("codex:alpha");
     expect(M.ROW_TIME_VERBS).toContain(first);
     expect(M.rowTimeVerb("codex:alpha")).toBe(first);
-    const seen = new Set(M.ROW_TIME_VERBS.map((_: string, i: number) => M.rowTimeVerb("id-" + i + "-xxxxxxxx")));
+    const seen = new Set(Array.from({ length: 40 }, (_, i) => M.rowTimeVerb("codex:session-" + i)));
     expect(seen.size).toBeGreaterThan(1);
   });
 });
@@ -379,9 +379,7 @@ describe("verb shimmer CSS", () => {
     expect(styles).toMatch(/drop-shadow\([^)]*#5b4fd1/);
     const shimmer = styles.match(/@keyframes row-time-verb-shimmer\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
     const hexes = [...shimmer.matchAll(/#([0-9a-fA-F]{6})/g)].map((match) => match[0].toLowerCase());
-    expect(hexes[0]).toBe("#3172c4");
-    expect(hexes.slice(1, 5)).toEqual(["#5b4fd1", "#c1632b", "#d9a22e", "#1e9e5c"]);
-    expect(hexes.at(-1)).toBe("#3172c4");
+    expect(hexes).toEqual(["#3172c4", "#5b4fd1", "#c1632b", "#d9a22e", "#1e9e5c"]);
     expect(hexes).not.toContain("#d1453d");
     expect(shimmer).not.toMatch(/hue-rotate/);
     expect(styles).toMatch(/prefers-reduced-motion:\s*reduce[\s\S]*\.row-time-band-verb\s*\{[\s\S]*?animation:\s*none/);

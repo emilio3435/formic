@@ -68,9 +68,12 @@ export const ROW_TIME_VERBS = Object.freeze([
 /* Stable per agent id so a tick cannot invent a new verb. */
 export function rowTimeVerb(id) {
   const key = String(id ?? "");
-  let hash = 0;
-  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
-  return ROW_TIME_VERBS[hash % ROW_TIME_VERBS.length];
+  let hash = 2166136261;
+  for (let i = 0; i < key.length; i++) {
+    hash ^= key.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return ROW_TIME_VERBS[(hash >>> 0) % ROW_TIME_VERBS.length];
 }
 
 const MODEL_SHORT = [
