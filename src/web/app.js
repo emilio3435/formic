@@ -9077,6 +9077,9 @@ function rowClosingText(agent) {
 function rowSummaryParts(agent) {
   const closing = rowClosingText(agent);
   if (closing) return { primary: conciseText(closing, 160), kickoff: "" };
+  /* Kickoff is a fallback for the one line, never a second line. */
+  const task = agent.task ? withoutSenderHeader(agent.task).trim() : "";
+  if (task) return { primary: conciseText(task, 120), kickoff: "" };
   const message = formatLastHumanMessage(agent);
   if (message !== NO_READABLE_MESSAGE && !ROW_MACHINE_TEXT.test(message)) {
     return { primary: message, kickoff: "" };
