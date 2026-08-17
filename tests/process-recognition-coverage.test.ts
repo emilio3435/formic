@@ -71,6 +71,10 @@ const SAMPLES: Record<Provider, { path?: string; command: string }> = {
     path: `/Users/me/.gemini/antigravity/conversations/${ID}.db`,
     command: `agy --conversation ${ID}`,
   },
+  copilot: {
+    path: `/Users/me/.copilot/session-state/${ID}/events.jsonl`,
+    command: `copilot --resume ${ID}`,
+  },
 };
 
 describe("every provider is visible to the process scanner", () => {
@@ -153,6 +157,21 @@ describe("Factory specifics", () => {
     // `isRecognizedAgentProcess` is what keeps it in the roster at all.
     expect(isRecognizedAgentProcess("/opt/homebrew/bin/droid --auto high")).toBeTrue();
     expect(isRecognizedAgentProcess("-zsh")).toBeFalse();
+  });
+});
+
+describe("Copilot CLI specifics", () => {
+  test("session-state events.jsonl names the session; --continue does not", () => {
+    expect(identityFromSessionPath(`/Users/me/.copilot/session-state/${ID}/events.jsonl`)).toEqual({
+      provider: "copilot",
+      value: ID,
+      full: true,
+    });
+    expect(identitiesFromCommand(`copilot --resume=${ID}`)).toEqual([
+      { provider: "copilot", value: ID, full: true },
+    ]);
+    expect(identitiesFromCommand("copilot --continue")).toEqual([]);
+    expect(isRecognizedAgentProcess("copilot --continue")).toBeTrue();
   });
 });
 

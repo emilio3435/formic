@@ -38,6 +38,7 @@ export const PROVIDER_DISPLAY_NAMES = {
   hermes: "Hermes",
   muse: "Muse",
   antigravity: "Antigravity",
+  copilot: "Copilot",
 };
 
 /* Strings that arrive in a name-shaped field but are not names: OMP's periodic

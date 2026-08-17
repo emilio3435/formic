@@ -322,6 +322,7 @@ describe("hub naming candidates", () => {
           hermes: { value: [], errors: [] },
           muse: { value: [], errors: [] },
           antigravity: { value: [], errors: [] },
+          copilot: { value: [], errors: [] },
         }),
         cmux: async () => ({ value: [], errors: [] }),
         notifications: async () => ({ value: [], errors: [] }),

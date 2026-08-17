@@ -429,6 +429,11 @@ through a read-only SQLite open and prefers `brain/<uuid>/…/transcript.jsonl` 
 One Google key: `antigravity`. The leftover Gemini parent home is not a session source.
 `agy --conversation <uuid>` is the resume identity. Tokens stay unknown in v1 (protobuf).
 
+For Copilot CLI, Formic reads `${COPILOT_HOME:-~/.copilot}/session-state/<id>/events.jsonl`
+and recognizes `copilot --resume <id>` and `copilot --session-id <id>`. This is
+the local CLI harness, not the VS Code extension and not cloud-only Copilot Workspace.
+There is no session store on a machine that has never run Copilot CLI — that is absence, not a fault.
+
 **That is the whole loop:** read the Needs-you strip → click the row → deal with it →
 `Escape`.
 
@@ -527,7 +532,7 @@ and only one of them has a button.
 **The same figure has a second boundary, and it is the one worth building a
 habit around.** The window narrows it in *time*; this narrows it in *which
 tools*. The board reads Claude Code, Codex, Cursor, OMP, Factory, Prime, Grok,
-Hermes, Muse, and Antigravity. Extra homes of those same tools opt in under **Settings → Collectors**; they are not new providers. Anything else you run that costs money — a scheduled job, a CLI
+Hermes, Muse, Antigravity, and Copilot. Extra homes of those same tools opt in under **Settings → Collectors**; they are not new providers. Anything else you run that costs money — a scheduled job, a CLI
 added since, a provider someone set up on a Friday — spends real money and
 has no agent row or session. Usage names that gap under **Unmodelled billed
 providers**.
@@ -548,7 +553,7 @@ has no Focus, Send, lifecycle, or Board row. Only an interactive Hermes session
 is work the Board can represent as a row.
 
 Health will not find it for you, and this is the part to understand rather than
-worry about. `10 of 10 collectors healthy` is counting the provider collectors
+worry about. `11 of 11 collectors healthy` is counting the provider collectors
 the board *has*, and they are genuinely fine. A spend source it was never taught
 to model has no health slot, so there is nothing to report as unhealthy — the
 green line is accurate and simply does not cover the question. Usage now names
@@ -561,7 +566,7 @@ shows the difference.**
 
 ### Finding out what *your* board cannot see
 
-The ten collectors are the same everywhere. What differs from machine to
+The eleven collectors are the same everywhere. What differs from machine to
 machine is what else you are billed for, so this is a check you run on your own
 board rather than a list anyone can hand you.
 
@@ -572,8 +577,8 @@ board rather than a list anyone can hand you.
    `24h`.
 2. Read the **by provider** list under the cost.
 3. Check **Unmodelled billed providers**. Formic compares the billing list
-   against the ten collectors: **Claude Code, Codex, Cursor, OMP, Factory,
-   Prime, Grok, Hermes, Muse, and Antigravity**.
+   against the eleven collectors: **Claude Code, Codex, Cursor, OMP, Factory,
+   Prime, Grok, Hermes, Muse, Antigravity, and Copilot**.
 4. Anything named there is **billed and unwatched** — real money with no agent
    row or session, now disclosed rather than silently absent.
 
@@ -644,7 +649,7 @@ about this band, so it is stated for each:
 | **Tokens** | What the fleet has consumed, over the board's scan window. | Every token counted **once**: the sum of each session's own total across the sessions the collectors harvested. A leading `≥` means the figure is a floor — some eligible sessions did not report, and the card says how many. It is **not** the number beside a single session in the row list: that one is *occupancy*, the size of the latest call including cache reads, and summing occupancies across sessions is a different quantity entirely (measured live: 75.8M consumed against 0.9M occupancy, 83× apart). It is also not *processed* flow, which counts cache re-reads again and runs several times larger; that stays in the drawer. **No window tag of its own** — the scan window is stated once above the cards. If the collectors have not finished a full scan yet, the card does not render at all rather than showing a partial number. |
 | **Context** | How full a typical session's context window is. The average leads; the toggle beside it switches the headline to the median, and that choice is remembered per browser. | The mean (or median) `ctx%` across **live sessions only** (working or waiting) that report a window; finished and unverified sessions are excluded, and the card says `29/32 reporting` when the reading does not cover every eligible session. The **peak** is a tick on the dial and is named in the dial's accessible label — it used to be the headline, which presented one session's extremum as a reading about the fleet: measured live at peak 84% while the typical session sat at 25%. It still decides the card's alarm colour, because one session about to run out of room is worth reacting to. With no fleet reading at all the card does not render, rather than printing `0%`. |
 | **Health** | One verdict for the whole system. | Not a count. See the health section below. |
-| **Mix** | Which harnesses and models the fleet is running, at a glance. | Live sessions counted per provider (Claude, Codex, Cursor, Factory, OMP, Prime, Grok, Hermes, Muse, Antigravity) as colored marks with counts, with the top models named beneath. Counts what the collectors harvested this scan — nothing external, no logos, status carried by shape+label+color like every other card. Off by default; enable it in **Customize summary**. |
+| **Mix** | Which harnesses and models the fleet is running, at a glance. | Live sessions counted per provider (Claude, Codex, Cursor, Factory, OMP, Prime, Grok, Hermes, Muse, Antigravity, Copilot) as colored marks with counts, with the top models named beneath. Counts what the collectors harvested this scan — nothing external, no logos, status carried by shape+label+color like every other card. Off by default; enable it in **Customize summary**. |
 | **Spend** | The fleet's measured cost, with its provenance stated. | The same BurnBar figures the Burn card reads: the last hour's cost with a leading `≥` when the figure is a floor, `cost unavailable` when the provenance says so — it never fabricates a `$0.00` for an hour nobody could price. Off by default; enable it in **Customize summary**. |
 
 Hide, show, and reorder these with **Customize summary**.

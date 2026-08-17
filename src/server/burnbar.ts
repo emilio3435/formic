@@ -591,6 +591,7 @@ const HEALTHY_SOURCE: UsageSourceHealth = {
 
 const BURNBAR_PROVIDER_ALIASES: Partial<Record<Provider, readonly string[]>> = {
   claude: ["Claude Code"],
+  copilot: ["Copilot CLI"],
 };
 
 function providerKey(value: string): string {

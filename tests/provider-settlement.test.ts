@@ -236,6 +236,21 @@ describe("provider settlement", () => {
     expect(withCli).toContain(".grok-2");
   });
 
+  test("extra Copilot CLI roots change the collection config key", () => {
+    const windowMs = 36 * 3600_000;
+    const without = providerCollectionConfigKey(windowMs, undefined, []);
+    const withCopilot = providerCollectionConfigKey(
+      windowMs,
+      undefined,
+      [],
+      [],
+      [],
+      ["/Users/me/.copilot-2"],
+    );
+    expect(withCopilot).not.toBe(without);
+    expect(withCopilot).toContain(".copilot-2");
+  });
+
   test("two settle calls with different extra-root lists do not share a scan", async () => {
     const coordinator = new ProviderSettlementCoordinator<"cursor", string>(() => true);
     let scans = 0;

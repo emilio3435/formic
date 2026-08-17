@@ -9,7 +9,7 @@ bash scripts/install-formic.sh
 ```
 
 Or from a checkout you already have: `bun start`. Open http://127.0.0.1:4701.
-Start Claude, Codex, or Cursor in any folder — a row appears in a few seconds.
+Start Claude, Codex, Cursor, or Copilot CLI in any folder — a row appears in a few seconds.
 
 [cmux](https://github.com/manaflow-ai/cmux) is optional. Without it the board still watches. Focus, Send, and Interrupt stay off: Formic will not type into a terminal it cannot identify.
 

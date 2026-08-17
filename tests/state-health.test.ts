@@ -27,6 +27,7 @@ const emptySessions = () => ({
   hermes: { value: [], errors: [] },
   muse: { value: [], errors: [] },
   antigravity: { value: [], errors: [] },
+  copilot: { value: [], errors: [] },
 });
 
 const ROUTING_RACE_SESSION_ID = "routing-race-session";
@@ -1606,6 +1607,7 @@ describe("what is recorded is what is published", () => {
         hermes: { value: [], errors: [] },
         muse: { value: [], errors: [] },
         antigravity: { value: [], errors: [] },
+        copilot: { value: [], errors: [] },
       }),
       cmux: async () => ({ value: [], errors: [] }),
       notifications: async () => ({ value: [], errors: [] }),

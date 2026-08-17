@@ -112,6 +112,15 @@ describe("a provider that was never installed is absent, not degraded", () => {
       .toEqual({ value: [], errors: [] });
   });
 
+  test("Copilot is absent only when its home is missing", async () => {
+    const home = emptyHome();
+    expect(await collectSessionProvider("copilot", home))
+      .toEqual({ value: [], errors: [], absent: true });
+    mkdirSync(join(home, ".copilot"));
+    expect(await collectSessionProvider("copilot", home))
+      .toEqual({ value: [], errors: [] });
+  });
+
   test("GROK_HOME overrides the default Grok home", async () => {
     const root = join(emptyHome(), "custom-grok");
     const previous = process.env.GROK_HOME;
@@ -155,13 +164,13 @@ describe("a provider that was never installed is absent, not degraded", () => {
          HOME reports every provider absent", which iterates the shared union. The old
          fixture left omp unstated and the accounting silently read it as
          installed-and-healthy, which is the bug this file now covers. */
-      sourceAbsent: { cursor: true, omp: true, factory: true, prime: true, grok: true, hermes: true, muse: true, antigravity: true },
+      sourceAbsent: { cursor: true, omp: true, factory: true, prime: true, grok: true, hermes: true, muse: true, antigravity: true, copilot: true },
       cmuxAbsent: true,
       cmuxReachable: false,
     });
 
     // "2 of 2 collectors healthy" — calm, and true.
-    expect(summary).toMatchObject({ healthy: 2, degraded: 0, absent: 8, total: 2 });
+    expect(summary).toMatchObject({ healthy: 2, degraded: 0, absent: 9, total: 2 });
   });
 });
 

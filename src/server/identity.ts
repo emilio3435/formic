@@ -33,6 +33,7 @@ const PROVIDER_BINARIES: Record<Provider, string> = {
   hermes: "hermes",
   muse: "muse",
   antigravity: "agy",
+  copilot: "copilot",
 };
 const AGENT_BINARIES = Object.values(PROVIDER_BINARIES).join("|");
 const RESUME_PROVIDERS = PROVIDERS.join("|");
@@ -147,6 +148,7 @@ export function identityFromSessionPath(path: string): IdentityHint | null {
     ["grok", new RegExp(`\\/.grok\\/sessions\\/.+\\/(${UUID})\\/(?:events\\.jsonl|updates\\.jsonl|summary\\.json)$`, "i")],
     ["hermes", new RegExp(`\\/.hermes\\/sessions\\/([^/]+)\\.jsonl$`, "i")],
     ["muse", new RegExp(`\\/muse\\/sessions\\/\\d{4}\\/\\d{2}\\/\\d{2}\\/(${UUID})\\/session\\.jsonl$`, "i")],
+    ["copilot", new RegExp(`\\/session-state\\/(${UUID})\\/events\\.jsonl$`, "i")],
     ["antigravity", new RegExp(`\\/antigravity(?:-cli|-ide)?\\/conversations\\/(${UUID})\\.db(?:-wal|-shm)?$`, "i")],
   ];
   for (const [provider, pattern] of patterns) {
@@ -172,6 +174,7 @@ export function identitiesFromCommand(command: string): IdentityHint[] {
        (that lifts `hermes pause`). Ids are filename stems, not always UUIDs. */
     ["hermes", new RegExp(`(?:^|[\\s/])hermes\\b[^\\n]{0,160}?\\s(?:-r|--resume)\\s+(\\S+)(?:\\s|$)`, "i")],
     ["muse", new RegExp(`(?:^|[\\s/])muse(?:-bin-[^\\s/]+)?\\b[^\\n]{0,160}?\\sresume\\s+(${UUID})(?:\\s|$)`, "i")],
+    ["copilot", new RegExp(`(?:^|[\\s/])copilot\\b[^\\n]{0,160}?\\s(?:-r|--resume|--session-id)(?:\\s+|=)(${UUID})(?:\\s|$)`, "i")],
     ["antigravity", new RegExp(`(?:^|[\\s/])agy\\b[^\\n]{0,160}?\\s(?:--conversation|-c)(?:\\s+|=)(${UUID})(?:\\s|$)`, "i")],
   ];
   for (const [provider, pattern] of exactPatterns) {

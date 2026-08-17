@@ -64,6 +64,7 @@ const state = new HubState(runner, archiveStore, programHints, {
   botRootsReader: () => collectorInstanceStore.onboardedRoots("grok-bot"),
   grokCliRootsReader: () => collectorInstanceStore.onboardedRoots("grok-cli")
     .filter((root) => !isGrokBotProductCache(root)),
+  copilotRootsReader: () => collectorInstanceStore.onboardedRoots("copilot"),
   triageReader: () => triageStore.list(),
   cmuxExecutable,
   bindingStore: identityBindingStore,

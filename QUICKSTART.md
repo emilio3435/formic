@@ -96,9 +96,9 @@ it is a disclosure of what cannot be accounted for, not a list of recent things.
 
   | You have | The line reads |
   |---|---|
-  | none of the ten yet | `No collectors installed yet — Claude Code, Codex, Cursor or Grok Build will appear here` |
-  | one of them | `1 of 1 collectors healthy · 9 not installed` |
-  | all ten | `10 of 10 collectors healthy` |
+  | none of the eleven yet | `No collectors installed yet — Claude Code, Codex, Cursor, Grok Build or Copilot CLI will appear here` |
+  | one of them | `1 of 1 collectors healthy · 10 not installed` |
+  | all eleven | `11 of 11 collectors healthy` |
 
   That line is the proof the board is working: a stalled client cannot
   manufacture a ticking snapshot age. **It counts collectors that can SEE, not
@@ -126,10 +126,10 @@ it is a disclosure of what cannot be accounted for, not a list of recent things.
 - **Blank cost figures.** Dollar amounts come from OpenBurnBar; without it, cost
   reads unavailable rather than `$0`.
 
-### What the ten collectors are
+### What the eleven collectors are
 
 The count is of collectors that can **see**, not of tools you have installed.
-There are ten, and they read what each tool already writes to disk:
+There are eleven, and they read what each tool already writes to disk:
 
 | Collector | Reads | You have it if |
 |---|---|---|
@@ -143,6 +143,7 @@ There are ten, and they read what each tool already writes to disk:
 | **Hermes** | `~/.hermes/` | you use Hermes |
 | **Muse** | `~/.local/share/muse/` | you use Muse |
 | **Antigravity** | `~/.gemini/antigravity/` (or `antigravity-cli` / `antigravity-ide`) | you use Antigravity |
+| **Copilot** | `~/.copilot/session-state/` or `$COPILOT_HOME/session-state/` | you use Copilot CLI |
 
 Extra copies of these homes opt in under **Settings → Collectors**; they are not new providers.
 
@@ -150,12 +151,12 @@ Extra copies of these homes opt in under **Settings → Collectors**; they are n
 that does not exist is a complete answer — *this tool never ran here* — and no
 session can be hiding behind it, so an absent collector is named separately and
 never counted as a fault. Most people run one or two of these and see a line
-like `1 of 1 collectors healthy · 9 not installed`. Watch for `degraded`
+like `1 of 1 collectors healthy · 10 not installed`. Watch for `degraded`
 instead, which means something *stopped* a collector reading — a permissions or
 I/O failure — and is the only case where sessions could exist that the board
 cannot show you.
 
-**cmux is not one of the ten.** It does not collect sessions; it resolves which
+**cmux is not one of the eleven.** It does not collect sessions; it resolves which
 terminal a session is sitting in, which is what Focus and Send need. Not having
 it costs you those buttons and nothing else — it cannot hide a row, so it must
 never move the collector count. If you ever see a degraded collector *caused by*
