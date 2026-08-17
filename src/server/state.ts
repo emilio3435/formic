@@ -1314,12 +1314,18 @@ export class HubState {
         ? [...source.errors, ...spendSourceErrors]
         : source.errors;
       this.#sourceHealth[provider] = providerErrors.length === 0
-        ? {
-            healthy: true,
-            lastHealthyAt: providerSettledAtMs[provider] === undefined
-              ? collectedAt
-              : new Date(providerSettledAtMs[provider]!).toISOString(),
-          }
+        ? source.absent === true
+          ? {
+              healthy: false,
+              absent: true,
+              lastHealthyAt: this.#sourceHealth[provider].lastHealthyAt,
+            }
+          : {
+              healthy: true,
+              lastHealthyAt: providerSettledAtMs[provider] === undefined
+                ? collectedAt
+                : new Date(providerSettledAtMs[provider]!).toISOString(),
+            }
         : { healthy: false, lastHealthyAt: this.#sourceHealth[provider].lastHealthyAt };
     }
     const collectedAgents = providers.flatMap((provider) => sessions[provider].value);

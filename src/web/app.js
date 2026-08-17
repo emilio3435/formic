@@ -812,7 +812,10 @@ function systemStatus(snap, conn = "live", fetchFailed = state.fetchFailed) {
   if (!snap || conn === "offline") return { key: "offline", label: "Offline", tone: "offline" };
   const control = snap.controlHealth;
   const source = snap.totals && snap.totals.sourceHealth;
-  const sourceDegraded = source && source.total > 0 && (source.degraded > 0 || source.healthy < source.total);
+  /* Absence is not a fault. `healthy < total` became true the moment any
+     collector was missing and flipped Operational → Degraded while the table
+     still painted that collector green. Degraded is the only red category. */
+  const sourceDegraded = Boolean(source && source.degraded > 0);
   const controlDegraded = !control || control.cmuxReachable !== true || instrumentErrors(control).length > 0 || control.staleSources?.length > 0;
   const feedDegraded = conn !== "live";
   // A snapshot poll that failed while a snapshot is already on screen used to be
@@ -1002,7 +1005,7 @@ function degradedSinceText(snap) {
   if (!byProvider) return "";
   let latest = null;
   for (const health of Object.values(byProvider)) {
-    if (!health || health.healthy !== false || !health.lastHealthyAt) continue;
+    if (!health || health.healthy !== false || health.absent === true || !health.lastHealthyAt) continue;
     const t = Date.parse(health.lastHealthyAt);
     if (Number.isNaN(t)) continue;
     if (latest === null || t > latest) latest = t;
@@ -1054,7 +1057,7 @@ function degradedSourceNames(source) {
   const n = source.degraded;
   const count = `${n} degraded source${n === 1 ? "" : "s"}`;
   const by = source && source.byProvider;
-  const down = by ? Object.keys(by).filter((p) => by[p] && by[p].healthy === false) : [];
+  const down = by ? Object.keys(by).filter((p) => by[p] && by[p].healthy === false && by[p].absent !== true) : [];
   if (!down.length) return count;
   const names = down.map(providerLabel);
   const listed = names.length === 1
@@ -14614,13 +14617,18 @@ function emptyBoardVerdict(snap) {
      stands, so a real degradation is never silently downgraded to calm. */
   const byProvider = (sources && sources.byProvider) || null;
   const broken = byProvider
-    ? Object.values(byProvider).filter((p) => p && p.healthy === false && p.lastHealthyAt).length
+    ? Object.values(byProvider).filter((p) => p && p.healthy === false && p.absent !== true && p.lastHealthyAt).length
     : (sources && Number.isFinite(sources.degraded) ? sources.degraded : 0);
   const degraded = broken > 0;
   const healthy = sources && Number.isFinite(sources.healthy) ? sources.healthy : 0;
   // Collectors with nothing installed to read. Absent-first: a wire without the
   // field reports 0 rather than inventing absences.
   const absent = sources && Number.isFinite(sources.absent) ? sources.absent : 0;
+  /* Copy still counts collectors that can see. The wire total is the known
+     set (healthy + degraded + absent). Using that as the "X of Y healthy"
+     denominator would turn a missing Muse into "10 of 11", which reads as a
+     shortfall rather than an uninstalled tool. */
+  const installed = healthy + (sources && Number.isFinite(sources.degraded) ? sources.degraded : 0);
   return {
     degraded,
     message: degraded
@@ -14649,11 +14657,11 @@ function emptyBoardVerdict(snap) {
        which is the distinction 42d842e drew at the source. Degradation still
        outranks both: a blind collector is a fault and says so first. */
     sources: degraded
-      ? `${broken} of ${total} collectors degraded`
-      : total > 0
+      ? `${broken} of ${installed || total} collectors degraded`
+      : installed > 0
         ? (absent > 0
-          ? `${healthy} of ${total} collectors healthy · ${absent} not installed`
-          : `${healthy} of ${total} collectors healthy`)
+          ? `${healthy} of ${installed} collectors healthy · ${absent} not installed`
+          : `${healthy} of ${installed} collectors healthy`)
         : absent > 0
           ? "No collectors installed yet — Claude Code, Codex, Cursor, Grok Build or Copilot CLI will appear here"
           : null,

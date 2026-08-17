@@ -738,6 +738,10 @@ export interface HubPulse {
 export interface SourceHealth {
   healthy: boolean;
   lastHealthyAt: string | null;
+  /* True only for a collector that did not run — missing home, never installed.
+     Mutually exclusive with healthy: true. A present collector with zero
+     sessions is healthy-empty, not absent. */
+  absent?: boolean;
 }
 
 export interface SourceHealthSummary {
@@ -745,7 +749,9 @@ export interface SourceHealthSummary {
   degraded: number;
   /* Collectors with nothing installed to read. Not degraded: a machine without
      Cursor is not a broken machine, and counting it as a fault told every
-     first-time user their install was incomplete. */
+     first-time user their install was incomplete. A category on `total`, not
+     a subtraction from it: healthy + degraded + absent === total ===
+     byProvider.length. */
   absent: number;
   total: number;
   byProvider?: Record<Provider, SourceHealth>;

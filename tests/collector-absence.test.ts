@@ -151,10 +151,12 @@ describe("a provider that was never installed is absent, not degraded", () => {
     // Nothing is wrong, so nothing reads as wrong.
     expect(absent.degraded).toBe(0);
     expect(absent.absent).toBe(PROVIDERS.length);
-    /* And the ratio does not claim to watch what is not there: "0 of 0" rather
-       than "4 of 4 healthy", which would be the same overclaim inverted. */
-    expect(absent.total).toBe(0);
+    /* The known set stays the denominator. Absence is a category on that set,
+       not a reason to shrink it — shrinking it made total disagree with
+       byProvider.length the moment any collector was missing. */
+    expect(absent.total).toBe(PROVIDERS.length);
     expect(absent.healthy).toBe(0);
+    expect(absent.healthy + absent.degraded + absent.absent).toBe(absent.total);
   });
 
   test("the fresh-clone board: two providers installed, the rest absent", () => {
@@ -169,8 +171,14 @@ describe("a provider that was never installed is absent, not degraded", () => {
       cmuxReachable: false,
     });
 
-    // "2 of 2 collectors healthy" — calm, and true.
-    expect(summary).toMatchObject({ healthy: 2, degraded: 0, absent: 9, total: 2 });
+    // Two present, the rest named absent. The known set is still the total.
+    expect(summary).toMatchObject({
+      healthy: 2,
+      degraded: 0,
+      absent: PROVIDERS.length - 2,
+      total: PROVIDERS.length,
+    });
+    expect(summary.healthy + summary.degraded + summary.absent).toBe(summary.total);
   });
 });
 
@@ -217,22 +225,25 @@ describe("the health count covers every collector that exists", () => {
     });
 
     expect(summary.absent).toBe(1);
-    // Not "watching" a provider that is not installed.
-    expect(summary.total).toBe(summary.healthy + summary.degraded);
+    expect(summary.total).toBe(PROVIDERS.length);
+    expect(summary.healthy + summary.degraded + summary.absent).toBe(summary.total);
   });
 
   test("healthy + degraded + absent accounts for every known collector", () => {
-    /* The identity the card's copy already claims: total + absent === the known
-       kinds, which is the four `collectSessions` returns. It used to hold only
-       because the two miscounts were the same size. */
+    /* The identity the card's copy already claims: the three categories are
+       mutually exclusive and exhaust the known set. Subtracting absent from
+       total made that identity fail the moment a stubbed collector had no home. */
     const summary = health({
       agents: [], surfaces: [], archiveStore,
       sourceErrors: { claude: ["unreadable"] },
       sourceAbsent: { cursor: true, factory: true },
     });
 
-    expect(summary.healthy + summary.degraded).toBe(summary.total);
-    expect(summary.total + summary.absent).toBe(PROVIDERS.length);
+    expect(summary.healthy + summary.degraded + summary.absent).toBe(summary.total);
+    expect(summary.total).toBe(PROVIDERS.length);
+    expect(summary.degraded).toBe(1);
+    expect(summary.absent).toBe(2);
+    expect(summary.healthy).toBe(PROVIDERS.length - 3);
   });
 
   test("an unreachable cmux is not a broken collector", () => {
