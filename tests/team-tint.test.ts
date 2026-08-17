@@ -57,3 +57,15 @@ test("parseCmuxGroups keeps members and custom_color", () => {
   expect(groups[0]?.memberWorkspaceIds).toEqual(["ws-a", "ws-b"]);
   expect(groups[0]?.customColor).toBe("#5F7F2A");
 });
+
+test("parseCmuxGroups keeps customColor camelCase", () => {
+  const groups = parseCmuxGroups(JSON.stringify({
+    groups: [{
+      id: "g1",
+      name: "ANT · probe",
+      customColor: "#0e9494",
+      member_workspace_ids: ["ws-a"],
+    }],
+  }));
+  expect(groups[0]?.customColor).toBe("#0e9494");
+});

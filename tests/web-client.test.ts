@@ -8579,12 +8579,12 @@ describe("FE-B: harness-backed client behavior", () => {
   test("(3) every control the filter bar rebuilds every paint is focus-restorable", () => {
     const bar = () => domById.get("filter-bar");
 
-    /* An EMPTY board carries the Time control and nothing else, and that is the
-       lens rule doing its job rather than a gap: an axis renders only when two
-       or more of its options are actually populated, so over no sessions there
-       is nothing any lens could usefully narrow. Time is the exception because
-       it is not a lens — it is how you go and FETCH sessions, which is the one
-       thing worth offering on a board that has none.
+    /* An EMPTY board carries Select (team-parity) and Time, and no lenses.
+       An axis renders only when two or more of its options are actually
+       populated, so over no sessions there is nothing any lens could usefully
+       narrow. Time is the exception because it is not a lens — it is how you
+       go and FETCH sessions. Select is a mutation, not a lens, and stays up
+       so an operator can still group the next arrivals.
 
        The six lookback chips are gone too: a CLOSED menu contributes exactly one
        focus stop, which is the compression the redesign was for. The preset
@@ -8594,7 +8594,7 @@ describe("FE-B: harness-backed client behavior", () => {
       const keys = focusKeysOf(bar());
       expect(keys.every(Boolean)).toBe(true);
       expect(new Set(keys).size).toBe(keys.length); // querySelector must find ONE node
-      expect(keys).toEqual(["lookback:menu"]);
+      expect(keys).toEqual(["select-mode", "lookback:menu"]);
     });
 
     /* The same bar over a real fleet, which is where the facet menus appear. The
@@ -8634,6 +8634,7 @@ describe("FE-B: harness-backed client behavior", () => {
          TIME last — the working-set control, held apart from everything that
          merely narrows within it. */
       expect(keys).toEqual([
+        "select-mode",
         "class:menu",
         "provider:menu",
         "status:menu",
@@ -8671,6 +8672,7 @@ describe("FE-B: harness-backed client behavior", () => {
       const snap = snapshot({ programs: [{ id: "p", name: "P", agents: rich }] });
       M.renderFilterBar(listUi({ view: "board", lookbackHours: null, snap, showReviewWorkers: true }));
       expect(focusKeysOf(bar())).toEqual([
+        "select-mode",
         "class:menu", "provider:menu", "status:menu", "model:menu", "span:menu", "context:menu",
         "lookback:menu",
       ]);

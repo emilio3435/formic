@@ -26,7 +26,7 @@ function agent(id: string, workspaceId: string, repoName = "the-ant-hill"): {
   id: string;
   repo: { repoName: string };
   target: { workspaceId: string; resolution: "exact" };
-  team?: { id: string; name: string; hex: string };
+  team?: { id: string; name: string; hex: string; windowId: string };
 } {
   return {
     id,
@@ -197,21 +197,57 @@ test("four Formic swarms must not share one hex", () => {
   expect(new Set(hexes).size).toBe(4);
 });
 
-test("user assignment wins over live cmux custom_color", () => {
+test("teal in cmux must be teal on the board next collect", () => {
+  const teams = buildOperatorTeams(
+    [{ windowId: "w", groups: [{
+      id: "g1", name: "ANT · probe", customColor: "#0e9494",
+      memberWorkspaceIds: ["ws-a"],
+    }] }],
+    new Set(),
+    { assignments: { g1: { groupId: "g1", hex: "#5f7f2a", source: "user" } } },
+  );
+  expect(teams[0]?.hex).toBe("#0e9494");
+});
+
+test("Formic PUT echo lag keeps disk until cmux matches", () => {
+  const teams = buildOperatorTeams(
+    [{ windowId: "w", groups: [{
+      id: "g1", name: "ANT · probe", customColor: "#5f7f2a",
+      memberWorkspaceIds: ["ws-a"],
+    }] }],
+    new Set(),
+    { assignments: { g1: { groupId: "g1", hex: "#b05f3a", source: "user" } } },
+    new Map([["g1", "#b05f3a"]]),
+  );
+  expect(teams[0]?.hex).toBe("#b05f3a");
+});
+
+test("without expectEcho, live teal beats stale user disk", () => {
+  const teams = buildOperatorTeams(
+    [{ windowId: "w", groups: [{
+      id: "g1", name: "ANT · probe", customColor: "#0e9494",
+      memberWorkspaceIds: ["ws-a"],
+    }] }],
+    new Set(),
+    { assignments: { g1: { groupId: "g1", hex: "#b05f3a", source: "user" } } },
+  );
+  expect(teams[0]?.hex).toBe("#0e9494");
+});
+
+test("missing live hex keeps disk and does not snap back to auto", () => {
   const teams = buildOperatorTeams(
     [{
       windowId: "w",
       groups: [{
         id: "g1",
         name: "ANT · probe",
-        customColor: "#2e66a8",
         memberWorkspaceIds: ["ws-a"],
       }],
     }],
     new Set(),
-    { assignments: { g1: { groupId: "g1", hex: "#9e3355", source: "user" } } },
+    { assignments: { g1: { groupId: "g1", hex: "#0e9494", source: "cmux" } } },
   );
-  expect(teams[0]?.hex).toBe("#9e3355");
+  expect(teams[0]?.hex).toBe("#0e9494");
 });
 
 test("live custom_color wins over an auto slot", () => {
@@ -231,7 +267,7 @@ test("live custom_color wins over an auto slot", () => {
   expect(teams[0]?.hex).toBe("#2e66a8");
 });
 
-test("user PUT wins over live cmux; live cmux wins over a cmux-source disk row", () => {
+test("live cmux wins over a cmux-source disk row", () => {
   const teams = buildOperatorTeams(
     [{
       windowId: "w",
@@ -309,11 +345,12 @@ async function hubWithTeams(options: {
   groups: CollectionResult<CmuxWindowGroups[]> | (() => CollectionResult<CmuxWindowGroups[]>);
   settings?: TeamTintSettings;
   provenanceIds?: readonly string[];
+  store?: JsonTeamColorsStore;
 }): Promise<HubState> {
-  const store = await JsonTeamColorsStore.open("team-colors.json", memorySettingsFiles());
+  const store = options.store ?? await JsonTeamColorsStore.open("team-colors.json", memorySettingsFiles());
   if (options.settings) {
     for (const assignment of Object.values(options.settings.assignments)) {
-      if (assignment.source === "user") await store.setUserColor(assignment.groupId, assignment.hex);
+      await store.writeAssignment(assignment.groupId, assignment.hex, assignment.source);
     }
   }
   const provenance = new MemoryRepoGroupProvenanceStore();
@@ -396,8 +433,8 @@ test("snapshot publishes different team hexes for two agents in the same repo", 
   });
   const left = publishedAgent(snapshot, "codex:a");
   const right = publishedAgent(snapshot, "codex:b");
-  expect(left?.team).toEqual({ id: "g1", name: "ANT · probe", hex: "#5f7f2a" });
-  expect(right?.team).toEqual({ id: "g2", name: "ROWS-0816", hex: "#2e66a8" });
+  expect(left?.team).toEqual({ id: "g1", name: "ANT · probe", hex: "#5f7f2a", windowId: "w" });
+  expect(right?.team).toEqual({ id: "g2", name: "ROWS-0816", hex: "#2e66a8", windowId: "w" });
   expect(left?.team?.hex).not.toBe(right?.team?.hex);
 });
 
@@ -420,7 +457,7 @@ test("snapshot: live custom_color #2e66a8 with empty settings is the team hex", 
   expect(publishedAgent(snapshot, "codex:a")?.team?.hex).toBe("#2e66a8");
 });
 
-test("snapshot: user PUT #9e3355 wins over live cmux #2e66a8", async () => {
+test("snapshot: live cmux #2e66a8 beats stale user PUT #9e3355", async () => {
   const snapshot = await snapshotWithTeams({
     rows: [{ id: "codex:a", sessionId: "a", workspaceId: "ws-a" }],
     settings: { assignments: { g1: { groupId: "g1", hex: "#9e3355", source: "user" } } },
@@ -437,7 +474,109 @@ test("snapshot: user PUT #9e3355 wins over live cmux #2e66a8", async () => {
       errors: [],
     },
   });
-  expect(publishedAgent(snapshot, "codex:a")?.team?.hex).toBe("#9e3355");
+  expect(publishedAgent(snapshot, "codex:a")?.team?.hex).toBe("#2e66a8");
+});
+
+test("after persist cmux hex, a later different live hex still wins", async () => {
+  const store = await JsonTeamColorsStore.open("team-colors.json", memorySettingsFiles());
+  const live = {
+    value: [{
+      windowId: "w",
+      groups: [{
+        id: "g1",
+        name: "ANT · probe",
+        customColor: "#0e9494",
+        memberWorkspaceIds: ["ws-a"],
+      }],
+    }],
+    errors: [],
+  };
+  const state = await hubWithTeams({
+    store,
+    rows: [{ id: "codex:a", sessionId: "a", workspaceId: "ws-a" }],
+    groups: () => live,
+  });
+  const first = await state.refresh({ cmux: true });
+  expect(publishedAgent(first, "codex:a")?.team?.hex).toBe("#0e9494");
+  expect(store.get().assignments.g1).toEqual({
+    groupId: "g1",
+    hex: "#0e9494",
+    source: "cmux",
+  });
+  expect(store.expectedEchoes().has("g1")).toBe(false);
+
+  live.value[0]!.groups[0]!.customColor = "#b05f3a";
+  const second = await state.refresh({ cmux: true });
+  expect(publishedAgent(second, "codex:a")?.team?.hex).toBe("#b05f3a");
+  expect(store.get().assignments.g1).toEqual({
+    groupId: "g1",
+    hex: "#b05f3a",
+    source: "cmux",
+  });
+});
+
+test("live teal ingest persists source cmux over stale user disk", async () => {
+  const store = await JsonTeamColorsStore.open("team-colors.json", memorySettingsFiles());
+  await store.writeAssignment("g1", "#5f7f2a", "user");
+  const state = await hubWithTeams({
+    store,
+    rows: [{ id: "codex:a", sessionId: "a", workspaceId: "ws-a" }],
+    groups: {
+      value: [{
+        windowId: "w",
+        groups: [{
+          id: "g1",
+          name: "ANT · probe",
+          customColor: "#0e9494",
+          memberWorkspaceIds: ["ws-a"],
+        }],
+      }],
+      errors: [],
+    },
+  });
+  await state.refresh({ cmux: true });
+  expect(store.get().assignments.g1).toEqual({
+    groupId: "g1",
+    hex: "#0e9494",
+    source: "cmux",
+  });
+});
+
+test("a Formic PUT keeps disk while group.list still shows the old hex", async () => {
+  const store = await JsonTeamColorsStore.open("team-colors.json", memorySettingsFiles());
+  await store.setUserColor("g1", "#b05f3a");
+  const live = {
+    value: [{
+      windowId: "w",
+      groups: [{
+        id: "g1",
+        name: "ANT · probe",
+        customColor: "#5f7f2a",
+        memberWorkspaceIds: ["ws-a"],
+      }],
+    }],
+    errors: [],
+  };
+  const state = await hubWithTeams({
+    store,
+    rows: [{ id: "codex:a", sessionId: "a", workspaceId: "ws-a" }],
+    groups: () => live,
+  });
+  const first = await state.refresh({ cmux: true });
+  expect(publishedAgent(first, "codex:a")?.team?.hex).toBe("#b05f3a");
+  expect(store.get().assignments.g1).toEqual({
+    groupId: "g1",
+    hex: "#b05f3a",
+    source: "user",
+  });
+
+  live.value[0]!.groups[0]!.customColor = "#b05f3a";
+  await state.refresh({ cmux: true });
+  expect(store.expectedEchoes().has("g1")).toBe(false);
+
+  live.value[0]!.groups[0]!.customColor = "#0e9494";
+  const third = await state.refresh({ cmux: true });
+  expect(publishedAgent(third, "codex:a")?.team?.hex).toBe("#0e9494");
 });
 
 test("snapshot leaves an ungrouped agent without a team", async () => {
@@ -482,6 +621,7 @@ test("total group collect miss keeps last-good teams and does not hand TINT-S th
     id: "g1",
     name: "ANT · probe",
     hex: "#5f7f2a",
+    windowId: "w",
   });
 
   groups = { value: [], errors: ["timeout"] };
@@ -490,6 +630,7 @@ test("total group collect miss keeps last-good teams and does not hand TINT-S th
     id: "g1",
     name: "ANT · probe",
     hex: "#5f7f2a",
+    windowId: "w",
   });
 
   const writes: { workspaceId: string; hex: string }[] = [];

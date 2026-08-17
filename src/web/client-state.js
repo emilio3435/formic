@@ -88,6 +88,9 @@ export const state = {
   collectorImportNote: "",
   repoColorSettings: null,
   liveRepoKeys: [],
+  /* Live operator teams for Settings → Teams. Filled by GET /api/team-colors
+     when the panel opens; the board itself still paints from snapshot hex. */
+  teamColors: [],
   /* The attention panel's disclosure state. A panel the operator opened stays
      open across the four-second repaint — closing it under them would make the
      board unreadable while anything is actually waiting. */
@@ -167,6 +170,18 @@ export const state = {
      is ever stored — keyed by programId, its own key (mtn3-shelves). */
   shelfOverrides: new Map(), // programId -> "open"
   selectedId: null,
+  /* Pick-set for operator team create. Never selectedId: that class evicts
+     Whisper wash and opens the drawer. */
+  selectMode: false,
+  groupingIds: new Set(),
+  groupingName: "",
+  groupingHex: "",
+  groupingPending: false,
+  lastGroupingId: null,
+  teamRenaming: null,
+  teamRenameDraft: "",
+  teamRenamePending: false,
+  teamRenameError: "",
   selected: null,           // { kind: "agent"|"intervention"|"advisory"|…, id } — drives the drawer router
   drawerChatExpanded: true, // Chat tab: transcript expandable below Task
   /* data-fkey of whatever the operator was standing on when they opened the

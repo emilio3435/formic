@@ -17,7 +17,9 @@ let paintUnchanged;
 let postSettings;
 let setNeedsYouDisplay;
 let fetchRepoColors;
+let fetchTeamColors;
 let paintRepoColorSettings;
+let paintTeamColorSettings;
 let render;
 
 export function bindSettingsPanel(deps) {
@@ -25,7 +27,9 @@ export function bindSettingsPanel(deps) {
   postSettings = deps.postSettings;
   setNeedsYouDisplay = deps.setNeedsYouDisplay;
   fetchRepoColors = deps.fetchRepoColors;
+  fetchTeamColors = deps.fetchTeamColors;
   paintRepoColorSettings = deps.paintRepoColorSettings;
+  paintTeamColorSettings = deps.paintTeamColorSettings;
   render = deps.render;
 }
 
@@ -315,6 +319,7 @@ function openSettingsPanel() {
   state.settingsPanelOpen = true;
   renderSettingsPanel();
   void fetchRepoColors();
+  void fetchTeamColors();
   void fetchCollectorInstances();
 }
 
@@ -405,6 +410,7 @@ function renderSettingsPanel() {
     renderSettingsVerdict();
     paintNeedsYouPlates();
     paintRepoColorSettings();
+    paintTeamColorSettings();
     return;
   }
   // textContent = "" is this client's clear idiom; replaceChildren is not part
@@ -460,7 +466,10 @@ function renderSettingsPanel() {
         el("div", { id: "settings-needs-you", class: "plate" }),
         el("section", { class: "plate", "aria-label": "Repository colours" },
           el("h3", { text: "Repo colours" }),
-          el("div", { id: "repo-colors-host", class: "repo-colors-host" }))),
+          el("div", { id: "repo-colors-host", class: "repo-colors-host" })),
+        el("section", { class: "plate", "aria-label": "Teams" },
+          el("h3", { text: "Teams" }),
+          el("div", { id: "team-colors-host", class: "team-colors-host" }))),
       el("section", { class: "horizon", "aria-label": "Horizon" },
         el("h3", { text: "Horizon" }),
         el("div", { class: "meters" },
@@ -508,6 +517,7 @@ function renderSettingsPanel() {
   renderSettingsVerdict();
   paintNeedsYouPlates();
   paintRepoColorSettings();
+  paintTeamColorSettings();
 }
 
 export {

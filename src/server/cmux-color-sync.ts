@@ -332,7 +332,7 @@ export interface ReconcileInput {
   anchorWorkspaceIds?: ReadonlySet<string>;
   /** Operator-team members. A workspace in this index is never re-asserted to
    *  its repo hex — four Formic swarms must not be forced back to magenta. */
-  teamByWorkspaceId?: ReadonlyMap<string, { id: string; hex: string }>;
+  teamByWorkspaceId?: ReadonlyMap<string, { id: string; hex: string; hexSource?: "auto" | "user" | "cmux" }>;
 }
 
 export async function reconcileWorkspaceColors(input: ReconcileInput): Promise<ReconcileResult> {
@@ -417,6 +417,11 @@ export async function reconcileWorkspaceColors(input: ReconcileInput): Promise<R
       const teamHex = normalizeHex(team.hex);
       if (teamHex && observed === teamHex) {
         record("ignore", teamHex, "operator team color already matches");
+        continue;
+      }
+      const assigned = team.hexSource === "user" || team.hexSource === "cmux";
+      if (teamHex && observed && observed !== teamHex && !assigned) {
+        record("ingest", observed, "operator member color kept; team hex is auto");
         continue;
       }
       if (teamHex && observed !== teamHex) {
@@ -593,7 +598,7 @@ export interface SyncCmuxColorsInput {
   /** Where to resolve the implementations from, when `runtime` is not given.
    *  Lets a test assert what the pass does when one of them is MISSING. */
   modules?: Partial<ColorRuntimeModules>;
-  teamByWorkspaceId?: ReadonlyMap<string, { id: string; hex: string }>;
+  teamByWorkspaceId?: ReadonlyMap<string, { id: string; hex: string; hexSource?: "auto" | "user" | "cmux" }>;
 }
 
 /** One reconcile pass, piggybacked on the cmux collector poll (locked decision

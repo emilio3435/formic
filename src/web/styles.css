@@ -1777,6 +1777,38 @@ body.feed-frozen .programs { opacity: 0.62; }
    The largest type on the board, by design: the three tiers were 15.2 / 16 /
    15 px, all 700, all one ink — a ladder that ran BACKWARDS at the top. */
 .repo-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 1.25rem; letter-spacing: -0.015em; }
+button.repo-name { text-align: left; color: inherit; }
+.team-ungroup {
+  flex: none;
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 0 0.4rem;
+}
+.team-ungroup:hover { color: var(--ember); border-color: var(--line-strong); }
+.grouping-check {
+  flex: none;
+  width: 1.1rem;
+  height: 1.1rem;
+  margin: 0;
+  accent-color: var(--ink);
+}
+.grouping-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: default;
+}
+.grouping-chip input[type="text"] {
+  width: 8rem;
+  min-height: 1.5rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 0 0.35rem;
+  background: var(--surface);
+  color: var(--ink);
+}
 .repo-worktree-count { flex: none; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
 .repo-pr { flex: none; font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 0 0.32rem; }
 .repo-pr:hover { color: var(--ember); border-color: var(--line-strong); }
@@ -2058,6 +2090,18 @@ body.feed-frozen .programs { opacity: 0.62; }
    Grok / Cursor marks stay legible instead of collapsing into a blob at row size. */
 /* Dual harness+agent marks — two 1.35rem badges overlapping by 0.35rem, reading left→right as harness then model. */
 .row-identity.has-dual-marks { grid-template-columns: 2.2rem minmax(0, 1fr); }
+/* Select-mode checkbox is a third track. Auto-placement would drop the name
+   into the 2.2rem marks column, and a 44px box cannot live there. */
+.row-identity:has(.grouping-check) { grid-template-columns: auto 1.75rem minmax(0, 1fr); }
+.row-identity.has-dual-marks:has(.grouping-check) { grid-template-columns: auto 2.2rem minmax(0, 1fr); }
+.row-identity.has-dual-marks:has(.instance-home):has(.grouping-check) { grid-template-columns: auto auto minmax(0, 1fr); }
+.row-identity:has(.grouping-check) .grouping-check { grid-column: 1; }
+.row-identity:has(.grouping-check) .dual-marks,
+.row-identity:has(.grouping-check) .provider-mark { grid-column: 2; }
+.row-identity:has(.grouping-check) .agent-name-wrap { grid-column: 3; }
+.row-identity:has(.grouping-check) .row-time-band { grid-column: 3; }
+.row-identity:has(.grouping-check) .row-identity-tags { grid-column: 3; }
+.row-identity:has(.grouping-check) .row-copy { grid-column: 3; }
 .dual-marks { display: inline-flex; align-items: center; gap: 0; flex: none; }
 .dual-marks.has-instance-home { gap: 0.35rem; }
 .dual-marks .provider-mark { width: 1.35rem; height: 1.35rem; padding: 0.18rem; border-radius: 50%; background: var(--raise); border: 1px solid var(--line); box-sizing: border-box; }
@@ -6447,6 +6491,33 @@ a.artifact-path:hover { text-decoration: underline; }
   height: 0.45rem;
   border-radius: 50%;
   background: var(--repo-tint);
+}
+.repo-tint-picker {
+  flex: none;
+  box-sizing: border-box;
+  appearance: none;
+  width: 1.7rem;
+  height: 1.7rem;
+  min-width: 16px;
+  min-height: 16px;
+  padding: 0;
+  cursor: pointer;
+}
+.repo-tint-picker:focus-visible { outline: none; box-shadow: var(--color-focus-ring); }
+@media (max-width: 720px) {
+  .repo-tint-picker {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .grouping-check {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .team-ungroup { min-height: 44px; }
 }
 /* The flight outranks the band the same way it outranks the tick below: a
    mover wears .is-floating's raised ground for the whole glide, and this

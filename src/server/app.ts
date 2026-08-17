@@ -39,6 +39,7 @@ import {
   type RepoColorDiscovery,
 } from "./settings";
 import { handleTeamColorsRequest, JsonTeamColorsStore } from "./team-colors";
+import { handleTeamGroupsRequest } from "./team-groups";
 /* TINT-F */
 import { setWorkspaceColor, setGroupColor, lastWrittenHex } from "./cmux-color";
 /* TINT integration wiring (master) */
@@ -1390,6 +1391,15 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
         provenanceIds: () => new Set(provenance.list().map((record) => record.groupId)),
         setGroupColor: dependencies.teamColorWrites?.setGroupColor ?? setGroupColor,
         setWorkspaceColor: dependencies.teamColorWrites?.setWorkspaceColor ?? setWorkspaceColor,
+      });
+    }
+    if (url.pathname === "/api/teams" || url.pathname.startsWith("/api/teams/")) {
+      const provenance = await repoGroupProvenance;
+      return handleTeamGroupsRequest(request, {
+        runner: dependencies.runner,
+        executable: dependencies.cmuxExecutable,
+        provenanceIds: () => new Set(provenance.list().map((record) => record.groupId)),
+        setGroupColor: dependencies.teamColorWrites?.setGroupColor ?? setGroupColor,
       });
     }
     /* end TINT-F routes */

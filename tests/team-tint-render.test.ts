@@ -10,12 +10,15 @@ import { join } from "node:path";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let M: any;
 let source = "";
+let styles = "";
 
 beforeAll(async () => {
   // @ts-expect-error The dependency-free browser client has no declaration file.
   await import("../src/web/app.js");
   M = (globalThis as unknown as { TheAntHill: unknown }).TheAntHill;
-  source = readFileSync(join(import.meta.dir, "../src/web/app.js"), "utf8");
+  const webDir = join(import.meta.dir, "../src/web");
+  source = readFileSync(join(webDir, "app.js"), "utf8");
+  styles = readFileSync(join(webDir, "styles.css"), "utf8");
 });
 
 interface FakeNode {
@@ -47,7 +50,9 @@ function makeNode(tag: string): FakeNode {
     dataset: {} as Record<string, string>,
     children: [] as FakeNode[],
     listeners: {} as Record<string, Array<(event: unknown) => unknown>>,
-    get textContent() { return text; },
+    get textContent() {
+      return text + node.children.map((kid) => (kid && kid.textContent) || "").join("");
+    },
     set textContent(v: string) { text = String(v ?? ""); node.children.length = 0; },
     get className() { return [...classes].join(" "); },
     set className(v: string) {
@@ -204,10 +209,12 @@ beforeEach(() => {
   M.setRepoColors({}, { assignments: {} });
   M.state.liveRepoKeys = [];
   M.state.repoColorSettings = null;
+  M.state.teamColors = [];
   M.state.settingsPanelOpen = false;
   if (M.state.paintSig) {
     M.state.paintSig.settings = "";
     M.state.paintSig["repo-colors"] = "";
+    M.state.paintSig["team-colors"] = "";
   }
 });
 
@@ -324,7 +331,7 @@ describe("team band paint", () => {
     expect(section.props["--repo-tint"]).toBe(MOSS);
     expect(section.attributes.style).toBeUndefined();
     expect(byClass(section, "repo-name")[0]!.textContent).toBe("ANT · probe");
-    expect(byClass(section, "repo-dot")).toHaveLength(1);
+    expect(byClass(section, "swatch")).toHaveLength(1);
   });
 
   test("a team hex the repo table has never seen still paints — lookup is not by name", () => {
@@ -425,6 +432,56 @@ describe("strip heading wears the team hex", () => {
   });
 });
 
+function cssRuleBody(css: string, selector: string): string {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return css.match(new RegExp(escaped + "\\s*\\{([^}]*)\\}"))?.[1] ?? "";
+}
+
+function cssLengthPx(body: string, prop: string): number {
+  const match = body.match(new RegExp(prop + ":\\s*([0-9.]+)(px|rem)"));
+  if (!match) return 0;
+  const value = Number(match[1]);
+  return match[2] === "rem" ? value * 16 : value;
+}
+
+function mediaBlocks(css: string, query: string): string[] {
+  const blocks: string[] = [];
+  let from = 0;
+  while (from < css.length) {
+    const start = css.indexOf("@media " + query, from);
+    if (start < 0) break;
+    const open = css.indexOf("{", start);
+    if (open < 0) break;
+    let depth = 0;
+    let end = -1;
+    for (let index = open; index < css.length; index++) {
+      if (css[index] === "{") depth += 1;
+      else if (css[index] === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          end = index;
+          break;
+        }
+      }
+    }
+    if (end < 0) break;
+    blocks.push(css.slice(open + 1, end));
+    from = end + 1;
+  }
+  return blocks;
+}
+
+function teamColorControl(root: unknown): FakeNode | undefined {
+  return walk(root, (node) => {
+    if (String(node.tagName).toLowerCase() !== "button") return false;
+    if (node.attributes.tabindex === "-1") return false;
+    if (node.classList.contains("repo-caret")) return false;
+    return node.classList.contains("swatch")
+      || node.classList.contains("repo-tint-picker")
+      || byClass(node, "swatch").length > 0;
+  })[0];
+}
+
 describe("team band-head picker", () => {
   test("putTeamColor PUTs /api/team-colors/:groupId, never the repo endpoint", async () => {
     const calls: { url: string; method: string; body?: string }[] = [];
@@ -459,6 +516,130 @@ describe("team band-head picker", () => {
       && (node.attributes.type === "color" || node.props.type === "color"))[0];
     expect(picker).toBeTruthy();
     expect(picker!.dataset.fkey).toBe("team-color:g1");
+  });
+
+  test("the band head has a focusable colour control whose click target is at least 16px", () => {
+    /* Shipped UI hid the picker: a tabindex=-1 1×1 input plus a 7px
+       aria-hidden repo-dot. Teal in Settings or on the band is the same
+       write — an operator has to be able to tab to it and hit it. */
+    const section = withDom(() => M.renderRepoSection(teamBand(), ui())) as unknown as FakeNode;
+    const control = teamColorControl(section);
+    expect(control).toBeTruthy();
+    expect(control!.attributes.tabindex).not.toBe("-1");
+    expect(control!.classList.contains("visually-hidden")).toBe(false);
+    const pickerRule = cssRuleBody(styles, ".repo-tint-picker");
+    const click = Math.max(
+      cssLengthPx(pickerRule, "min-width"),
+      cssLengthPx(pickerRule, "width"),
+    );
+    expect(click).toBeGreaterThanOrEqual(16);
+    expect(Math.max(
+      cssLengthPx(pickerRule, "min-height"),
+      cssLengthPx(pickerRule, "height"),
+    )).toBeGreaterThanOrEqual(16);
+  });
+
+  test("a visible swatch button opens the colour input — the 7px dot is not the target", () => {
+    const section = withDom(() => M.renderRepoSection(teamBand(), ui())) as unknown as FakeNode;
+    const picker = walk(section, (node) =>
+      String(node.tagName).toLowerCase() === "input"
+      && (node.attributes.type === "color" || node.props.type === "color"))[0];
+    const control = teamColorControl(section);
+    expect(control).toBeTruthy();
+    expect(byClass(section, "swatch").length).toBeGreaterThan(0);
+    expect(picker!.attributes.tabindex).toBe("-1");
+    let opened = false;
+    picker!.click = () => { opened = true; };
+    control!.listeners.click?.[0]?.();
+    expect(opened).toBe(true);
+  });
+
+  test("at max-width 720px the team colour picker is 44px", () => {
+    /* Phone width has no hover. A 16px band-head hit is still a miss. */
+    const mobile = mediaBlocks(styles, "(max-width: 720px)").join("\n");
+    const rule = cssRuleBody(mobile, ".repo-tint-picker");
+    expect(Math.max(
+      cssLengthPx(rule, "min-width"),
+      cssLengthPx(rule, "width"),
+    )).toBe(44);
+    expect(Math.max(
+      cssLengthPx(rule, "min-height"),
+      cssLengthPx(rule, "height"),
+    )).toBe(44);
+  });
+});
+
+describe("Settings Teams plate", () => {
+  test("Settings mounts #team-colors-host next to Repo colours", () => {
+    withDom(() => {
+      M.state.settingsPanelOpen = true;
+      M.renderSettingsPanel();
+      expect(document.getElementById("team-colors-host")).toBeTruthy();
+      const panel = byId.get("settings-panel")!;
+      expect(panel.textContent).toContain("Teams");
+      expect(panel.textContent).toContain("Repo colours");
+    });
+  });
+
+  test("the Teams plate says No operator groups when none are live", () => {
+    const region = withDom(() => M.renderTeamColorSettings([])) as unknown as FakeNode;
+    expect(region.textContent).toBe("No operator groups.");
+  });
+
+  test("opening Settings GETs /api/team-colors so the plate lists live groups", async () => {
+    const urls: string[] = [];
+    const realFetch = (globalThis as { fetch?: unknown }).fetch;
+    (globalThis as unknown as { fetch: unknown }).fetch = async (url: string) => {
+      urls.push(String(url));
+      /* Incomplete on purpose: a success body would paint after withDom
+         tears the document down. The assertion is that the GET is issued. */
+      return new Response(JSON.stringify({ ok: false }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    };
+    try {
+      M.state.settingsPanelOpen = false;
+      withDom(() => { void M.openSettingsPanel(); });
+      expect(urls.some((url) => url === "/api/team-colors" || url.startsWith("/api/team-colors?"))).toBe(true);
+      try { M.closeSettingsPanel(); } catch { /* render() needs the board document */ }
+    } finally {
+      (globalThis as unknown as { fetch: unknown }).fetch = realFetch;
+    }
+  });
+
+  test("each live team is a swatch that PUTs /api/team-colors/:id", async () => {
+    const calls: { url: string; method: string; body?: string }[] = [];
+    const realFetch = (globalThis as { fetch?: unknown }).fetch;
+    (globalThis as unknown as { fetch: unknown }).fetch = async (
+      url: string,
+      init?: { method?: string; body?: string },
+    ) => {
+      calls.push({ url: String(url), method: init?.method ?? "GET", body: init?.body });
+      return new Response(JSON.stringify({
+        teams: [{ id: "g1", name: "ANT · probe", hex: STORM, windowId: "w", memberWorkspaceIds: [] }],
+        settings: { assignments: { g1: { groupId: "g1", hex: STORM, source: "user" } } },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    try {
+      await withDom(() => {
+        const region = M.renderTeamColorSettings([
+          { id: "g1", name: "ANT · probe", hex: MOSS, windowId: "w", memberWorkspaceIds: [] },
+        ]) as unknown as FakeNode;
+        expect(byClass(region, "swatch").length).toBeGreaterThan(0);
+        expect(region.textContent).toContain("ANT · probe");
+        const picker = walk(region, (node) => node.dataset.fkey === "team-color:g1")[0];
+        expect(picker).toBeTruthy();
+        picker!.value = STORM;
+        return picker!.listeners.change?.[0]?.({ currentTarget: picker });
+      }).catch(() => {});
+    } finally {
+      (globalThis as unknown as { fetch: unknown }).fetch = realFetch;
+    }
+    expect(calls[0]).toEqual({
+      url: "/api/team-colors/g1",
+      method: "PUT",
+      body: JSON.stringify({ hex: STORM }),
+    });
   });
 });
 

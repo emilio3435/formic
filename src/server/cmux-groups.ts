@@ -219,7 +219,7 @@ export function parseCmuxGroups(output: string): CmuxGroup[] {
     return [{
       id,
       name: stringField(group, "name"),
-      customColor: stringField(group, "custom_color"),
+      customColor: stringField(group, "custom_color", "customColor"),
       anchorWorkspaceId: stringField(group, "anchor_workspace_id"),
       memberWorkspaceIds: members.filter((member): member is string => typeof member === "string"),
     }];
