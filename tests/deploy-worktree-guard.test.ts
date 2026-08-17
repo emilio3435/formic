@@ -36,7 +36,7 @@ test("deploy target guard accepts only the launchd job for this checkout", () =>
 
   try {
     const home = join(scratch, "home");
-    const repo = join(home, "Developer", "the-mountain-production");
+    const repo = join(home, "Developer", "formic");
     const launchAgents = join(home, "Library", "LaunchAgents");
     const servicePlist = join(launchAgents, "ai.imaginethat.anthill.plist");
     mkdirSync(launchAgents, { recursive: true });
@@ -56,14 +56,18 @@ test("deploy target guard accepts only the launchd job for this checkout", () =>
 
 test("deploy checks the launchd target before verification or restart", () => {
   const deploy = readFileSync(join(ROOT, "scripts/anthill-deploy.sh"), "utf8");
-  const canonical = deploy.indexOf('CANONICAL_ROOT="${HOME}/Developer/the-mountain-production"');
+  const canonical = deploy.indexOf('CANONICAL_ROOT="${HOME}/Developer/formic"');
+  const origin = deploy.indexOf("git remote get-url origin");
   const clean = deploy.indexOf("git status --porcelain --untracked-files=all");
   const fetch = deploy.indexOf("git fetch origin main:refs/remotes/origin/main");
   const exactMain = deploy.indexOf("git rev-parse origin/main");
   const guard = deploy.indexOf("anthill-deploy-target.sh");
 
   expect(canonical).toBeGreaterThan(-1);
-  expect(clean).toBeGreaterThan(canonical);
+  expect(origin).toBeGreaterThan(canonical);
+  expect(deploy).toContain("emilio3435/formic");
+  expect(deploy).toContain("Develop and deploy on public formic only");
+  expect(clean).toBeGreaterThan(origin);
   expect(fetch).toBeGreaterThan(clean);
   expect(exactMain).toBeGreaterThan(fetch);
   expect(deploy.indexOf("git merge --ff-only origin/main")).toBeGreaterThan(fetch);
@@ -78,7 +82,10 @@ test("the GitHub-visible runbook separates merge, deploy, and visual proof", () 
 
   expect(runbook).toContain("Merging a pull request changes");
   expect(runbook).toContain("does not update that local worktree or restart launchd");
-  expect(runbook).toContain("~/Developer/the-mountain-production");
+  expect(runbook).toContain("~/Developer/formic");
+  expect(runbook).toContain("cd ~/Developer/formic && bash scripts/anthill-deploy.sh");
+  expect(runbook).toContain("emilio3435/formic");
+  expect(runbook).not.toContain("the-mountain-production");
   expect(runbook).toContain("merge --ff-only origin/main");
   expect(runbook).toContain("capture screenshot evidence");
 });

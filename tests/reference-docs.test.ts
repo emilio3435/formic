@@ -536,8 +536,15 @@ describe("DEPLOY.md is a rulebook the scripts actually enforce", () => {
   });
 
   test("the guards it promises are the guards the deploy script has", () => {
-    expect(deploy).toContain("Deploys must run from `~/Developer/the-mountain-production`");
-    expect(deployScript).toContain('CANONICAL_ROOT="${HOME}/Developer/the-mountain-production"');
+    expect(deploy).toContain("Deploys must run from `~/Developer/formic`");
+    expect(deploy).toContain("cd ~/Developer/formic && bash scripts/anthill-deploy.sh");
+    expect(deploy).toContain("emilio3435/formic");
+    expect(deploy).toContain("Develop and deploy on public formic only");
+    expect(deploy).not.toContain("the-mountain-production");
+    expect(deployScript).toContain('CANONICAL_ROOT="${HOME}/Developer/formic"');
+    expect(deployScript).not.toContain("the-mountain-production");
+    expect(deployScript).toContain("git remote get-url origin");
+    expect(deployScript).toContain("Develop and deploy on public formic only");
     expect(deploy).toContain("Deploy worktree must be on `main`");
     expect(deployScript).toContain('if [ "$BRANCH" != "main" ]');
     expect(deploy).toContain("git merge --ff-only origin/main");
@@ -786,6 +793,8 @@ describe("the executable scripts do what DEPLOY.md says they do", () => {
     expect(hygiene).toMatch(/lsof -nP -iTCP:"\$\{PORT\}" -sTCP:LISTEN -t[\s\S]{0,140}kill -9/);
     // And it repairs the worktree it lives in, not a hardcoded path.
     expect(hygiene).toContain('REPO="${ANTHILL_REPO:-${ROOT}}"');
+    expect(hygiene).toContain("CMUX_SOCKET_CAPABILITY");
+    expect(hygiene).not.toContain("the-mountain-production");
     expect(deploy, "DEPLOY.md stopped warning that hygiene restarts production").toContain("restarts production and can kill processes");
   });
 });

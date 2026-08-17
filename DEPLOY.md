@@ -10,7 +10,7 @@ When in doubt, use the scripts — they encode every rule below.
 
 | Port | What | Owner |
 |------|------|-------|
-| **4701** | **PRODUCTION** dashboard | launchd `ai.imaginethat.anthill`, serves clean `main` from `the-mountain-production` |
+| **4701** | **PRODUCTION** dashboard | launchd `ai.imaginethat.anthill`, serves clean `main` from `~/Developer/formic` |
 | 4700 | The Mountain (separate app) | — |
 | **4710–4719** | **Previews** (throwaway) | `scripts/anthill-preview.sh`, auto-assigned |
 
@@ -19,18 +19,17 @@ Rule: **never** launch anything on 4701 by hand. Previews always go through
 
 ## Deploy = merge on GitHub, then run the deploy script
 
-`:4701` serves the **local files** of the dedicated
-`~/Developer/the-mountain-production` worktree. Merging a pull request changes
+`:4701` serves the **local files** of
+`~/Developer/formic`. Merging a pull request changes
 GitHub's `main`; it does not update that local worktree or restart launchd.
 A green CI check is not a deploy.
 
-Keep the production worktree clean and permanently on `main`. Development stays
-in `~/Developer/the-mountain-main` or a lane worktree. After the merge is
-authorized to go live, the safe release command is:
+Keep the production checkout clean and permanently on `main`, with origin
+`emilio3435/formic` (https or ssh). Development stays in a lane worktree.
+After the merge is authorized to go live, the safe release command is:
 
 ```bash
-cd ~/Developer/the-mountain-production
-bash scripts/anthill-deploy.sh
+cd ~/Developer/formic && bash scripts/anthill-deploy.sh
 ```
 
 The script fetches `origin/main`, then `git merge --ff-only origin/main` when
@@ -40,7 +39,7 @@ typechecks, runs hermetic then local-evidence gates, restarts launchd, and waits
 hermetic test failure. Inspect first if you want:
 
 ```bash
-git -C ~/Developer/the-mountain-production status --short --branch
+git -C ~/Developer/formic status --short --branch
 ```
 
 After a UI deploy, hard-refresh <http://127.0.0.1:4701>, confirm the intended
@@ -49,7 +48,8 @@ capture screenshot evidence. A green health endpoint proves the server
 answered; it does not prove the reskin rendered.
 
 Rules the deploy script enforces so you don't have to remember them:
-- Deploys must run from `~/Developer/the-mountain-production`.
+- Deploys must run from `~/Developer/formic`.
+- Origin must be the public formic repo (`emilio3435/formic`, https or ssh). Develop and deploy on public formic only — `the-ant-hill` or any other origin is refused.
 - Deploy worktree must be on `main`.
 - The worktree must be clean. If it is strictly behind `origin/main`, the script fast-forwards; if it has diverged or is ahead, it aborts.
 - The LaunchAgent `WorkingDirectory` and server entry must point back at that exact worktree.
@@ -64,8 +64,8 @@ or restart and prints the exact repair command. For the canonical worktree that
 command is:
 
 ```bash
-ANTHILL_REPO="$HOME/Developer/the-mountain-production" \
-  bash "$HOME/Developer/the-mountain-production/scripts/anthill-hygiene.sh"
+ANTHILL_REPO="$HOME/Developer/formic" \
+  bash "$HOME/Developer/formic/scripts/anthill-hygiene.sh"
 ```
 
 `anthill-hygiene.sh` is disruptive: it rewrites the plist, restarts production,
