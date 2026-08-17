@@ -28,6 +28,7 @@ import { collectGrokSessions } from "./grok";
 import { collectGrokBotSessions } from "./grok-bot";
 import { createHermesParser, parseHermesJsonl } from "./hermes";
 import { collectMuseSessions } from "./muse";
+import { collectCopilotSessions } from "./copilot";
 import { collectAntigravitySessions, defaultAntigravityTrees } from "./antigravity";
 import { readHookSessionStores, type HookSessionRecord } from "./cmux-hook-sessions";
 import { readProcessLineage, type ProcessLineageExec } from "./process-lineage";
@@ -41,6 +42,7 @@ export interface CollectSessionsOptions {
   extraCursorGuiRoots?: readonly string[];
   extraGrokBotRoots?: readonly string[];
   extraGrokCliRoots?: readonly string[];
+  extraCopilotRoots?: readonly string[];
 }
 export type SessionProviderResult = CollectionResult<CollectedAgent[]>;
 export type SessionProviderResults = Record<Provider, SessionProviderResult>;
@@ -95,6 +97,7 @@ const PROVIDER_NAMES: Record<Provider, string> = {
   hermes: "Hermes",
   muse: "Muse",
   antigravity: "Antigravity",
+  copilot: "Copilot",
 };
 
 const NON_TASK_PREFIXES = [
@@ -324,6 +327,7 @@ const AUTHORED_BY: Record<Provider, AuthoredNameSource> = {
   hermes: "hermes-title",
   muse: "muse-title",
   antigravity: "antigravity-title",
+  copilot: "copilot-title",
 };
 
 function statusFrom(
@@ -1389,6 +1393,11 @@ export async function collectSessionProvider(
       const override = home === homedir() ? process.env.XDG_DATA_HOME?.trim() : undefined;
       const root = override ? join(override, "muse") : join(home, ".local/share/muse");
       return collectMuseSessions(root, windowMs, thresholds);
+    }
+    case "copilot": {
+      const override = home === homedir() ? process.env.COPILOT_HOME?.trim() : undefined;
+      const root = override || join(home, ".copilot");
+      return collectCopilotSessions(root, windowMs, thresholds, options.extraCopilotRoots ?? []);
     }
     case "antigravity": {
       return collectAntigravitySessions(

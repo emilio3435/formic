@@ -91,6 +91,30 @@ describe("classifyDataDir", () => {
     expect(classifyDataDir(dataDir, memFs(root))).toBeUndefined();
   });
 
+  test("default ~/.copilot is copilot and no longer needs-parser", () => {
+    const root = mkdtempSync(join(tmpdir(), "ah-scan-"));
+    const dataDir = join(root, ".copilot");
+    mkdirSync(join(dataDir, "session-state", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"), { recursive: true });
+    writeFileSync(join(dataDir, "session-state/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/events.jsonl"), "{}\n");
+    const hit = classifyDataDir(dataDir, memFs(root));
+    expect(hit?.kind).toBe("copilot");
+    expect(hit?.provider).toBe("copilot");
+    expect(hit?.default).toBe(true);
+    expect(hit?.reason).toBeUndefined();
+  });
+
+  test("extra ~/.copilot-2 with session-state is copilot and collectable", () => {
+    const root = mkdtempSync(join(tmpdir(), "ah-scan-"));
+    const dataDir = join(root, ".copilot-2");
+    mkdirSync(join(dataDir, "session-state", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"), { recursive: true });
+    writeFileSync(join(dataDir, "session-state/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/events.jsonl"), "{}\n");
+    const hit = classifyDataDir(dataDir, memFs(root));
+    expect(hit?.kind).toBe("copilot");
+    expect(hit?.provider).toBe("copilot");
+    expect(hit?.default).toBe(false);
+    expect(hit?.reason).toBeUndefined();
+  });
+
   test("default ~/.grok is default: true", () => {
     const root = mkdtempSync(join(tmpdir(), "ah-scan-"));
     const dataDir = join(root, ".grok");

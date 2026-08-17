@@ -1,0 +1,4 @@
+{"id":"77777777-7777-4777-8777-777777777777","type":"session.start","timestamp":"2026-08-17T12:10:00.000Z","parentId":null,"data":{"sessionId":"bbbbbbbb-cccc-4ddd-8eee-ffffffffffff","startTime":"2026-08-17T12:10:00.000Z","context":{"cwd":"/Users/me/Developer/formic"}}}
+{"id":"88888888-8888-4888-8888-888888888888","type":"user.message","timestamp":"2026-08-17T12:10:01.000Z","parentId":"77777777-7777-4777-8777-777777777777","data":{"content":"Stay up without a shutdown record."}}
+{"id":"99999999-9999-4999-8999-999999999999","type":"assistant.message","timestamp":"2026-08-17T12:10:02.000Z","parentId":"88888888-8888-4888-8888-888888888888","data":{"messageId":"msg-2","content":"No modelMetrics yet, so tokens stay unknown."}}
+{"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","type":"assistant.turn_end","timestamp":"2026-08-17T12:10:03.000Z","parentId":"99999999-9999-4999-8999-999999999999","data":{"turnId":"turn-2"}}

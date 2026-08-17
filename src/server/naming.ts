@@ -87,6 +87,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<Provider, string> = {
   hermes: "Hermes",
   muse: "Muse",
   antigravity: "Antigravity",
+  copilot: "Copilot",
 };
 
 /* Strings that arrive in a name-shaped field but are not names. Each was

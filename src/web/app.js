@@ -9212,6 +9212,7 @@ const HARNESS_MARK = {
   hermes: { src: "/icons/formic-mark.svg", label: "Hermes" },
   muse: { label: "Muse" },
   antigravity: { label: "Antigravity" },
+  copilot: { label: "Copilot CLI" },
   omni: { src: "/icons/omp.svg", label: "OMP" },
 };
 const AGENT_MARK = {
@@ -13776,7 +13777,7 @@ function emptyBoardVerdict(snap) {
       : "Watching. No sessions running yet.",
     hint: degraded
       ? "A degraded collector reports no sessions whether or not any are running, so this board is incomplete rather than empty."
-      : "Claude Code, Codex, Cursor and Grok Build sessions appear here on their own, within seconds of starting.",
+      : "Claude Code, Codex, Cursor, Grok Build and Copilot CLI sessions appear here on their own, within seconds of starting.",
     /* The denominator stays. I first replaced it with an absolute count, on the
        theory that "3 of 4" reads as a shortfall to a newcomer — then read the
        docs lane's QUICKSTART, which pins "4 of 4 collectors healthy" and
@@ -13803,7 +13804,7 @@ function emptyBoardVerdict(snap) {
           ? `${healthy} of ${total} collectors healthy · ${absent} not installed`
           : `${healthy} of ${total} collectors healthy`)
         : absent > 0
-          ? "No collectors installed yet — Claude Code, Codex, Cursor or Grok Build will appear here"
+          ? "No collectors installed yet — Claude Code, Codex, Cursor, Grok Build or Copilot CLI will appear here"
           : null,
     checkedAt: (snap && snap.generatedAt) || null,
   };

@@ -133,7 +133,7 @@ export function modelShort(m) {
   return raw.length > 18 ? raw.slice(0, 17) + "…" : raw;
 }
 
-export const PROVIDER_LABELS = { codex: "Codex", claude: "Claude", cursor: "Cursor", omp: "OMP", factory: "Factory", prime: "Prime", grok: "Grok", hermes: "Hermes", muse: "Muse", antigravity: "Antigravity" };
+export const PROVIDER_LABELS = { codex: "Codex", claude: "Claude", cursor: "Cursor", omp: "OMP", factory: "Factory", prime: "Prime", grok: "Grok", hermes: "Hermes", muse: "Muse", antigravity: "Antigravity", copilot: "Copilot" };
 export const HARNESS_LABELS = PROVIDER_LABELS;
 export const providerLabel = (p) => PROVIDER_LABELS[p] || p;
 export const harnessLabel = providerLabel;

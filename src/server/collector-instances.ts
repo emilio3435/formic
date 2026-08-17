@@ -10,7 +10,7 @@ export type CollectorKind =
   | "cursor-gui" | "cursor-cli" | "codex" | "claude" | "factory"
   | "prime" | "omp" | "grok-cli" | "hermes" | "grok-bot"
   | "muse" | "antigravity-cli" | "antigravity-desktop" | "antigravity-ide"
-  | "burnbar" | "cmux-hooks" | "unknown";
+  | "copilot" | "burnbar" | "cmux-hooks" | "unknown";
 
 export type CollectorReason = "needs-parser" | "needs-home-list";
 
@@ -47,6 +47,7 @@ const PROVIDER_FOR = {
   "antigravity-cli": "antigravity",
   "antigravity-desktop": "antigravity",
   "antigravity-ide": "antigravity",
+  "copilot": "copilot",
   "grok-bot": null,
   "burnbar": null,
   "cmux-hooks": null,
@@ -70,6 +71,7 @@ export function defaultHomes(home: string): ReadonlyArray<{ kind: CollectorKind;
     { kind: "grok-cli", dataDir: join(home, ".grok") },
     { kind: "hermes", dataDir: join(home, ".hermes") },
     { kind: "muse", dataDir: join(home, ".local/share/muse") },
+    { kind: "copilot", dataDir: join(home, ".copilot") },
     { kind: "antigravity-cli", dataDir: join(home, ".gemini/antigravity-cli") },
     { kind: "antigravity-desktop", dataDir: join(home, ".gemini/antigravity") },
     { kind: "antigravity-ide", dataDir: join(home, ".gemini/antigravity-ide") },
@@ -304,6 +306,17 @@ export function classifyDataDir(dataDir: string, fs: ScanFs, deadline?: number):
   }
   if (isDotFamily(base, "muse") && (fs.isDirectory(join(dataDir, "sessions")) || base.replace(/^\./, "").toLowerCase() === "muse")) {
     return candidate("muse", dataDir, fs);
+  }
+  if (
+    isDotFamily(base, "copilot")
+    && (
+      fs.isDirectory(join(dataDir, "session-state"))
+      || fs.exists(join(dataDir, "settings.json"))
+      || fs.exists(join(dataDir, "mcp-config.json"))
+      || base.replace(/^\./, "").toLowerCase() === "copilot"
+    )
+  ) {
+    return candidate("copilot", dataDir, fs);
   }
   if (base === "antigravity-cli" || dataDir.endsWith("/.gemini/antigravity-cli")) {
     return candidate("antigravity-cli", dataDir, fs);

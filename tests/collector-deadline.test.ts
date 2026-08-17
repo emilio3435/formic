@@ -41,6 +41,7 @@ const empty = (): SessionsResult => ({
   hermes: { value: [], errors: [] },
   muse: { value: [], errors: [] },
   antigravity: { value: [], errors: [] },
+  copilot: { value: [], errors: [] },
 });
 
 /** A hub whose collectors behave exactly as described, with a 60ms deadline. */
