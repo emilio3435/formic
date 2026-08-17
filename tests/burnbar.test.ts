@@ -358,7 +358,7 @@ db.close();
         estimatedCostUsd: 0.009,
         costKnown: true,
         costProvenance: "derived_estimate",
-        pricingVersion: "2026-08-09",
+        pricingVersion: "2026-08-17",
       });
 
       const empty = await getUsageSummary("2026-07-24T00:00:00.000Z", "2026-07-25T00:00:00.000Z");

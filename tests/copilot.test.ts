@@ -38,6 +38,7 @@ test("a fixture Copilot CLI session is a copilot row with task, closing, and obs
       sessionTotal: 210,
       sessionProcessed: 230,
       provenance: "observed",
+      contextWindow: 131_072,
     },
   });
   expect(closed?.tokens).not.toHaveProperty("contextPct");
@@ -49,6 +50,82 @@ test("a Copilot log without shutdown modelMetrics reports unknown tokens, not ze
   expect(open?.tokens).toEqual({ scope: "unknown", provenance: "unknown" });
   expect(open?.endEvidence).toBeUndefined();
   expect(open?.lastAgentClosing).toBe("No modelMetrics yet, so tokens stay unknown.");
+  expect(open?.tokens).not.toHaveProperty("contextWindow");
+});
+
+test("a live Copilot session with a known model keeps tokens unknown and still attaches the window", () => {
+  const agent = parseCopilotSession(OPEN, `${JSON.stringify({
+    type: "session.start",
+    timestamp: "2026-08-17T12:10:00.000Z",
+    data: { context: { cwd: "/Users/me/Developer/formic" } },
+  })}\n${JSON.stringify({
+    type: "session.model_change",
+    timestamp: "2026-08-17T12:10:01.000Z",
+    data: { newModel: "gpt-5.6-sol" },
+  })}\n${JSON.stringify({
+    type: "user.message",
+    timestamp: "2026-08-17T12:10:02.000Z",
+    data: { content: "Still running." },
+  })}\n`);
+  expect(agent?.tokens).toEqual({
+    scope: "unknown",
+    provenance: "unknown",
+    contextWindow: 258_400,
+  });
+  expect(agent?.endEvidence).toBeUndefined();
+});
+
+test("shutdown with an unknown model observes tokens and leaves the window unset", () => {
+  const agent = parseCopilotSession(CLOSED, `${JSON.stringify({
+    type: "session.model_change",
+    timestamp: "2026-08-17T12:00:00.000Z",
+    data: { newModel: "mystery-copilot" },
+  })}\n${JSON.stringify({
+    type: "session.shutdown",
+    timestamp: "2026-08-17T12:00:01.000Z",
+    data: {
+      shutdownType: "routine",
+      currentModel: "mystery-copilot",
+      modelMetrics: { "mystery-copilot": { usage: { inputTokens: 8, outputTokens: 2 } } },
+    },
+  })}\n`);
+  expect(agent?.tokens).toEqual({
+    sessionTotal: 10,
+    sessionProcessed: 10,
+    scope: "session",
+    provenance: "observed",
+  });
+  expect(agent?.tokens).not.toHaveProperty("contextWindow");
+});
+
+test("Copilot display names match catalog needles without inventing a Terra window", () => {
+  const sol = parseCopilotSession(CLOSED, `${JSON.stringify({
+    type: "session.model_change",
+    timestamp: "2026-08-17T12:00:00.000Z",
+    data: { newModel: "GPT-5.6 Sol" },
+  })}\n${JSON.stringify({
+    type: "session.shutdown",
+    timestamp: "2026-08-17T12:00:01.000Z",
+    data: {
+      currentModel: "GPT-5.6 Sol",
+      modelMetrics: { "GPT-5.6 Sol": { usage: { inputTokens: 1, outputTokens: 1 } } },
+    },
+  })}\n`);
+  expect(sol?.tokens.contextWindow).toBe(258_400);
+  const terra = parseCopilotSession(CLOSED, `${JSON.stringify({
+    type: "session.model_change",
+    timestamp: "2026-08-17T12:00:00.000Z",
+    data: { newModel: "gpt-5.6-terra" },
+  })}\n${JSON.stringify({
+    type: "session.shutdown",
+    timestamp: "2026-08-17T12:00:01.000Z",
+    data: {
+      currentModel: "gpt-5.6-terra",
+      modelMetrics: { "gpt-5.6-terra": { usage: { inputTokens: 1, outputTokens: 1 } } },
+    },
+  })}\n`);
+  expect(terra?.tokens.provenance).toBe("observed");
+  expect(terra?.tokens).not.toHaveProperty("contextWindow");
 });
 
 test("parseCopilotSession ignores unknown event types and does not invent last-close text", () => {

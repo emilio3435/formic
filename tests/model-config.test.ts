@@ -20,9 +20,13 @@ describe("model knowledge config", () => {
     expect(config.modelDisplayLabels).toEqual({
       "claude-fable-5": "fable 5",
       "claude-opus-4-8": "opus 4.8",
+      "claude-opus-5": "opus 5",
       "claude-sonnet-5": "sonnet 5",
       "composer-2": "composer 2",
       "composer-2.5": "composer 2.5",
+      "gemini-3.1-pro": "gemini 3.1 pro",
+      "gemini-3.6-flash": "gemini 3.6 flash",
+      "gemini-3.7-flash": "gemini 3.7 flash",
       "gpt-5.6-luna": "luna 5.6",
       "gpt-5.6-sol": "sol 5.6",
       "gpt-5.6-terra": "terra 5.6",
@@ -56,7 +60,7 @@ describe("model knowledge config", () => {
         cacheCreation?: unknown;
       }>;
     };
-    expect(shipped.pricingVersion).toBe("2026-08-09");
+    expect(shipped.pricingVersion).toBe("2026-08-17");
     const opus = shipped.modelPricingUsdPerMillionTokens?.["claude-opus-4-8"];
     expect(opus?.aliases).toContain("claude-opus-4-8");
     for (const amount of [opus?.input, opus?.output, opus?.cacheRead, opus?.cacheCreation]) {
@@ -64,6 +68,13 @@ describe("model knowledge config", () => {
       expect(amount as number).toBeGreaterThanOrEqual(0);
     }
     expect(opus?.providers).toEqual(["Anthropic API"]);
+    expect(shipped.modelPricingUsdPerMillionTokens?.["claude-opus-5"]).toMatchObject({
+      providers: ["Anthropic API"], input: 5, output: 25, cacheRead: 0.5, cacheCreation: 6.25,
+    });
+    expect(shipped.modelPricingUsdPerMillionTokens?.["claude-opus-4-8"]?.input).toBe(5);
+    const labels = loadModelConfig(shippedPath).modelDisplayLabels;
+    expect(labels["claude-opus-4-8"]).toBe("opus 4.8");
+    expect(labels["claude-opus-5"]).toBe("opus 5");
     expect(shipped.modelPricingUsdPerMillionTokens?.["gpt-5.6-sol"]).toMatchObject({
       providers: ["OpenAI API"], input: 5, output: 30, cacheRead: 0.5, cacheCreation: 6.25,
     });
@@ -78,9 +89,20 @@ describe("model knowledge config", () => {
       luna: 258_400,
       "gpt-5.6-sol": 258_400,
       "gpt-5.6-luna": 258_400,
+      "gemini-3.7-flash": 1_048_576,
+      "gemini-3.6-flash": 1_048_576,
+      "gemini-3.1-pro": 1_048_576,
     });
     expect(shipped.claudeContextWindows).not.toHaveProperty("terra");
     expect(shipped.claudeContextWindows).not.toHaveProperty("gpt-5.6-terra");
+    expect(claudeContextWindow("muse-spark-1.2")).toBe(1_000_000);
+    expect(claudeContextWindow("GPT-5.6 Sol")).toBe(258_400);
+    expect(claudeContextWindow("Claude Opus 5")).toBe(1_000_000);
+    expect(claudeContextWindow("gemini-3.7-flash")).toBe(1_048_576);
+    expect(claudeContextWindow("Gemini 3.6 Flash")).toBe(1_048_576);
+    expect(claudeContextWindow("gemini-3.1-pro-preview")).toBe(1_048_576);
+    expect(claudeContextWindow("gpt-5.6-terra")).toBeUndefined();
+    expect(claudeContextWindow("mystery-model")).toBeUndefined();
   });
 
   test("a missing or malformed file uses all compiled defaults", () => {
