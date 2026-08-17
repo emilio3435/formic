@@ -24,6 +24,12 @@ const SHELL_LINE = /^(?:[$›]\s*|(?:\.\.?\/|\/Users\/|\/private\/|\/tmp\/|[A-Za
 const PATH_ONLY = /^(?:\.\.?\/|\/Users\/|\/private\/|\/tmp\/|[A-Za-z]:[\\/]|(?:src|tests|scripts|app|lib|packages)\/)[\w./@:-]+$/i;
 const DIFF_LINE = /^(?:diff --git\b|index [0-9a-f]+\.\.[0-9a-f]+|@@ .* @@|\+\+\+ |--- )/;
 const CITATION_ONLY = /^(?:(?:\[\^?\d+\]|【[^】]+】|\([^)]*\))\s*)+$/;
+/* Codex appends a memory-citation / rollout trailer after spoken prose. The
+   end-anchored close window lands inside it unless the collector strips first. */
+const CODEX_CITATION_BLOCK = /<oai-mem-citation\b[^>]*>[\s\S]*?<\/oai-mem-citation>/gi;
+const CODEX_CITATION_LEFTOVER = /<\/?(?:oai-mem-citation|citation_entries|citation_entry|rollout_ids|rollout_id)\b[^>]*>/gi;
+const CODEX_MEMORY_ENTRY = /MEMORY\.md:\d+(?:-\d+)?\|note=\[[^\]]*\]/gi;
+const CODEX_CLOSE_TRAILER = /MEMORY\.md:\d+|oai-mem-citation|citation_entries|rollout_ids|\|note=\[/i;
 
 function textParts(provider: Provider, content: unknown): string[] {
   if (typeof content === "string") return [content];
@@ -48,6 +54,18 @@ function shorten(text: string): string {
   return `${clipped.slice(0, boundary > MAX_HUMAN_MESSAGE_CHARS * 0.6 ? boundary : clipped.length).trimEnd()}…`;
 }
 
+function stripCodexCitationTrailer(text: string, blockReplacement: string): string {
+  return text
+    .replace(CODEX_CITATION_BLOCK, blockReplacement)
+    .replace(CODEX_CITATION_LEFTOVER, blockReplacement)
+    .replace(CODEX_MEMORY_ENTRY, blockReplacement);
+}
+
+function closeWindowLandsInCitation(text: string): boolean {
+  const tail = text.length <= MAX_HUMAN_MESSAGE_CHARS ? text : text.slice(-MAX_HUMAN_MESSAGE_CHARS);
+  return CODEX_CLOSE_TRAILER.test(tail);
+}
+
 function stripMessageChrome(text: string, blockReplacement: string): string | undefined {
   let value = text.replace(/\r/g, "").trim();
   if (!value || NON_HUMAN_PREFIX.test(value)) return undefined;
@@ -60,6 +78,7 @@ function stripMessageChrome(text: string, blockReplacement: string): string | un
     .replace(/<(command-name|command-message|command-args|command-contents)>[\s\S]*?<\/\1>/gi, blockReplacement)
     .replace(/<(local-command-stdout|local-command-stderr|local-command-caveat)>[\s\S]*?<\/\1>/gi, blockReplacement)
     .trim();
+  value = stripCodexCitationTrailer(value, blockReplacement).trim();
   if (!value || NON_HUMAN_PREFIX.test(value)) return undefined;
   return value;
 }
@@ -176,8 +195,13 @@ function readableText(text: string): string | undefined {
    Returns the final sentence when the message ends on one, so the caller gets a
    complete thought rather than a window that happens to land mid-clause. */
 export function readableClosing(provider: Provider, content: unknown): string | undefined {
-  const cleaned = cleanMessage(textParts(provider, content).join("\n"));
+  const raw = textParts(provider, content).join("\n");
+  const cleaned = cleanMessage(raw);
   if (cleaned === undefined) return undefined;
+  /* #85: when the end window lands in the citation trailer, the leftover
+     spoken fragment before the tags is not the close. Keep this turn's
+     spoken front instead of walking back to N-1. */
+  if (closeWindowLandsInCitation(raw)) return shorten(cleaned);
   if (cleaned.length <= MAX_HUMAN_MESSAGE_CHARS) return cleaned;
 
   // Prefer a sentence boundary inside the tail window; a question mark or full

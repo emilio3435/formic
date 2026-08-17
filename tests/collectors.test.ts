@@ -491,6 +491,21 @@ describe("collector identity and usage truth", () => {
     expect(agent?.transcriptTail).toContain("git diff --check");
   });
 
+  test("Codex lastAgentClosing strips MEMORY.md citation trailers and stays on the latest spoken turn", () => {
+    const agent = parseCodexJsonl(fixture("codex-citation-trailer-session.jsonl"), {
+      nowMs: Date.parse("2026-08-16T16:40:00.000Z"),
+    });
+
+    expect(agent?.lastAgentClosing).toContain("Definition of Done");
+    expect(agent?.lastAgentClosing).not.toContain("November Generate-button");
+    expect(agent?.lastAgentClosing).not.toMatch(/oai-mem-citation|MEMORY\.md:|rollout_ids/i);
+    expect(agent?.lastAgentMessage).toContain("Definition of Done");
+    expect(agent?.lastAgentMessage).not.toMatch(/oai-mem-citation|MEMORY\.md:|rollout_ids/i);
+    expect(agent?.lastAgentChatBody).toContain("Definition of Done");
+    expect(agent?.lastAgentChatBody).not.toMatch(/oai-mem-citation|MEMORY\.md:|rollout_ids/i);
+    expect(agent?.transcriptTail).toContain("oai-mem-citation");
+  });
+
   test("empty Codex transcripts report no readable human message", () => {
     const agent = parseCodexJsonl(fixture("empty-transcript-session.jsonl"), { nowMs });
 
