@@ -3267,7 +3267,7 @@ function notifyWaitText(item) {
 
    This row shows "<program> · <impact>" and named itself "<impact> <evidence>",
    dropping the program the operator can see — WCAG 2.5.3 Label in Name. A voice
-   operator reading "the-ant-hill · …" off the screen and saying it got no match,
+   operator reading "example-repo · …" off the screen and saying it got no match,
    and a screen-reader operator heard an agent with no program on a board where
    the same lane name recurs across several. The blocking row above already puts
    the program in its name ("… In <program>. Opens the session."); this is the
@@ -3776,7 +3776,7 @@ function renderSettingsPanel() {
    instead of overflow clay — which is why a second click on a yours-swatch
    clears the override rather than only offering a global wipe.
 
-   Assignment keys are origin/band names (`the-ant-hill`). Rows with no live
+   Assignment keys are origin/band names (`example-repo`). Rows with no live
    session stay pickable and are marked not on the board. The list paints into
    `#repo-colors-host` so a colour GET cannot rebuild the Settings form. */
 function paintRepoColorSettings() {
@@ -7039,11 +7039,11 @@ let repoColorsVersion = 0;      // bumped on every load; paint signatures read i
    entry failing normalizeRepoHex, so the map stayed empty and the board never
    tinted while every test stayed green.
 
-   The two names genuinely differ on this very checkout: the repository's origin
-   is `…/the-ant-hill.git`, so RepoIdentity.repoName — what the band prints — is
-   `the-ant-hill`, while repoKeyForCwd reads the git common dir and answers
-   `the-mountain`. The table exists precisely for that split, which is why
-   `name === key` is never a safe shortcut. */
+   The two names genuinely differ when origin and folder disagree: the
+   repository's origin is `…/example-repo.git`, so RepoIdentity.repoName — what
+   the band prints — is `example-repo`, while repoKeyForCwd reads the git common
+   dir and answers the checkout folder name. The table exists precisely for that
+   split, which is why `name === key` is never a safe shortcut. */
 function setRepoColors(repoNames, settings) {
   repoColors.clear();
   const assignments = (settings && settings.assignments) || {};
@@ -7220,7 +7220,7 @@ function repoGroups(visible) {
     /* A band's only checkout needs no disambiguator: `@directory` earns its
        place by separating siblings, and there are none — while on the live
        board the directory half actively contradicted the band name above it
-       (`…@the-mountain-main` under "the-ant-hill"). Multi-worktree bands keep
+       (`…@checkout-folder` under "example-repo"). Multi-worktree bands keep
        both halves; uniqueness within the band is what the suffix is FOR. */
     if (group.worktrees.length === 1) {
       const branch = (repo && repo.branch) || "";

@@ -418,7 +418,7 @@ function limitFrom(url: URL, fallback: number, maximum: number): number | Respon
    a store that only makes sense for one endpoint. Live colour keys come from
    the band name already on the snapshot (`agent.repo.repoName`). Folder git
    (`folderKeyForCwd`) is memoized by worktree path and used only as an alias
-   so persisted the-mountain rows can rebase onto the-ant-hill. A worktree's
+   so persisted folder-key rows can rebase onto the origin/band name. A worktree's
    repository does not change under it; a restart re-reads them all. */
 const repoKeyByWorktree = new Map<string, string | null>();
 

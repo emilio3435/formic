@@ -184,6 +184,32 @@ function target(workspaceId: string, repoKey: string, hex: string): RepoGroupTar
   return { workspaceId, repoKey, hex };
 }
 
+/** TINT-G no longer mints groups. Tests that exercise add/rename/teardown
+    start from a group we already recorded, the way production Formic does. */
+async function own(
+  cmux: FakeCmux,
+  provenance: MemoryRepoGroupProvenanceStore,
+  windowId: string,
+  repoKey: string,
+  members: string[] = [],
+  hex = "#5F7F2A",
+): Promise<string> {
+  const groupId = `ours-${windowId}-${repoKey}-${cmux.groups.size + 1}`;
+  const anchor = `anchor-${groupId}`;
+  const listed = cmux.windows.get(windowId) ?? [];
+  if (!listed.includes(anchor)) listed.push(anchor);
+  cmux.windows.set(windowId, listed);
+  cmux.seedGroup(groupId, {
+    windowId,
+    name: repoKey,
+    customColor: hex,
+    members: [anchor, ...members],
+    anchorWorkspaceId: anchor,
+  });
+  await provenance.record({ groupId, repoKey, windowId });
+  return groupId;
+}
+
 interface Funnel {
   setGroupColor: RepoGroupInputs["setGroupColor"];
   writes: Array<{ groupId: string; hex: string; reason: string }>;
@@ -233,8 +259,7 @@ describe("reconcileRepoGroups", () => {
       setGroupColor: colors.setGroupColor,
       targets: [target("ws-a", "the-mountain", "#5F7F2A")],
     };
-    await reconcileRepoGroups({ runner: cmux, provenance, inputs: healthy });
-    const created = provenance.list()[0]!.groupId;
+    const created = await own(cmux, provenance, "window-1", "the-mountain", ["ws-a"]);
 
     /* What the board publishes when a pass misses its deadline: every agent's
        terminal target withdrawn, so the repo walk yields nothing. No workspace
@@ -268,11 +293,7 @@ describe("reconcileRepoGroups", () => {
       target("ws-a", "the-mountain", "#5F7F2A"),
       target("ws-b", "the-mountain", "#5F7F2A"),
     ];
-    await reconcileRepoGroups({
-      runner: cmux,
-      provenance,
-      inputs: { mirrorGroups: true, targetsComplete: true, setGroupColor: colors.setGroupColor, targets: both },
-    });
+    await own(cmux, provenance, "window-1", "the-mountain", ["ws-a", "ws-b"]);
 
     /* ws-b's target went missing on a degraded pass. It has not left the repo,
        and evicting it is how a group loses its last real member. */
@@ -297,8 +318,7 @@ describe("reconcileRepoGroups", () => {
       targets: [target("ws-a", "the-mountain", "#5F7F2A")],
     };
 
-    await reconcileRepoGroups({ runner: cmux, provenance, inputs: healthy });
-    const first = provenance.list()[0]!.groupId;
+    const first = await own(cmux, provenance, "window-1", "the-mountain", ["ws-a"]);
     /* Two degraded passes, so the confirmation counter alone cannot be what
        saves the group here — this test answers for the completeness guard. */
     for (let pass = 0; pass < 2; pass += 1) {
@@ -314,7 +334,7 @@ describe("reconcileRepoGroups", () => {
        anchor workspace it auto-titles "Group N", and that row outlives the
        group forever — nine of them accumulated on 2026-08-13 alone. */
     expect(anchorRows(cmux, "window-1")).toHaveLength(1);
-    expect(cmux.methodCalls("workspace.group.create")).toHaveLength(1);
+    expect(cmux.methodCalls("workspace.group.create")).toHaveLength(0);
     expect(provenance.list().map((record) => record.groupId)).toEqual([first]);
   });
 
@@ -328,8 +348,7 @@ describe("reconcileRepoGroups", () => {
       setGroupColor: colors.setGroupColor,
       targets: [target("ws-a", "the-mountain", "#5F7F2A")],
     };
-    await reconcileRepoGroups({ runner: cmux, provenance, inputs: healthy });
-    const created = provenance.list()[0]!.groupId;
+    const created = await own(cmux, provenance, "window-1", "the-mountain", ["ws-a"]);
 
     /* Absent, back, absent. The confirmation must count CONSECUTIVE absences;
        a tally that only ever increments would dissolve on the second blip. */
@@ -347,9 +366,13 @@ describe("reconcileRepoGroups", () => {
       "window-2": ["ws-d"],
     });
     const colors = funnel(cmux);
+    const provenance = new MemoryRepoGroupProvenanceStore();
+    await own(cmux, provenance, "window-1", "the-mountain", [], "#5F7F2A");
+    await own(cmux, provenance, "window-1", "cooper-scheduler", [], "#2E66A8");
+    await own(cmux, provenance, "window-2", "the-mountain", [], "#5F7F2A");
     const result = await reconcileRepoGroups({
       runner: cmux,
-      provenance: new MemoryRepoGroupProvenanceStore(),
+      provenance,
       inputs: {
         mirrorGroups: true,
         targetsComplete: true,
@@ -374,7 +397,7 @@ describe("reconcileRepoGroups", () => {
       ([, group]) => group.name === "the-mountain" && group.windowId === "window-1",
     );
     expect(membersOf(cmux, mountainInWindowOne?.[0] ?? "")).toEqual(["ws-a", "ws-b"]);
-    expect(mountainInWindowOne?.[1].customColor).toBe("#5f7f2a");
+    expect(normalizeHex(mountainInWindowOne?.[1].customColor)).toBe("#5f7f2a");
     /* A repo spanning two windows gets a group in EACH window: cmux refuses a
        child workspace that is not in the group's window, so one global group
        would silently drop half the fleet. */
@@ -394,8 +417,9 @@ describe("reconcileRepoGroups", () => {
       targets: [target("ws-a", "the-mountain", "#5F7F2A"), target("ws-b", "the-mountain", "#5F7F2A")],
     };
 
+    await own(cmux, provenance, "window-1", "the-mountain", ["ws-a", "ws-b"]);
     const first = await reconcileRepoGroups({ runner: cmux, provenance, inputs });
-    expect(first.mutations).toBeGreaterThan(0);
+    expect(first.mutations).toBe(0);
     const mutationsAfterFirst = cmux.mutations;
     const writesAfterFirst = colors.writes.length;
 
@@ -416,23 +440,25 @@ describe("reconcileRepoGroups", () => {
       setGroupColor: colors.setGroupColor,
       targets: [target("ws-a", "the-mountain", "#5f7f2a")],
     };
-    await reconcileRepoGroups({ runner: cmux, provenance, inputs });
+    await own(cmux, provenance, "window-1", "the-mountain", ["ws-a"], "#5f7f2a");
     /* cmux hands colors back in ITS casing, not ours; comparing raw strings
        reads the same color as drift and turns every pass into a write forever. */
     const group = cmux.groups.get(cmux.groupOf("ws-a") ?? "");
     if (group) group.customColor = "#5F7F2A";
 
     const second = await reconcileRepoGroups({ runner: cmux, provenance, inputs });
-    expect(colors.writes).toHaveLength(1);
+    expect(colors.writes).toHaveLength(0);
     expect(second.mutations).toBe(0);
   });
 
   test("colors are written only through the funnel", async () => {
     const cmux = new FakeCmux({ "window-1": ["ws-a"] });
     const colors = funnel(cmux);
+    const provenance = new MemoryRepoGroupProvenanceStore();
+    await own(cmux, provenance, "window-1", "the-mountain", ["ws-a"], "#000000");
     await reconcileRepoGroups({
       runner: cmux,
-      provenance: new MemoryRepoGroupProvenanceStore(),
+      provenance,
       inputs: {
         mirrorGroups: true,
         targetsComplete: true,
@@ -448,9 +474,11 @@ describe("reconcileRepoGroups", () => {
   test("a funnel that refuses is reported, not swallowed", async () => {
     const cmux = new FakeCmux({ "window-1": ["ws-a"] });
     const colors = funnel(cmux, false);
+    const provenance = new MemoryRepoGroupProvenanceStore();
+    await own(cmux, provenance, "window-1", "the-mountain", ["ws-a"], "#000000");
     const result = await reconcileRepoGroups({
       runner: cmux,
-      provenance: new MemoryRepoGroupProvenanceStore(),
+      provenance,
       inputs: {
         mirrorGroups: true,
         targetsComplete: true,
@@ -465,16 +493,7 @@ describe("reconcileRepoGroups", () => {
     const cmux = new FakeCmux({ "window-1": ["ws-a", "ws-b"] });
     const provenance = new MemoryRepoGroupProvenanceStore();
     const colors = funnel(cmux);
-    await reconcileRepoGroups({
-      runner: cmux,
-      provenance,
-      inputs: {
-        mirrorGroups: true,
-        targetsComplete: true,
-        setGroupColor: colors.setGroupColor,
-        targets: [target("ws-a", "the-mountain", "#5F7F2A")],
-      },
-    });
+    await own(cmux, provenance, "window-1", "the-mountain", ["ws-a"]);
     cmux.failures.set("workspace.group.add", "not_found: workspace not found");
 
     const result = await reconcileRepoGroups({
@@ -498,16 +517,7 @@ describe("reconcileRepoGroups", () => {
     const cmux = new FakeCmux({ "window-1": ["ws-a"] });
     const provenance = new MemoryRepoGroupProvenanceStore();
     const colors = funnel(cmux);
-    await reconcileRepoGroups({
-      runner: cmux,
-      provenance,
-      inputs: {
-        mirrorGroups: true,
-        targetsComplete: true,
-        setGroupColor: colors.setGroupColor,
-        targets: [target("ws-a", "the-mountain", "#5F7F2A")],
-      },
-    });
+    await own(cmux, provenance, "window-1", "the-mountain", ["ws-a"]);
     expect(cmux.groups.size).toBe(1);
 
     /* One absent pass is not enough. A single sample is exactly what a degraded
@@ -550,16 +560,7 @@ describe("reconcileRepoGroups", () => {
     });
     const provenance = new MemoryRepoGroupProvenanceStore();
     const colors = funnel(cmux);
-    await reconcileRepoGroups({
-      runner: cmux,
-      provenance,
-      inputs: {
-        mirrorGroups: true,
-        targetsComplete: true,
-        setGroupColor: colors.setGroupColor,
-        targets: [target("ws-a", "the-mountain", "#5F7F2A")],
-      },
-    });
+    await own(cmux, provenance, "window-1", "the-mountain", ["ws-a"]);
     expect(cmux.groups.size).toBe(2);
 
     const result = await reconcileRepoGroups({
@@ -608,6 +609,131 @@ describe("reconcileRepoGroups", () => {
     expect(cmux.methodCalls("workspace.group.rename").every((params) => params.group_id !== "user-group")).toBe(true);
   });
 
+  test("a new window does not get a minted repo folder for a targeted workspace", async () => {
+    /* Drag orch into a fresh window. The first fix left those panes
+       "ungrouped", so the next tick created a repo folder, named it, painted
+       it, and ate the operator group. We only maintain groups we already
+       recorded for that window. */
+    const cmux = new FakeCmux({ "window-new": ["ws-orch"] });
+    const result = await reconcileRepoGroups({
+      runner: cmux,
+      provenance: new MemoryRepoGroupProvenanceStore(),
+      inputs: {
+        mirrorGroups: true,
+        targetsComplete: true,
+        setGroupColor: funnel(cmux).setGroupColor,
+        targets: [target("ws-orch", "example-repo", "#d70ae6")],
+      },
+    });
+    expect(cmux.methodCalls("workspace.group.create")).toEqual([]);
+    expect(cmux.groups.size).toBe(0);
+    expect(result.mutations).toBe(0);
+    expect(result.groups).toEqual([]);
+  });
+
+  test("a targeted workspace already in an operator group is not stolen into the repo group", async () => {
+    /* TINT-G used to file every repo-mapped workspace, including lanes the
+       operator already parked. create/add then pulled those members out of
+       the operator folder. Stealing members is the same annexation as
+       renaming an operator group. */
+    const cmux = new FakeCmux({ "window-1": ["ws-loose", "ws-program"] });
+    cmux.seedGroup("ant-program", {
+      windowId: "window-1",
+      name: "ANT · example-program",
+      customColor: "#5F7F2A",
+      members: ["ws-program"],
+    });
+    const provenance = new MemoryRepoGroupProvenanceStore();
+    const colors = funnel(cmux);
+    const ours = await own(cmux, provenance, "window-1", "example-repo", ["ws-loose"], "#d70ae6");
+    await reconcileRepoGroups({
+      runner: cmux,
+      provenance,
+      inputs: {
+        mirrorGroups: true,
+        targetsComplete: true,
+        setGroupColor: colors.setGroupColor,
+        targets: [
+          target("ws-loose", "example-repo", "#d70ae6"),
+          target("ws-program", "example-repo", "#d70ae6"),
+        ],
+      },
+    });
+
+    expect(cmux.groups.get("ant-program")).toEqual({
+      windowId: "window-1",
+      name: "ANT · example-program",
+      customColor: "#5F7F2A",
+      members: ["ws-program"],
+    });
+    expect(cmux.methodCalls("workspace.group.create").flatMap((params) =>
+      (params.child_workspace_ids as string[] | undefined) ?? [])).not.toContain("ws-program");
+    expect(cmux.methodCalls("workspace.group.add").every((params) =>
+      params.workspace_id !== "ws-program")).toBe(true);
+    expect(membersOf(cmux, ours)).toEqual(["ws-loose"]);
+  });
+
+  test("an already-mirrored repo group does not later add a workspace the operator grouped", async () => {
+    const cmux = new FakeCmux({ "window-1": ["ws-loose", "ws-program"] });
+    const provenance = new MemoryRepoGroupProvenanceStore();
+    const colors = funnel(cmux);
+    await own(cmux, provenance, "window-1", "example-repo", ["ws-loose"], "#d70ae6");
+    cmux.seedGroup("ant-program", {
+      windowId: "window-1",
+      name: "ANT · example-program",
+      customColor: "#5F7F2A",
+      members: ["ws-program"],
+    });
+    cmux.calls.length = 0;
+
+    const second = await reconcileRepoGroups({
+      runner: cmux,
+      provenance,
+      inputs: {
+        mirrorGroups: true,
+        targetsComplete: true,
+        setGroupColor: colors.setGroupColor,
+        targets: [
+          target("ws-loose", "example-repo", "#d70ae6"),
+          target("ws-program", "example-repo", "#d70ae6"),
+        ],
+      },
+    });
+
+    expect(second.mutations).toBe(0);
+    expect(cmux.groups.get("ant-program")?.members).toEqual(["ws-program"]);
+    expect(membersOf(cmux, provenance.list()[0]!.groupId)).toEqual(["ws-loose"]);
+    expect(cmux.methodCalls("workspace.group.add")).toEqual([]);
+  });
+
+  test("does not mint a competing repo group when every targeted workspace already sits in an operator group", async () => {
+    const cmux = new FakeCmux({ "window-1": ["ws-a", "ws-b"] });
+    cmux.seedGroup("ant-program", {
+      windowId: "window-1",
+      name: "ANT · example-program",
+      customColor: "#5F7F2A",
+      members: ["ws-a", "ws-b"],
+    });
+    const provenance = new MemoryRepoGroupProvenanceStore();
+    const result = await reconcileRepoGroups({
+      runner: cmux,
+      provenance,
+      inputs: {
+        mirrorGroups: true,
+        targetsComplete: true,
+        setGroupColor: funnel(cmux).setGroupColor,
+        targets: [
+          target("ws-a", "example-repo", "#d70ae6"),
+          target("ws-b", "example-repo", "#d70ae6"),
+        ],
+      },
+    });
+    expect(result.mutations).toBe(0);
+    expect(provenance.list()).toEqual([]);
+    expect([...cmux.groups.keys()]).toEqual(["ant-program"]);
+    expect(cmux.methodCalls("workspace.group.create")).toEqual([]);
+  });
+
   test("a workspace that left the repo is removed from our group only", async () => {
     const cmux = new FakeCmux({ "window-1": ["ws-a", "ws-b"] });
     const provenance = new MemoryRepoGroupProvenanceStore();
@@ -616,11 +742,7 @@ describe("reconcileRepoGroups", () => {
       target("ws-a", "the-mountain", "#5F7F2A"),
       target("ws-b", "the-mountain", "#5F7F2A"),
     ];
-    await reconcileRepoGroups({
-      runner: cmux,
-      provenance,
-      inputs: { mirrorGroups: true, targetsComplete: true, setGroupColor: colors.setGroupColor, targets: both },
-    });
+    await own(cmux, provenance, "window-1", "the-mountain", ["ws-a", "ws-b"]);
 
     await reconcileRepoGroups({
       runner: cmux,
@@ -641,8 +763,8 @@ describe("reconcileRepoGroups", () => {
       setGroupColor: colors.setGroupColor,
       targets: [target("ws-a", "the-mountain", "#5F7F2A")],
     };
-    await reconcileRepoGroups({ runner: cmux, provenance, inputs });
-    const recorded = provenance.list()[0]!;
+    const recordedId = await own(cmux, provenance, "window-1", "the-mountain", ["ws-a"]);
+    const recorded = provenance.list().find((row) => row.groupId === recordedId)!;
 
     cmux.failures.set("workspace.group.list", "socket timeout");
     const result = await reconcileRepoGroups({ runner: cmux, provenance, inputs });
@@ -681,8 +803,7 @@ describe("reconcileRepoGroups", () => {
       setGroupColor: colors.setGroupColor,
       targets: [target("ws-a", "the-mountain", "#5F7F2A")],
     };
-    await reconcileRepoGroups({ runner: cmux, provenance, inputs });
-    const groupId = provenance.list()[0]!.groupId;
+    const groupId = await own(cmux, provenance, "window-1", "the-mountain", ["ws-a"]);
     const anchor = cmux.groups.get(groupId)?.anchorWorkspaceId;
     expect(anchor).toBeTruthy();
 
@@ -701,17 +822,8 @@ describe("reconcileRepoGroups", () => {
     const cmux = new FakeCmux({ "window-1": ["ws-a", "ws-b"] });
     const provenance = new MemoryRepoGroupProvenanceStore();
     const colors = funnel(cmux);
-    await reconcileRepoGroups({
-      runner: cmux,
-      provenance,
-      inputs: {
-        mirrorGroups: true,
-        targetsComplete: true,
-        setGroupColor: colors.setGroupColor,
-        targets: [target("ws-a", "the-mountain", "#5F7F2A")],
-      },
-    });
-    const mountainGroupId = provenance.list()[0]!.groupId;
+    const mountainGroupId = await own(cmux, provenance, "window-1", "the-mountain", ["ws-a"]);
+    await own(cmux, provenance, "window-1", "cooper-scheduler", [], "#2E66A8");
     const anchor = cmux.groups.get(mountainGroupId)!.anchorWorkspaceId!;
 
     /* An anchor inherits its group's cwd, so the board maps it to a repo like
@@ -750,12 +862,14 @@ describe("repoGroupReconcileTick", () => {
     resetRepoGroupRegistrationForTests();
     const cmux = new FakeCmux({ "window-1": ["ws-a"] });
     const colors = funnel(cmux);
+    const provenance = new MemoryRepoGroupProvenanceStore();
+    await own(cmux, provenance, "window-1", "the-mountain", ["ws-a"]);
     registerRepoGroupInputs(() => ({
       mirrorGroups: true,
       targetsComplete: true,
       setGroupColor: colors.setGroupColor,
       targets: [target("ws-a", "the-mountain", "#5F7F2A")],
-    }), new MemoryRepoGroupProvenanceStore());
+    }), provenance);
     const result = await repoGroupReconcileTick(cmux);
     expect(result?.errors).toEqual([]);
     expect([...cmux.groups.values()][0]?.name).toBe("the-mountain");
