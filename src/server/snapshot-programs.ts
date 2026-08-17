@@ -14,6 +14,7 @@
 import { homedir } from "node:os";
 import { basename } from "node:path";
 import type {
+  AgentAck,
   AgentSnapshot,
   OutcomeState,
   ProgramRollup,
@@ -22,7 +23,7 @@ import type {
 } from "../shared/types";
 import { fnvKey } from "./repo-identity";
 import { isLive } from "./live";
-import { taskStateWantsHuman } from "./task-state";
+import { agentIsStripAlerting } from "./strip-alerting";
 import type { CmuxSurface, CollectedAgent } from "./types";
 
 export interface ProgramHint {
@@ -46,7 +47,11 @@ function slug(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "unassigned";
 }
 
-export function rollupFor(agents: readonly AgentSnapshot[], nowMs = Date.now()): ProgramRollup {
+export function rollupFor(
+  agents: readonly AgentSnapshot[],
+  nowMs = Date.now(),
+  acks: readonly AgentAck[] = [],
+): ProgramRollup {
   const outcomeCount = (outcome: OutcomeState): number => agents.filter((agent) => agent.outcome === outcome).length;
   return {
     total: agents.length,
@@ -56,19 +61,10 @@ export function rollupFor(agents: readonly AgentSnapshot[], nowMs = Date.now()):
     working: agents.filter((agent) => agent.activity === "working").length,
     idle: agents.filter((agent) => agent.activity === "idle").length,
     ended: agents.filter((agent) => agent.activity === "ended").length,
-    /* "Needs you" means AGENTS WAITING ON A HUMAN — the phrase the tab is named
-       for and the only number on the board that is a to-do list.
-
-       It used to count any agent whose outcome was not healthy, which is a
-       different population: a failed or blocked session is a fact about the
-       work, not a request for a person. Meanwhile totals.needsYou counted
-       system findings and the client counted attention signals, so one phrase
-       had three meanings and they could not agree. All three now read the same
-       collection. System findings keep their own name in totals. */
-    needsYou: agents.filter((agent) =>
-      agent.lifecycle !== "finished"
-      && agent.scope !== "retained"
-      && taskStateWantsHuman(agent)).length,
+    /* The exact unacked alert-strip population. Failures and explicit asks are
+       both alerting; Ack removes either from this digit without rewriting the
+       underlying agent state. System findings keep their own name in totals. */
+    needsYou: agents.filter((agent) => agentIsStripAlerting(agent, acks)).length,
     blocked: outcomeCount("blocked"),
     failed: outcomeCount("failed"),
     linked: agents.filter((agent) => agent.controlState === "linked").length,

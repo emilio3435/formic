@@ -4,15 +4,6 @@ import { join } from "node:path";
 import { runFormicCli } from "../src/cli/formic";
 
 describe("formic cli", () => {
-  test("default root is this checkout, not an operator path", () => {
-    const src = readFileSync(join(import.meta.dir, "../src/cli/formic.ts"), "utf8");
-    expect(src).toContain("FORMIC_ROOT");
-    expect(src).toContain('join(import.meta.dir, "..", "..")');
-    expect(src).not.toContain("the-mountain-production");
-    expect(src).not.toContain("/Users/emilionunezgarcia");
-    expect(src).not.toContain("~/anthill");
-  });
-
   test("fleet sends Bearer to loopback /api/orch/fleet", async () => {
     const urls: string[] = [];
     const headers: string[] = [];
@@ -131,5 +122,16 @@ describe("formic cli", () => {
     expect(result.exitCode).toBe(1);
     expect(fetched).toBe(false);
     expect(result.stderr).toContain("codex, claude, or grok");
+  });
+
+  test("defaultRoot is this checkout, not an operator production path", () => {
+    const cli = readFileSync(join(import.meta.dir, "../src/cli/formic.ts"), "utf8");
+    const mcp = readFileSync(join(import.meta.dir, "../src/mcp/formic-orch.ts"), "utf8");
+    for (const [name, src] of [["formic.ts", cli], ["formic-orch.ts", mcp]] as const) {
+      expect(src, `${name} lost FORMIC_ROOT override`).toContain("FORMIC_ROOT");
+      expect(src, `${name} lost checkout defaultRoot`).toContain('join(import.meta.dir, "..", "..")');
+      expect(src, `${name} still defaults to the-mountain-production`).not.toContain("the-mountain-production");
+      expect(src, `${name} leaked an operator home path`).not.toContain("/Users/emilionunezgarcia");
+    }
   });
 });

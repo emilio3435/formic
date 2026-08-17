@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 // The dependency-free client has no declaration files; agent-model is pure.
 // @ts-expect-error intentional untyped import
-import { alertFirst } from "../src/web/agent-model.js";
+import { alertFirst, alertRecent } from "../src/web/agent-model.js";
 
 // app.js exposes the pair on TheAntHill; import shape mirrors web-client.test.ts.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -37,8 +37,9 @@ describe("alertFirst", () => {
   });
 
   test("ties keep input order — the sort is stable in both partitions", () => {
-    // Alert order is the server's order, not recency: two alerting rows keep
-    // their relative order, and so do the calm rows they passed.
+    // The PARTITION is the server's order: alertFirst says nothing about which
+    // ask came first, only which rows are hot. Recency is alertRecent's job
+    // (below), and it is the only thing licensed to reorder within the bucket.
     const rows = [{ id: "s1", hot: true }, { id: "s2", hot: false }, { id: "s3", hot: true }, { id: "s4", hot: false }];
     expect(alertFirst(rows, byFlag).map((r: { id: string }) => r.id)).toEqual(["s1", "s3", "s2", "s4"]);
   });
@@ -49,6 +50,118 @@ describe("alertFirst", () => {
     const rows = [{ id: "x", hot: false }, { id: "y", hot: true }];
     expect(alertFirst(rows, byFlag)).toBe(rows);
     expect(rows[0].id).toBe("y");
+  });
+});
+
+/* B1 — recency, and only recency, inside the hot bucket.
+
+   The key is `alertSince`: first-seen of the CURRENT alertFingerprint, which is
+   the only clock on the record that means "this ask started". Every other one
+   the row carries advances for reasons that are not a new ask —
+   `hookLifecycleAt` re-stamps the same needsInput every ~25s, `lastHumanFacingAt`
+   advances on ordinary replies, `updatedAt` is heartbeats — so ranking on any of
+   them ships a queue that reshuffles while nobody asked anything. The injected
+   `sinceOf` is what keeps that decision at the CALL SITE, where app.js can be
+   pinned to `agent.alertSince` and nothing else. */
+describe("B1 alertRecent", () => {
+  const byFlag = (a: { hot: boolean }) => a.hot;
+  const sinceOf = (a: { alertSince?: string }) => a.alertSince;
+
+  test("orders the hot bucket by alertSince desc and leaves calm order alone", () => {
+    const rows = [
+      { id: "old-hot", hot: true, alertSince: "2026-08-16T10:00:00.000Z" },
+      { id: "calm-a", hot: false },
+      { id: "new-hot", hot: true, alertSince: "2026-08-16T12:00:00.000Z" },
+      { id: "calm-b", hot: false },
+      { id: "mid-hot", hot: true, alertSince: "2026-08-16T11:00:00.000Z" },
+    ];
+    alertFirst(rows, byFlag);
+    alertRecent(rows, byFlag, sinceOf);
+    expect(rows.map((r) => r.id)).toEqual(["new-hot", "mid-hot", "old-hot", "calm-a", "calm-b"]);
+  });
+
+  test("missing alertSince sorts last among hot and keeps input order", () => {
+    // The field is absent whenever the server has not stamped one — an older
+    // snapshot, or a row that started alerting between the store's observe and
+    // this publish. Undated asks must not jump the queue and must not scramble
+    // amongst themselves; they fall in behind every dated one, in server order.
+    const rows = [
+      { id: "undated", hot: true },
+      { id: "dated", hot: true, alertSince: "2026-08-16T12:00:00.000Z" },
+      { id: "undated-2", hot: true },
+    ];
+    alertFirst(rows, byFlag);
+    alertRecent(rows, byFlag, sinceOf);
+    expect(rows.map((r) => r.id)).toEqual(["dated", "undated", "undated-2"]);
+  });
+
+  test("an unparseable alertSince is treated as absent, not as epoch zero", () => {
+    // Date.parse of junk is NaN, and NaN arithmetic in a comparator silently
+    // reports "equal" — which would leave a corrupt stamp sitting wherever it
+    // happened to be instead of behind the rows that have a real one.
+    const rows = [
+      { id: "junk", hot: true, alertSince: "not-a-date" },
+      { id: "dated", hot: true, alertSince: "2026-08-16T09:00:00.000Z" },
+    ];
+    alertFirst(rows, byFlag);
+    alertRecent(rows, byFlag, sinceOf);
+    expect(rows.map((r) => r.id)).toEqual(["dated", "junk"]);
+  });
+
+  test("equal alertSince keeps input order — ties are still the server's order", () => {
+    const rows = [
+      { id: "t1", hot: true, alertSince: "2026-08-16T12:00:00.000Z" },
+      { id: "t2", hot: true, alertSince: "2026-08-16T12:00:00.000Z" },
+      { id: "t3", hot: true, alertSince: "2026-08-16T12:00:00.000Z" },
+    ];
+    alertFirst(rows, byFlag);
+    alertRecent(rows, byFlag, sinceOf);
+    expect(rows.map((r) => r.id)).toEqual(["t1", "t2", "t3"]);
+  });
+
+  test("calm rows are never reordered, however recent their own ask once was", () => {
+    // The hot PREFIX is the whole jurisdiction. A calm row carrying a stale
+    // alertSince (acked, or no longer alerting) must not be ranked against the
+    // live queue — it is not in the queue.
+    const rows = [
+      { id: "hot", hot: true, alertSince: "2026-08-16T08:00:00.000Z" },
+      { id: "calm-late", hot: false, alertSince: "2026-08-16T23:00:00.000Z" },
+      { id: "calm-early", hot: false, alertSince: "2026-08-16T01:00:00.000Z" },
+    ];
+    alertFirst(rows, byFlag);
+    alertRecent(rows, byFlag, sinceOf);
+    expect(rows.map((r) => r.id)).toEqual(["hot", "calm-late", "calm-early"]);
+  });
+
+  test("sorts in place and returns the same array", () => {
+    const rows = [
+      { id: "a", hot: true, alertSince: "2026-08-16T10:00:00.000Z" },
+      { id: "b", hot: true, alertSince: "2026-08-16T11:00:00.000Z" },
+    ];
+    expect(alertRecent(rows, byFlag, sinceOf)).toBe(rows);
+    expect(rows[0].id).toBe("b");
+  });
+});
+
+/* B2 — the sort's key is the published field, not a clock this client could
+   invent. Source-level because the wrong key is invisible to a unit test that
+   injects its own accessor: alertRecent is correct with ANY sinceOf, and the
+   defect this pins is app.js handing it the wrong one. */
+describe("B2 the board ranks on alertSince and on nothing else", () => {
+  test("the call sites read agent.alertSince", () => {
+    expect(source).toContain("alertRecent");
+    expect(source).toMatch(/const sinceOf = \(a\) => a\.alertSince;/);
+  });
+
+  test("no ranking comparator reaches for a transcript or heartbeat clock", () => {
+    // hookLifecycleAt re-stamps the same needsInput; lastHumanFacingAt advances
+    // on ordinary replies; updatedAt is heartbeats. None of the three may appear
+    // inside the recency helper or the strip's comparator.
+    const helper = source.match(/export function alertRecent\([\s\S]*?\n\}/)?.[0] ?? "";
+    expect(helper).not.toBe("");
+    for (const clock of ["hookLifecycleAt", "lastHumanFacingAt", "updatedAt"]) {
+      expect(helper).not.toContain(clock);
+    }
   });
 });
 
@@ -140,7 +253,10 @@ describe("the latest mover flight owns the row's lift", () => {
     const live: FakeAnim[] = [];
     let top = 0;
     return {
-      dataset: { fkey, hot: "false" },
+      // hot = alert-list membership; alertRank = position INSIDE that list.
+      // Both are stamps renderAgentRow writes, and the float reads both: a
+      // recency reorder moves a row without touching its membership.
+      dataset: { fkey, hot: "false", alertRank: "" },
       classList: {
         contains: (cls: string) => classes.has(cls),
         add: (cls: string) => { classes.add(cls); },
@@ -289,6 +405,60 @@ describe("the latest mover flight owns the row's lift", () => {
     await flush();
     expect(row.classList.contains("is-floating")).toBe(false);
     expect(row.classList.contains("is-landing")).toBe(false);
+  });
+
+  test("B3 a recency reorder of already-hot rows flies — rank change is a mover", async () => {
+    /* The teleport this closes: two rows that were ALREADY hot swap places
+       because a newer ask arrived. Membership did not flip for either of them,
+       so the pre-recency mover test (`prior.alerted !== marked`) reports no
+       mover at all, playRowFlights returns at its gate, and the reconcile drops
+       both rows into their new homes between frames. The eye is given no thread
+       to follow on the one surface whose whole job is "look here". */
+    const top = fakeRow("agent:rank-top");
+    const below = fakeRow("agent:rank-below");
+    const root = rootOf([top, below]);
+    top.dataset.hot = "true"; top.dataset.alertRank = "0"; top.setTop(0);
+    below.dataset.hot = "true"; below.dataset.alertRank = "1"; below.setTop(40);
+    const before = M.captureRowFlights(root);
+    // The newer ask lands on the lower row: ranks swap, membership does not.
+    top.dataset.alertRank = "1"; top.setTop(40);
+    below.dataset.alertRank = "0"; below.setTop(0);
+    M.playRowFlights(root, before);
+    expect(top.classList.contains("is-floating")).toBe(true);
+    expect(below.classList.contains("is-floating")).toBe(true);
+    expect(top.live[0].frames[0].transform).toBe("translateY(-40px)");
+    expect(below.live[0].frames[0].transform).toBe("translateY(40px)");
+    top.live[0].resolve();
+    below.live[0].resolve();
+    await flush();
+  });
+
+  test("B3 a calm row's rank stamp cannot fly it — the gate is still membership or hot-rank", () => {
+    /* Rank is meaningless off the list, and the stamp is empty there. A calm
+       row that merely re-homed (a hot row above it left the section) must stay
+       motionless: making "the row moved" the gate would fly the whole board on
+       every paint, which is the noise the mover gate exists to prevent. */
+    const calm = fakeRow("agent:calm-rank");
+    const root = rootOf([calm]);
+    calm.setTop(100);
+    const before = M.captureRowFlights(root);
+    calm.setTop(0);
+    M.playRowFlights(root, before);
+    expect(calm.live.length).toBe(0);
+    expect(calm.classList.contains("is-floating")).toBe(false);
+  });
+
+  test("B3 a hot row whose rank is unchanged does not fly on a routine repaint", () => {
+    // Tokens tick and summaries update every few seconds. A hot row holding
+    // rank 0 through all of that must not shimmer up and down for it.
+    const hot = fakeRow("agent:steady");
+    const root = rootOf([hot]);
+    hot.dataset.hot = "true"; hot.dataset.alertRank = "0"; hot.setTop(20);
+    const before = M.captureRowFlights(root);
+    hot.setTop(0); // the band above it grew a row; nothing about the ask moved
+    M.playRowFlights(root, before);
+    expect(hot.live.length).toBe(0);
+    expect(hot.classList.contains("is-floating")).toBe(false);
   });
 
   test("presented-outcome ink without a membership flip never flies", () => {

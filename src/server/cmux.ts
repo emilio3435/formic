@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { CmuxNotificationSummary, SessionIdentityClaim } from "../shared/types";
 import { cmuxCommand } from "./cmux-auth";
+import { parseCmuxGroups } from "./cmux-groups";
 import type {
   CmuxNotification,
   CmuxSurface,
@@ -767,6 +768,78 @@ export async function collectCmuxSidebar(
     if (!byWorkspace.has(workspace.workspaceId)) byWorkspace.set(workspace.workspaceId, workspace);
   }
   return { value: [...byWorkspace.values()], errors };
+}
+
+export interface CmuxWindowGroups {
+  windowId: string;
+  groups: import("./cmux-groups").CmuxGroup[];
+}
+
+export async function collectCmuxGroups(
+  runner: CommandRunner,
+  executable = DEFAULT_CMUX_EXECUTABLE,
+  budget: CmuxCollectorBudget = {},
+): Promise<CollectionResult<CmuxWindowGroups[]>> {
+  const rpcTimeoutMs = rpcTimeoutFor(budget.deadlineMs, 2);
+  const windows = await runWithinSignal(
+    runner,
+    cmuxCommand(executable, ["rpc", "window.list", "{}"]),
+    rpcTimeoutMs,
+    budget.signal,
+  );
+  if (executableMissing(windows)) return { value: [], errors: [], absent: true };
+  if (windows.timedOut) return { value: [], errors: ["cmux window discovery timed out"] };
+  if (windows.exitCode !== 0) {
+    return {
+      value: [],
+      errors: [`cmux window discovery exited ${windows.exitCode}: ${windows.stderr.trim() || "no stderr"}`],
+    };
+  }
+  let windowIds: string[];
+  try {
+    windowIds = parseCmuxWindowIds(windows.stdout);
+  } catch (error) {
+    return {
+      value: [],
+      errors: [`cmux window discovery returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`],
+    };
+  }
+
+  const errors: string[] = [];
+  const perWindow = await Promise.all(windowIds.map(async (windowId): Promise<CmuxWindowGroups | undefined> => {
+    const result = await runWithinSignal(
+      runner,
+      cmuxCommand(executable, [
+        "rpc",
+        "workspace.group.list",
+        JSON.stringify({ window_id: windowId }),
+      ]),
+      rpcTimeoutMs,
+      budget.signal,
+    );
+    if (result.timedOut) {
+      errors.push(`cmux workspace group discovery for window ${windowId} timed out`);
+      return undefined;
+    }
+    if (result.exitCode !== 0) {
+      errors.push(
+        `cmux workspace group discovery for window ${windowId} exited ${result.exitCode}: ${result.stderr.trim() || "no stderr"}`,
+      );
+      return undefined;
+    }
+    try {
+      return { windowId, groups: parseCmuxGroups(result.stdout) };
+    } catch (error) {
+      errors.push(
+        `cmux workspace group discovery for window ${windowId} returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return undefined;
+    }
+  }));
+  return {
+    value: perWindow.filter((window): window is CmuxWindowGroups => window !== undefined),
+    errors,
+  };
 }
 
 export function parseCmuxNotifications(output: string): CmuxNotification[] {

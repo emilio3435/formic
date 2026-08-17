@@ -496,6 +496,8 @@ export interface AgentSnapshot {
   surfaceTitle?: string;
   /** Latest readable user/assistant prose with a directly associated source timestamp. */
   lastHumanFacingAt?: string;
+  /** First time the current alertFingerprint was seen. Absent when not alerting. */
+  alertSince?: string;
   /** Newest user / assistant / tool / system transcript event. Not collector bookkeeping. */
   lastThreadAt?: string;
   /** Start of the current open working streak. Absent when that streak has closed. */
@@ -547,6 +549,8 @@ export interface AgentSnapshot {
   tests?: { state: "passing" | "failing" | "running" | "unknown"; summary?: string };
   gates: string[];
   target: CmuxTarget;
+  /** Operator team overlay from a cmux group. Absent when ungrouped — repo fallback. */
+  team?: { id: string; name: string; hex: string };
   /** Evidence trail behind `target`; excluded from the snapshot fingerprint. */
   identityTrace?: IdentityTrace;
   controls: ControlCapability[];

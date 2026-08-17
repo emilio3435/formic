@@ -1,7 +1,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { EndEvidence, TokenUsage } from "../shared/types";
-import { makeAgent, type ParseMetadata } from "./collectors";
+import { claudeContextWindow, makeAgent, type ParseMetadata } from "./collectors";
 import type { HumanMessageCandidate } from "./human-message";
 import type { LifecycleThresholds } from "./lifecycle";
 import type { CollectedAgent, CollectionResult } from "./types";
@@ -215,14 +215,20 @@ export function parseMuseSession(
 
   if (!updatedAt && messages.length === 0 && !sessionExit) return null;
 
+  const contextWindow = claudeContextWindow(model);
   const tokens: TokenUsage = sawUsage
     ? {
         sessionTotal,
         sessionProcessed,
         scope: "session",
         provenance: "observed",
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
       }
-    : { scope: "unknown", provenance: "unknown" };
+    : {
+        scope: "unknown",
+        provenance: "unknown",
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
+      };
 
   const endEvidence: EndEvidence | undefined = sessionExit
     ? "session-exit"

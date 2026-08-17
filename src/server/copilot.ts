@@ -2,7 +2,7 @@ import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { basename, join, normalize } from "node:path";
 import type { EndEvidence, TokenUsage } from "../shared/types";
 import { instanceIdFor } from "./collector-instances";
-import { makeAgent, type ParseMetadata } from "./collectors";
+import { claudeContextWindow, makeAgent, type ParseMetadata } from "./collectors";
 import type { HumanMessageCandidate } from "./human-message";
 import type { LifecycleThresholds } from "./lifecycle";
 import type { CollectedAgent, CollectionResult } from "./types";
@@ -197,14 +197,20 @@ export function parseCopilotSession(
 
   if (!updatedAt && messages.length === 0 && !sessionExit) return null;
 
+  const contextWindow = claudeContextWindow(model);
   const tokens: TokenUsage = sawUsage
     ? {
         sessionTotal,
         sessionProcessed,
         scope: "session",
         provenance: "observed",
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
       }
-    : { scope: "unknown", provenance: "unknown" };
+    : {
+        scope: "unknown",
+        provenance: "unknown",
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
+      };
 
   const endEvidence: EndEvidence | undefined = sessionExit ? "session-exit" : undefined;
 

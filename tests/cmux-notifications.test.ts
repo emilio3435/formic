@@ -326,11 +326,82 @@ describe("SYNC-NB notification verbs", () => {
 
 describe("POST /api/sync/notifications", () => {
   test("routes only exact mark_read/dismiss requests through the funnel under the same-origin gate", async () => {
-    const current = buildSnapshot({
-      agents: [],
-      surfaces: [],
-      archiveStore: new MemoryArchiveStore(),
-    });
+    const now = Date.parse("2026-08-17T12:01:00.000Z");
+    const ackStore = new MemoryAckStore(() => now);
+    const toastOwner: AgentSnapshot = {
+      id: "codex:funnel",
+      provider: "codex",
+      sourceSessionId: "funnel",
+      displayName: "Funnel",
+      programId: "fixture",
+      status: "waiting",
+      statusReason: "Waiting.",
+      activity: "idle",
+      lifecycle: "waiting",
+      scope: "observed",
+      processState: "unknown",
+      outcome: "healthy",
+      attention: true,
+      attentionSignal: { kind: "input-requested", evidence: "PR merged." },
+      updatedAt: "2026-08-17T12:00:00.000Z",
+      lastHumanMessage: null,
+      tokens: { provenance: "unknown" },
+      artifacts: [],
+      gates: [],
+      target: {
+        kind: "cmux",
+        resolution: "exact",
+        surfaceId: "SURFACE-1",
+        attestation: "live",
+      },
+      controls: [],
+    };
+    const asking: AgentSnapshot = {
+      ...toastOwner,
+      id: "codex:asking",
+      sourceSessionId: "asking",
+      displayName: "Asking",
+      hookLifecycle: "needsInput",
+      attentionSignal: undefined,
+      target: {
+        kind: "cmux",
+        resolution: "exact",
+        surfaceId: "SURFACE-HOOK",
+        attestation: "live",
+      },
+    };
+    const current = {
+      ...buildSnapshot({
+        agents: [],
+        surfaces: [],
+        archiveStore: new MemoryArchiveStore(),
+        cmuxNotifications: [
+          {
+            id: "NOTICE-1",
+            workspaceId: "WS-1",
+            surfaceId: "SURFACE-1",
+            title: "Completed",
+            subtitle: "",
+            body: "PR merged.",
+            isRead: false,
+            createdAt: "2026-08-17T12:00:00.000Z",
+          },
+          {
+            id: "NOTICE-HOOK",
+            workspaceId: "WS-HOOK",
+            surfaceId: "SURFACE-HOOK",
+            title: "Question",
+            subtitle: "",
+            body: "Need a decision.",
+            isRead: false,
+            createdAt: "2026-08-17T12:00:00.000Z",
+          },
+        ],
+      }),
+      programs: [
+        { id: "fixture", name: "Fixture", agents: [toastOwner, asking] },
+      ],
+    };
     const state: MountainAppState = {
       get: () => current,
       subscribe: () => () => {},
@@ -341,6 +412,7 @@ describe("POST /api/sync/notifications", () => {
       state,
       runner,
       archiveStore: new MemoryArchiveStore(),
+      ackStore,
       webRoot: import.meta.dir,
     });
     const commands: string[][] = [];
@@ -362,9 +434,19 @@ describe("POST /api/sync/notifications", () => {
     );
 
     try {
+      const hookRead = await fetch(request({ action: "mark_read", id: "NOTICE-HOOK" }));
+      expect(hookRead.status).toBe(200);
+      expect(await hookRead.json()).toEqual({ ok: true });
+      expect(ackStore.list()).toEqual([]);
+
       const markRead = await fetch(request({ action: "mark_read", id: "NOTICE-1" }));
       expect(markRead.status).toBe(200);
-      expect(await markRead.json()).toEqual({ ok: true });
+      expect(await markRead.json()).toMatchObject({
+        ok: true,
+        ack: { agentId: "codex:funnel" },
+      });
+      expect(ackStore.list()).toHaveLength(1);
+
       const dismiss = await fetch(request({ action: "dismiss", id: "NOTICE-2" }));
       expect(dismiss.status).toBe(200);
       expect(await dismiss.json()).toEqual({ ok: true });
@@ -374,6 +456,7 @@ describe("POST /api/sync/notifications", () => {
       const all = await fetch(request({ action: "all", id: "NOTICE-4" }));
       expect(all.status).toBe(400);
       expect(commands.map((command) => command[2])).toEqual([
+        "notification.mark_read",
         "notification.mark_read",
         "notification.dismiss",
       ]);
@@ -436,6 +519,51 @@ describe("SYNC-NB alert fingerprints and Ack store", () => {
       ...signal,
       attentionSignal: { kind: "question-pending", evidence: "Should I publish this now?" },
     })).not.toBe(alertFingerprintFor(signal));
+  });
+
+  test("A1 stalled-active fingerprint ignores the ticking minute count", () => {
+    const base = {
+      id: "claude:stall",
+      attentionSignal: {
+        kind: "stalled-active" as const,
+        evidence: "Hook idle for 31 minutes; manifest declares active.",
+      },
+    } as AgentSnapshot;
+    const later = {
+      ...base,
+      attentionSignal: {
+        kind: "stalled-active" as const,
+        evidence: "Hook idle for 45 minutes; manifest declares active.",
+      },
+    } as AgentSnapshot;
+    expect(alertFingerprintFor(base)).toBe("signal:stalled-active");
+    expect(alertFingerprintFor(later)).toBe(alertFingerprintFor(base));
+  });
+
+  test("A2 question-pending fingerprint still changes when evidence changes", () => {
+    const first = {
+      id: "claude:q",
+      attentionSignal: { kind: "question-pending" as const, evidence: "May I edit AUTH?" },
+    } as AgentSnapshot;
+    const second = {
+      ...first,
+      attentionSignal: { kind: "question-pending" as const, evidence: "May I edit ROUTES?" },
+    } as AgentSnapshot;
+    expect(alertFingerprintFor(second)).not.toBe(alertFingerprintFor(first));
+  });
+
+  test("C1 attention overlay without a signal fingerprints as attention:unread", () => {
+    const overlay = baseAlertAgent({
+      hookLifecycle: "idle",
+      outcome: "healthy",
+      attention: true,
+      attentionSignal: undefined,
+    });
+    expect(alertFingerprintFor(overlay)).toBe("attention:unread");
+    expect(alertFingerprintFor({
+      ...overlay,
+      attentionSignal: { kind: "input-requested", evidence: "PR merged." },
+    })).toMatch(/^signal:input-requested:[a-z0-9]+$/);
   });
 
   test("JsonAckStore persists the frozen AgentAck shape and explicit delete", async () => {
@@ -549,6 +677,7 @@ describe("PUT/DELETE /api/sync/ack/:agentId", () => {
           ackedAt: "2026-08-13T10:02:00.000Z",
           alertFingerprint: initialFingerprint,
         },
+        cmuxWarnings: [],
       });
       expect(state.get().acks).toEqual([...ackStore.list()]);
 
@@ -608,6 +737,136 @@ describe("PUT/DELETE /api/sync/ack/:agentId", () => {
       expect(quiet.status).toBe(409);
       expect(await quiet.json()).toMatchObject({ error: { code: "AGENT_NOT_ALERTING" } });
     } finally {
+      fetch.dispose();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("PUT ack persists first and marks the attested-surface unread toast read", async () => {
+    const now = Date.parse("2026-08-13T10:02:00.000Z");
+    const ackStore = new MemoryAckStore(() => now);
+    const home = await mkdtemp(join(tmpdir(), "formic-ack-cmux-clear-"));
+    const hookRoot = join(home, ".cmuxterm");
+    const sessionRoot = join(home, ".codex", "sessions");
+    const transcriptPath = join(sessionRoot, "ack-agent.jsonl");
+    await mkdir(hookRoot, { recursive: true });
+    await mkdir(sessionRoot, { recursive: true });
+    await writeFile(transcriptPath, [
+      JSON.stringify({
+        type: "session_meta",
+        timestamp: "2026-08-13T09:58:00.000Z",
+        payload: { id: "ack-agent", cwd: home },
+      }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-13T09:58:30.000Z",
+        payload: { type: "user_message", message: "Please prepare the change." },
+      }),
+      JSON.stringify({
+        type: "response_item",
+        timestamp: "2026-08-13T09:59:00.000Z",
+        payload: {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Which option should I use?" }],
+        },
+      }),
+    ].join("\n") + "\n");
+    await writeFile(join(hookRoot, "codex-hook-sessions.json"), JSON.stringify({
+      version: 1,
+      sessions: {
+        "ack-agent": {
+          sessionId: "ack-agent",
+          surfaceId: "SURFACE-ACK",
+          workspaceId: "WORKSPACE-ACK",
+          cwd: home,
+          pid: 4242,
+          agentLifecycle: "needsInput",
+          updatedAt: Date.parse("2026-08-13T10:00:00.000Z") / 1_000,
+        },
+      },
+    }));
+    const unreadNotice: CmuxNotificationSummary = {
+      id: "NOTICE-ACK",
+      workspaceId: "WORKSPACE-ACK",
+      surfaceId: "SURFACE-ACK",
+      title: "Completed",
+      subtitle: "",
+      body: "PR merged.",
+      isRead: false,
+      createdAt: "2026-08-13T09:00:00.000Z",
+    };
+    const collectors: HubCollectors = {
+      sessions: async () => collectSessions(home, undefined, undefined, {
+        hookProcessStarts: () => new Map(),
+      }),
+      cmux: async () => ({
+        value: [{
+          surfaceId: "SURFACE-ACK",
+          workspaceId: "WORKSPACE-ACK",
+          sourceSessionIds: ["ack-agent"],
+          cwd: home,
+        }],
+        errors: [],
+      }),
+      notifications: async () => ({ value: [], errors: [] }),
+      syncNotifications: async () => ({ value: [unreadNotice], errors: [] }),
+      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+    };
+    const archiveStore = new MemoryArchiveStore();
+    const runner: CommandRunner = { run: async () => ok({}) };
+    const state = new HubState(runner, archiveStore, [], { collectors, ackStore });
+    await state.refresh({ cmux: true });
+    const hookAgent = state.get().programs.flatMap((program) => program.agents)[0]!;
+    expect(hookAgent?.id).toBe("codex:ack-agent");
+    expect(hookAgent.target).toMatchObject({
+      surfaceId: "SURFACE-ACK",
+      resolution: "exact",
+    });
+    const fingerprint = alertFingerprintFor(hookAgent);
+    expect(fingerprint).toMatch(/^hook:needsInput:/);
+    if (!fingerprint) throw new Error("expected a hook fingerprint");
+    const commands: string[][] = [];
+    const run = spyOn(BunCommandRunner.prototype, "run").mockImplementation(
+      async (command: readonly string[]): Promise<CommandResult> => {
+        commands.push([...command]);
+        return ok({ result: { id: JSON.parse(command[3] ?? "null").id } });
+      },
+    );
+    const fetch = createMountainFetch({
+      state,
+      runner,
+      archiveStore,
+      ackStore,
+      now: () => now,
+      webRoot: import.meta.dir,
+    });
+    configureCmuxActions({ runner: new BunCommandRunner() });
+    try {
+      const put = await fetch(new Request(
+        `http://127.0.0.1:4701/api/sync/ack/${encodeURIComponent("codex:ack-agent")}`,
+        { method: "PUT", headers: { origin: "http://127.0.0.1:4701" } },
+      ));
+      expect(put.status).toBe(200);
+      expect(await put.json()).toEqual({
+        ok: true,
+        ack: {
+          agentId: "codex:ack-agent",
+          ackedAt: "2026-08-13T10:02:00.000Z",
+          alertFingerprint: fingerprint,
+        },
+        cmuxWarnings: [],
+      });
+      expect(ackStore.list()).toEqual([{
+        agentId: "codex:ack-agent",
+        ackedAt: "2026-08-13T10:02:00.000Z",
+        alertFingerprint: fingerprint,
+      }]);
+      expect(commands.map((command) => command[2])).toEqual(["notification.mark_read"]);
+      expect(JSON.parse(commands[0]![3] ?? "null")).toEqual({ id: "NOTICE-ACK" });
+    } finally {
+      resetCmuxActionsMemory();
+      run.mockRestore();
       fetch.dispose();
       await rm(home, { recursive: true, force: true });
     }

@@ -90,6 +90,15 @@ describe("a provider that was never installed is absent, not degraded", () => {
       .toEqual({ value: [], errors: [] });
   });
 
+  test("Copilot is absent only when its home is missing", async () => {
+    const home = emptyHome();
+    expect(await collectSessionProvider("copilot", home))
+      .toEqual({ value: [], errors: [], absent: true });
+    mkdirSync(join(home, ".copilot"));
+    expect(await collectSessionProvider("copilot", home))
+      .toEqual({ value: [], errors: [] });
+  });
+
   test("Antigravity is absent only when all three trees are missing", async () => {
     for (const tree of [".gemini/antigravity-cli", ".gemini/antigravity", ".gemini/antigravity-ide"]) {
       const home = emptyHome();
@@ -109,15 +118,6 @@ describe("a provider that was never installed is absent, not degraded", () => {
        dormant, so a home containing only cron is present rather than absent. */
     mkdirSync(join(home, ".hermes/cron"), { recursive: true });
     expect(await collectSessionProvider("hermes", home))
-      .toEqual({ value: [], errors: [] });
-  });
-
-  test("Copilot is absent only when its home is missing", async () => {
-    const home = emptyHome();
-    expect(await collectSessionProvider("copilot", home))
-      .toEqual({ value: [], errors: [], absent: true });
-    mkdirSync(join(home, ".copilot"));
-    expect(await collectSessionProvider("copilot", home))
       .toEqual({ value: [], errors: [] });
   });
 

@@ -492,7 +492,7 @@ describe("Grok Build ACP transcript lines", () => {
   });
 
   test("T-chat-history-enrichment: sibling history fills assistant speech and tool result bodies", async () => {
-    const root = mkdtempSync(join(tmpdir(), "formic-grok-transcript-"));
+    const root = mkdtempSync(join(tmpdir(), "anthill-grok-transcript-"));
     const source = join(root, "updates.jsonl");
     writeFileSync(source, [
       {

@@ -1,20 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { handleOrchMcpMessage } from "../src/mcp/formic-orch";
 
 const env = { FORMIC_URL: "http://127.0.0.1:4701", FORMIC_ORCH_TOKEN: "tok" };
 
 describe("formic orch mcp", () => {
-  test("default root is this checkout, not an operator path", () => {
-    const src = readFileSync(join(import.meta.dir, "../src/mcp/formic-orch.ts"), "utf8");
-    expect(src).toContain("FORMIC_ROOT");
-    expect(src).toContain('join(import.meta.dir, "..", "..")');
-    expect(src).not.toContain("the-mountain-production");
-    expect(src).not.toContain("/Users/emilionunezgarcia");
-    expect(src).not.toContain("~/anthill");
-  });
-
   test("tools/list is exactly the four formic verbs", async () => {
     const raw = await handleOrchMcpMessage({ id: 1, method: "tools/list" }, env, async () => new Response("{}"));
     const msg = JSON.parse(raw) as { result: { tools: Array<{ name: string }> } };

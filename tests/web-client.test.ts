@@ -2420,6 +2420,100 @@ describe("views split Now from History", () => {
   });
 });
 
+/* B4 — the lookback is a recency window over `updatedAt`, and `updatedAt` is
+   heartbeats. The rows it excludes FIRST are the ones quiet longest, which on
+   this board is exactly the blocked-on-a-human population it exists to surface:
+   a lane that asked a question eight hours ago and has been sitting at its
+   prompt ever since is the most important row on the fleet and the first one a
+   6h window drops. `passesLookback` stays pure — it is the call sites that
+   admit an unacked ask regardless of the window. An ACKED one goes back under
+   the window's authority, because the operator has already answered it. */
+describe("B4 lookback cannot hide an unacked ask", () => {
+  const stale = "2026-07-22T00:00:00.000Z";   // 10h before the fixture's now
+  const now = "2026-07-22T10:00:00.000Z";
+  const boardState = (snap: unknown) => ({
+    view: "board", query: "", facetProgram: "", facetProviders: [] as string[],
+    facetClasses: [] as string[], facetStatuses: [] as string[], facetModels: [] as string[],
+    facetSpans: [] as string[], facetContexts: [] as string[],
+    lookbackHours: 6, showReviewWorkers: true, snap,
+  });
+
+  const asking = () => agent({
+    id: "codex:old-ask", status: "attention", outcome: "needs-you",
+    lifecycle: "waiting", updatedAt: stale, alertSince: stale,
+  });
+  const calm = () => agent({
+    id: "codex:old-calm", status: "waiting", lifecycle: "waiting", updatedAt: stale,
+  });
+
+  test("a 10h-old unacked needsInput survives a 6h window; a 10h-old calm row does not", async () => {
+    const ask = asking();
+    const quiet = calm();
+    const program = { id: "p-lb", name: "P", agents: [ask, quiet] };
+    const snap = { schemaVersion: 1, generatedAt: now, programs: [program] };
+    // Fixture guard: the window really does exclude both on updatedAt alone —
+    // otherwise this test would pass without the exemption existing.
+    expect(M.withinLookback(ask, 6, Date.parse(now))).toBe(false);
+    expect(M.withinLookback(quiet, 6, Date.parse(now))).toBe(false);
+    await withState(boardState(snap), () => {
+      expect(M.currentFilter()(ask, program)).toBe(true);
+      expect(M.currentFilter()(quiet, program)).toBe(false);
+    });
+  });
+
+  test("an ACKED old ask is back under the window — the exemption is stripAlerting, not alerting", async () => {
+    const ask = asking();
+    const program = { id: "p-lb2", name: "P", agents: [ask] };
+    const snap = {
+      schemaVersion: 1, generatedAt: now, programs: [program],
+      acks: [{ agentId: "codex:old-ask" }],
+    };
+    expect(M.ackedAgent(ask, snap)).toBe(true); // fixture guard — fix the fixture, never this line
+    expect(M.alerting(ask)).toBe(true);         // still asking; only the LIST membership moved
+    await withState(boardState(snap), () => {
+      expect(M.currentFilter()(ask, program)).toBe(false);
+    });
+  });
+
+  test("the disclosure count stops claiming to hide a row the board is drawing", async () => {
+    /* hiddenByLookback answers "is the board empty, or is the window just
+       short?" A row the exemption admits is on screen; counting it as hidden
+       would send the operator to widen a window for a row they are looking at. */
+    const ask = asking();
+    const quiet = calm();
+    const program = { id: "p-lb3", name: "P", agents: [ask, quiet] };
+    const snap = { schemaVersion: 1, generatedAt: now, programs: [program] };
+    await withState(boardState(snap), () => {
+      expect(M.hiddenByLookback(M.state)).toBe(1);
+    });
+  });
+
+  test("the tab count counts what the board draws — the exempt row is in workingSet", async () => {
+    // "showing N of M" and the Board tab digit both read workingSet. A row the
+    // filter admits but the count omits makes the sentence disagree with the
+    // list right under it.
+    const ask = asking();
+    const quiet = calm();
+    const program = { id: "p-lb4", name: "P", agents: [ask, quiet] };
+    const snap = { schemaVersion: 1, generatedAt: now, programs: [program] };
+    await withState(boardState(snap), () => {
+      const ids = M.workingSet(M.state, "board").map((a: { id: string }) => a.id);
+      expect(ids).toContain("codex:old-ask");
+      expect(ids).not.toContain("codex:old-calm");
+    });
+  });
+
+  test("passesLookback itself stays pure — it never learns about acks", () => {
+    // The exemption is a call-site OR, deliberately: passesLookback is shared
+    // with History and the shelf, and teaching it presentation state would make
+    // one window mean two things depending on who asked.
+    const helper = requiredSlice(source, /export function passesLookback\([\s\S]*?\n\}/, "passesLookback");
+    for (const forbidden of ["ackedAgent", "acks", "stripAlerting", "snap"]) {
+      expect(helper).not.toContain(forbidden);
+    }
+  });
+});
+
 describe("program rollups", () => {
   test("server rollup is used verbatim when present", () => {
     const rollup = { total: 9, live: 3, working: 2, idle: 1, ended: 6, needsYou: 1, blocked: 0, failed: 0, linked: 2 };
@@ -3394,6 +3488,269 @@ test("SORT-INK-1 no alert state paints a row background, rail, or summary recolo
   expect(styles).not.toContain(".agent-row.is-failed .row-summary");
   // The base ring is the whole focus story now, and it must still exist.
   expect(styles).toMatch(/\.agent-row:focus-visible \{[^}]*var\(--color-focus-ring\)/);
+  /* SORT-INK-1 extends to the new alert mark. `is-alert-hot` is allowed an
+     OUTLINE — box-shadow spread in repo ink — and nothing else that fills:
+     re-solving identification with a wash is exactly what was retired, and the
+     4% repo wash under it is now the row's only background. */
+  const hot = String.raw`\.agent-row\.is-alert-hot`;
+  expect(styles).not.toMatch(new RegExp(`${hot}[^{}]*\\{[^}]*background:`));
+  expect(styles).not.toMatch(new RegExp(`${hot}[^{}]*\\{[^}]*inset 4px 0`));
+});
+
+/* B11 — "one phrase, three meanings" was the scar the server carries a comment
+   about, and the client had its own copy of it. The strip counted
+   `stripAlerting`; the program rollup counted `stripAlerting`; Momentum counted
+   `stripAlerting`; and TL;DR — the biggest digit on the page, the one an
+   operator reads first — counted `totals.attention`, which is UNREAD CMUX
+   TOASTS. A "PR merged" notification incremented "need you". Per-repo was a
+   third population again: any `attentionSignal` on an unfinished row, which
+   ignores the Ack entirely. */
+describe("B11 every need-you digit counts the same population", () => {
+  const asking = (over: Record<string, unknown> = {}) =>
+    agent({ status: "waiting", lifecycle: "waiting", hookLifecycle: "needsInput", ...over });
+
+  test("TL;DR ALL reads no server total — not the toast count, not the server's mirror", () => {
+    /* Two fields on `totals` look like the right answer and neither is.
+
+       `attention` is unread cmux, and reading it is the original defect.
+
+       `needsYou` is the server's own mirror of this predicate, and preferring
+       it looks drift-proof but measures the opposite: on the live fleet at
+       :4712 on 2026-08-17, with ZERO acks outstanding, `totals.needsYou` read 1
+       while this client's strip held 6 — the five between them carry
+       `attentionSignal.kind: "input-requested"`, which taskStateWantsHuman
+       admits here and the server mirror does not. Reading it would have put "1
+       need you" in the largest type on the page above a strip showing six rows.
+
+       Both are set here, both deliberately wrong, so the digit can only be
+       right by counting the rows itself. */
+    const program = { id: "p", name: "P", agents: [asking({ id: "codex:one" }), asking({ id: "codex:two" })] };
+    const snap = {
+      schemaVersion: 1, programs: [program],
+      totals: { attention: 7, needsYou: 1 },
+    };
+    expect(M.tldrAttentionCount(snap, "ALL")).toBe(2);
+  });
+
+  test("with no server totals it sums stripAlerting, and an ack drops it", () => {
+    const hot = asking({ id: "codex:hot" });
+    const acked = asking({ id: "codex:acked" });
+    const calm = agent({ id: "codex:calm", status: "running" });
+    const alpha = { id: "a", name: "A", agents: [hot, calm] };
+    const beta = { id: "b", name: "B", agents: [acked] };
+    const snap = { schemaVersion: 1, programs: [alpha, beta] };
+    expect(M.tldrAttentionCount(snap, "ALL")).toBe(2);
+    const withAck = { ...snap, acks: [{ agentId: "codex:acked" }] };
+    expect(M.ackedAgent(acked, withAck)).toBe(true); // fixture guard
+    expect(M.tldrAttentionCount(withAck, "ALL")).toBe(1);
+  });
+
+  test("an unread cmux toast on a healthy row counts as one need-you", () => {
+    /* D3 superseded acceptance 10 of the 2026-08-16 spec. An unread cmux
+       overlay belongs in the strip and every need-you digit until it is
+       acked or marked read. `attention: true` still does not mint
+       outcome:needs-you — C9 pins membership; this pins the digit. */
+    const toasted = agent({ id: "codex:toast", status: "running", outcome: "healthy", attention: true });
+    const program = { id: "p", name: "P", agents: [toasted] };
+    const snap = { schemaVersion: 1, programs: [program] };
+    expect(M.alerting(toasted)).toBe(false); // fixture guard — it is NOT an ask
+    expect(M.tldrAttentionCount(snap, "ALL")).toBe(1);
+  });
+
+  test("the per-repo digit is the same predicate, not attentionSignal", () => {
+    /* The old per-repo rule counted any attentionSignal on an unfinished row,
+       which ignores the Ack completely — so acknowledging a row dropped the
+       rollup and the strip while TL;DR kept claiming it. */
+    const acked = asking({ id: "codex:r-acked", attentionSignal: { kind: "question-pending", evidence: "May I?" } });
+    const program = { id: "repoA", name: "repoA", agents: [acked] };
+    const snap = { schemaVersion: 1, programs: [program], acks: [{ agentId: "codex:r-acked" }] };
+    expect(M.deterministicRepoStats(program, snap).needsYou).toBe(0);
+    expect(M.tldrAttentionCount(snap, "repoA")).toBe(0);
+    const unacked = { ...snap, acks: [] };
+    expect(M.deterministicRepoStats(program, unacked).needsYou).toBe(1);
+    expect(M.tldrAttentionCount(unacked, "repoA")).toBe(1);
+  });
+
+  test("acceptance 11 — after an Ack, rollup, TL;DR and Momentum drop together", () => {
+    /* The digits that must never disagree on one snapshot, asserted against
+       each other rather than one at a time: the same fixture, acked and not. */
+    const one = asking({ id: "codex:sync-1" });
+    const two = asking({ id: "codex:sync-2" });
+    const program = { id: "p", name: "P", agents: [one, two] };
+    const before = { schemaVersion: 1, programs: [program] };
+    const after = { ...before, acks: [{ agentId: "codex:sync-1" }] };
+    const digits = (snap: Record<string, unknown>) => ({
+      tldr: M.tldrAttentionCount(snap, "ALL"),
+      repo: M.deterministicRepoStats(program, snap).needsYou,
+      strip: M.needsYouStrip([{ program, agents: program.agents }], { ...M.state, snap }).length,
+    });
+    expect(digits(before)).toEqual({ tldr: 2, repo: 2, strip: 2 });
+    expect(digits(after)).toEqual({ tldr: 1, repo: 1, strip: 1 });
+  });
+});
+
+describe("C8/C9 Ack surfaces a leftover cmux toast", () => {
+  test("C8 Ack still succeeds when cmuxWarnings is non-empty, and names the leftover", async () => {
+    const toasts: string[] = [];
+    const waiting = agent({
+      id: "codex:toast",
+      status: "waiting",
+      lifecycle: "waiting",
+      hookLifecycle: "needsInput",
+    });
+    const before = snapshot({ programs: [{ id: "p", name: "P", agents: [waiting] }] });
+    const after = snapshot({
+      programs: [{ id: "p", name: "P", agents: [waiting] }],
+      acks: [{
+        agentId: waiting.id,
+        alertFingerprint: "attention:unread",
+        ackedAt: "2026-08-17T12:00:00.000Z",
+      }],
+    });
+    await withState({ snap: before, conn: "live" }, async () => {
+      await withRequests([
+        {
+          status: 200,
+          json: {
+            ok: true,
+            ack: {
+              agentId: waiting.id,
+              alertFingerprint: "attention:unread",
+              ackedAt: "2026-08-17T12:00:00.000Z",
+            },
+            cmuxWarnings: [{
+              code: "invalid_state",
+              detail: "already gone",
+              notificationId: "NOTICE-1",
+            }],
+          },
+        },
+        { status: 200, json: after },
+      ], async () => {
+        const result = await M.applySyncAck(waiting, true);
+        expect(result.ok).toBe(true);
+        const node = G.document.getElementById("toast");
+        if (node && node.textContent) toasts.push(String(node.textContent));
+      });
+    });
+    expect(toasts.join(" ")).toContain("Ack saved, but cmux did not clear");
+    expect(toasts.join(" ")).toContain("invalid_state");
+  });
+
+  test("C9 stripAlerting is true for a healthy attention overlay", () => {
+    const overlay = {
+      id: "codex:toast",
+      attention: true,
+      outcome: "healthy",
+      lifecycle: "waiting",
+      hookLifecycle: "idle",
+    };
+    expect(M.stripAlerting(overlay, { acks: [] })).toBe(true);
+    expect(M.stripAlerting(overlay, {
+      acks: [{ agentId: "codex:toast", alertFingerprint: "attention:unread", ackedAt: "2026-08-17T12:00:00.000Z" }],
+    })).toBe(false);
+  });
+});
+
+describe("B12 the bell's spoken line cannot deny a backlog", () => {
+  const view = (waiting: number, watching: number, tone: string) =>
+    M.notifyToggleView({ enabled: false, permission: "default" }, true, waiting, tone, waiting, watching).disclosureLabel;
+
+  test("waiting and watching are different populations and both get said", () => {
+    /* The defect: `count` is the BLOCKING count — a person is the blocker — and
+       the noticed branch reused it for "being watched". Production never sends
+       a nonzero count with tone noticed, so the sentence an operator actually
+       heard was "0 being watched, nobody waiting on you" while the strip held
+       four rows. Waiting is stripAlerting; watching is the watcher's own list
+       length; neither may be spelled with the other's number. */
+    expect(view(1, 2, "noticed")).toBe("Notifications, 1 agent waiting on you, 2 being watched");
+    expect(view(3, 0, "blocked")).toBe("Notifications, 3 agents waiting on you");
+    expect(view(0, 2, "noticed")).toBe("Notifications, 2 being watched, nobody waiting on you");
+    expect(view(0, 0, "clear")).toBe("Notifications, nothing waiting");
+  });
+
+  test("it never says nobody is waiting while somebody is", () => {
+    for (const tone of ["blocked", "noticed", "clear", "sideways"]) {
+      expect(view(2, 3, tone), tone).toContain("2 agents waiting on you");
+      expect(view(2, 3, tone), tone).not.toContain("nobody waiting on you");
+    }
+  });
+
+  test("the badge FILL is still blocking-only — the sentence got richer, the ink did not", () => {
+    // DESIGN-LANGUAGE reserves the ember/danger fill for a person being the
+    // blocker. Saying more in the accessible name must not recolour the dot.
+    const noticed = M.notifyToggleView({ enabled: true, permission: "granted" }, true, 0, "noticed", 4, 2);
+    expect(noticed.tone).toBe("noticed");
+    expect(noticed.count).toBe(0);
+  });
+
+  test("the app hands it the strip count and the watcher's length, not the blocking digit twice", () => {
+    expect(source).toMatch(/renderNotifyToggle\(model\.count, model\.tone, open, [^)]*model\.watching\.length\)/);
+  });
+});
+
+describe("B9 the alert outline: repo ink, not a second status hue", () => {
+  test("the mark exists, shimmers, and derives its ink from --repo-tint", () => {
+    // 78% repo tint darkened 22% — a bolder version of the row's own colour,
+    // so the loud state is still recognisably that repository. The fallback is
+    // amber, never ember: ember is reserved for blocking notification badges.
+    const block = styles.match(/\.agent-row\.is-alert-hot \{[^}]*\}/)?.[0] ?? "";
+    expect(block).not.toBe("");
+    expect(block).toContain("--alert-ink: color-mix(in srgb, var(--repo-tint, var(--color-status-warning)) 78%, #000 22%)");
+    expect(block).toContain("transform: translateY(-2px) scale(1.02)");
+    expect(styles).toContain("@keyframes alert-outline-shimmer");
+  });
+
+  test("rule 6 holds — the outline is a shadow, never text colour", () => {
+    const block = styles.match(/\.agent-row\.is-alert-hot \{[^}]*\}/)?.[0] ?? "";
+    expect(block).not.toBe("");
+    expect(block).not.toMatch(/(^|[;{\s])color:/);
+  });
+
+  test("reduced motion is a STATIC outline, not a suppressed one", () => {
+    /* The failure mode a blanket `animation: none` guard would hide: killing
+       the shimmer without restating the resting box-shadow leaves the row with
+       whatever the last frame painted, or nothing. The reduce block has to name
+       this class and re-assert both the outline and the neutralized transform. */
+    const reduce = styles.match(/@media \(prefers-reduced-motion: reduce\) \{[^@]*?\.agent-row\.is-alert-hot \{[^}]*\}/)?.[0] ?? "";
+    expect(reduce).not.toBe("");
+    expect(reduce).toContain("animation: none");
+    expect(reduce).toContain("transform: none");
+    expect(reduce).toMatch(/box-shadow:\s*\n?\s*0 0 0 2px color-mix\(in srgb, var\(--alert-ink\)/);
+    // …and the shimmer itself is opt-IN on no-preference, so a UA that reports
+    // neither answer gets the static outline rather than a moving one.
+    expect(styles).toMatch(/@media \(prefers-reduced-motion: no-preference\) \{\s*\.agent-row\.is-alert-hot \{[^}]*animation: alert-outline-shimmer/);
+  });
+
+  test("retro C1 — focus on a hot row is a composite that still names the ring", () => {
+    /* Two ways this row could swallow the keyboard ring, and both are closed
+       here: the box-shadow slot is already occupied by the outline, AND a
+       running animation outranks every normal declaration in that slot — so the
+       focus rule has to stop the shimmer as well as restate the ring, or the
+       ring is invisible for 2.4s at a time on the one row an operator most
+       likely reached with the keyboard. */
+    for (const rule of [...styles.matchAll(/\.agent-row\.is-alert-hot:focus-visible \{[^}]*\}/g)].map((m) => m[0])) {
+      expect(rule).toContain("var(--color-focus-ring)");
+      expect(rule).toContain("inset 0 0 0 2px var(--color-interactive)");
+      expect(rule).toContain("animation: none");
+    }
+    // Both the default and the reduced-motion copy exist.
+    expect([...styles.matchAll(/\.agent-row\.is-alert-hot:focus-visible \{/g)]).toHaveLength(2);
+  });
+
+  test("the repo tick yields the shadow slot to the outline but never the wash", () => {
+    /* A strip row now carries BOTH has-repo-tick and is-alert-hot, and both
+       want box-shadow. The tick chain out-specifies the mark (four compound
+       classes to two), so without this split the 3px inset would win and the
+       outline would simply not exist on the strip — the surface it matters
+       most on. The 4% wash is on its own rule and is untouched: identity stays,
+       and the louder repo mark replaces the quieter one. */
+    expect(styles).toMatch(/\.agent-row\.has-repo-tick:not\(\.is-alert-hot\)[^{]*\{[^}]*inset 3px 0/);
+    const washOnly = styles.match(/\.agent-row\.has-repo-tick:not\(\.is-selected\):not\(\.is-floating\) \{[^}]*\}/)?.[0] ?? "";
+    expect(washOnly).not.toBe("");
+    expect(washOnly).toContain("var(--repo-tint) 4%");
+    expect(washOnly).not.toContain("inset 3px 0");
+  });
 });
 
 describe("agent rows: instrument cluster + de-noise (C1)", () => {
@@ -6067,9 +6424,25 @@ describe("motion + responsive conformance for the restyled body (A6)", () => {
        guard kills it; the same reduce block also freezes the verb on working
        blue and drops the indigo glow so reduced-motion users still get the
        word without a walk through the palette. */
-    expect(keyframes).toEqual(["chat-message-enter", "chat-tool-enter", "chat-tool-reveal", "cleanup-spin", "conn-beat", "drawer-in", "dw-pulse", "row-time-verb-shimmer", "sheet-up", "sk-pulse", "sun-pulse"]);
-    const staticVariant = styles.slice(styles.lastIndexOf("@media (prefers-reduced-motion: reduce)"));
-    expect(staticVariant).toContain(".verdict-cleanup.is-running .verdict-cleanup-mark");
+    /* alert-outline-shimmer is the unacked row's outline pulse. Confirmed
+       covered twice over, which is what this list is for: the universal rule
+       above kills it like every other keyframe, AND it is only ever applied
+       inside a `no-preference` block, so it is never switched on for a reduced
+       -motion reader in the first place. The dedicated reduce block then gives
+       that reader the STATIC variant — a 2px outline in the same repo ink, with
+       the magnify neutralized — so the row is still the loud one without
+       moving. Live verification of that variant is impossible in this harness
+       (it cannot emulate prefers-reduced-motion), so it is asserted at rule
+       level and recorded as unverified rather than claimed. */
+    expect(keyframes).toEqual(["alert-outline-shimmer", "chat-message-enter", "chat-tool-enter", "chat-tool-reveal", "cleanup-spin", "conn-beat", "drawer-in", "dw-pulse", "row-time-verb-shimmer", "sheet-up", "sk-pulse", "sun-pulse"]);
+    /* Found by CONTENT, not by position. This used to slice from the last
+       reduce block in the file, which quietly asserted "the cleanup chip's
+       static variant is the last thing anyone added" — a claim about editing
+       order, not about the product, and one that goes red the moment any later
+       rule needs a reduced-motion variant of its own. */
+    const reduceBlocks = [...styles.matchAll(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\n\}/g)].map((m) => m[0]);
+    const staticVariant = reduceBlocks.find((block) => block.includes(".verdict-cleanup.is-running .verdict-cleanup-mark")) ?? "";
+    expect(staticVariant).not.toBe("");
     expect(staticVariant).toContain("animation: none");
     // Every live `animation:` usage keys off one of those keyframes — none escapes.
     const animated = [...styles.matchAll(/animation:\s*([\w-]+)/g)].map((m) => m[1]).filter((n) => n !== "none");
@@ -10015,6 +10388,108 @@ describe("FE-B: harness-backed client behavior", () => {
       expect(stripRow.dataset.fkey).toBe("agent:codex:parent");
     });
 
+    test("B6 the strip is ONE recency list — the newest ask leads it, whatever repo it came from", () => {
+      /* The strip used to walk first-appearance program order, so which ask a
+         person saw first was decided by which repo the server happened to list
+         first. It is a queue: the newest ask is on top and the repo is a label
+         on it, not its sort key. */
+      const alpha = {
+        id: "alpha", name: "Alpha",
+        agents: [asking({ id: "codex:a-old", alertSince: "2026-08-16T09:00:00.000Z" })],
+      };
+      const beta = {
+        id: "beta", name: "Beta",
+        agents: [asking({ id: "codex:b-new", alertSince: "2026-08-16T12:00:00.000Z" })],
+      };
+      const visible = [{ program: alpha, agents: alpha.agents }, { program: beta, agents: beta.agents }];
+      const root = newNode("div");
+      withDom(() => M.syncProgramList(root, visible, boardUi({
+        snap: { schemaVersion: 1, programs: [alpha, beta] },
+      })));
+      const strip = root.children[0];
+      const keys = findAll(strip, (n: any) => Boolean(n.dataset?.fkey?.startsWith("agent:")))
+        .map((n: any) => n.dataset.fkey as string);
+      expect(keys).toEqual(["agent:codex:b-new", "agent:codex:a-old"]);
+    });
+
+    test("B6 recency may interleave repos — a heading per run, and still one row per session", () => {
+      /* The consequence the old run-length grouping could not survive: with
+         recency in charge, a program's rows are no longer contiguous, so one
+         program legitimately gets more than one heading. Both headings must be
+         real nodes with distinct keys — a shared key would make the reconcile
+         hand the same node back twice and MOVE it, deleting the first run's
+         heading and leaving those rows under the wrong name. */
+      const alpha = {
+        id: "alpha", name: "Alpha",
+        agents: [
+          asking({ id: "codex:a-newest", alertSince: "2026-08-16T13:00:00.000Z" }),
+          asking({ id: "codex:a-oldest", alertSince: "2026-08-16T09:00:00.000Z" }),
+        ],
+      };
+      const beta = {
+        id: "beta", name: "Beta",
+        agents: [asking({ id: "codex:b-mid", alertSince: "2026-08-16T11:00:00.000Z" })],
+      };
+      const visible = [{ program: alpha, agents: alpha.agents }, { program: beta, agents: beta.agents }];
+      const root = newNode("div");
+      withDom(() => M.syncProgramList(root, visible, boardUi({
+        snap: { schemaVersion: 1, programs: [alpha, beta] },
+      })));
+      const strip = root.children[0];
+      const rowKeys = findAll(strip, (n: any) => Boolean(n.dataset?.fkey?.startsWith("agent:")))
+        .map((n: any) => n.dataset.fkey as string);
+      expect(rowKeys).toEqual(["agent:codex:a-newest", "agent:codex:b-mid", "agent:codex:a-oldest"]);
+      const heads = findAll(strip, (n: any) => Boolean(n.dataset?.fkey?.startsWith("strip-head:")));
+      expect(heads).toHaveLength(3);
+      expect(textOf(heads[0])).toContain("Alpha");
+      expect(textOf(heads[1])).toContain("Beta");
+      expect(textOf(heads[2])).toContain("Alpha");
+      // Two different nodes, two different focus keys — never one node moved.
+      const headKeys = heads.map((n: any) => n.dataset.fkey as string);
+      expect(new Set(headKeys).size).toBe(headKeys.length);
+      expect(heads[0]).not.toBe(heads[2]);
+      // And the XOR still holds across the whole board: every session once.
+      const allKeys = findAll(root, (n: any) => Boolean(n.dataset?.fkey?.startsWith("agent:")))
+        .map((n: any) => n.dataset.fkey as string);
+      expect(new Set(allKeys).size).toBe(allKeys.length);
+      expect(new Set(allKeys).size).toBe(3);
+    });
+
+    test("B6 the strip stamps each row's rank, so a reorder of already-hot rows can fly", () => {
+      // data-hot says "in the list"; data-alert-rank says "where in it". The
+      // float reads both — membership alone cannot see a swap.
+      const alpha = {
+        id: "alpha", name: "Alpha",
+        agents: [
+          asking({ id: "codex:r-old", alertSince: "2026-08-16T09:00:00.000Z" }),
+          asking({ id: "codex:r-new", alertSince: "2026-08-16T12:00:00.000Z" }),
+        ],
+      };
+      const visible = [{ program: alpha, agents: alpha.agents }];
+      const root = newNode("div");
+      withDom(() => M.syncProgramList(root, visible, boardUi({
+        snap: { schemaVersion: 1, programs: [alpha] },
+      })));
+      const strip = root.children[0];
+      expect(byFkey(strip, "agent:codex:r-new").dataset.alertRank).toBe("0");
+      expect(byFkey(strip, "agent:codex:r-old").dataset.alertRank).toBe("1");
+      expect(byFkey(strip, "agent:codex:r-new").dataset.hot).toBe("true");
+    });
+
+    test("B6 a calm row carries no rank — the stamp is empty off the list", () => {
+      const program = {
+        id: "solo", name: "Solo",
+        agents: [agent({ id: "codex:quiet", status: "running" })],
+      };
+      const root = newNode("div");
+      withDom(() => M.syncProgramList(root, [{ program, agents: program.agents }], boardUi({
+        snap: { schemaVersion: 1, programs: [program] },
+      })));
+      const row = byFkey(root, "agent:codex:quiet");
+      expect(row.dataset.hot).toBe("false");
+      expect(row.dataset.alertRank).toBe("");
+    });
+
     test("the strip groups its rows under worktree headings that name both axes", () => {
       const worker = asking({
         id: "codex:wt-alert",
@@ -10295,6 +10770,54 @@ describe("FE-B: harness-backed client behavior", () => {
       expect(stripRow.className).not.toContain("is-alerting");
     });
 
+    test("B10 is-alert-hot is the one mark both modes share, and it is stripAlerting", () => {
+      /* D1: both surfaces, same paint, XOR membership. `is-alerting` stays
+         inline-only (pane's strip IS that signal, and double-marking it was
+         refused); `is-alert-hot` is the class that says "this row needs a
+         person" wherever the row happens to be drawn — which is what lets one
+         CSS rule paint the wash-plus-outline on both. */
+      const hookShaped = agent({ id: "codex:hook", status: "waiting", lifecycle: "waiting", hookLifecycle: "needsInput" });
+      const calm = agent({ id: "codex:calm", status: "running" });
+      const program = { id: "p", name: "P", agents: [hookShaped, calm] };
+      const visible = [{ program, agents: program.agents }];
+      const snap = { schemaVersion: 1, programs: [program] };
+
+      const inlineRoot = newNode("div");
+      withDom(() => M.syncProgramList(inlineRoot, visible, inlineUi({ snap })));
+      expect(byFkey(inlineRoot, "agent:codex:hook").className).toContain("is-alert-hot");
+      expect(byFkey(inlineRoot, "agent:codex:calm").className).not.toContain("is-alert-hot");
+
+      const paneRoot = newNode("div");
+      withDom(() => M.syncProgramList(paneRoot, visible, inlineUi({ snap, needsYouDisplay: "pane" })));
+      const stripRow = byFkey(paneRoot.children[0], "agent:codex:hook");
+      expect(stripRow.className).toContain("is-alert-hot");
+      expect(stripRow.className).not.toContain("is-alerting");
+      // XOR: drawn in the strip, and NOT again in its group.
+      const keys = findAll(paneRoot, (n: any) => Boolean(n.dataset?.fkey?.startsWith("agent:")))
+        .map((n: any) => n.dataset.fkey as string);
+      expect(keys.filter((k: string) => k === "agent:codex:hook")).toHaveLength(1);
+    });
+
+    test("B10 an acked row loses the mark and keeps the repo wash", async () => {
+      /* Acceptance 5. Ack is a LIST judgment: the session is still asking, its
+         state word and its rollup seat are unchanged, and the row it leaves
+         behind must look like any other row in that band — wash on, outline
+         off. The class is stamped from state.snap inside renderAgentRow, so
+         the ack has to be reachable from there, not only from the ui. */
+      const asked = agent({ id: "codex:acked-hot", status: "waiting", lifecycle: "waiting", hookLifecycle: "needsInput" });
+      const program = { id: "p-ack", name: "P", agents: [asked] };
+      const snap = { schemaVersion: 1, programs: [program], acks: [{ agentId: "codex:acked-hot" }] };
+      expect(M.ackedAgent(asked, snap)).toBe(true); // fixture guard — fix the fixture, never this line
+      expect(M.alerting(asked)).toBe(true);         // still asking; only the LIST moved
+      await withState({ snap }, () => {
+        const root = newNode("div");
+        withDom(() => M.syncProgramList(root, [{ program, agents: program.agents }], inlineUi({ snap })));
+        const row = byFkey(root, "agent:codex:acked-hot");
+        expect(row.className).not.toContain("is-alert-hot");
+        expect(row.dataset.hot).toBe("false");
+      });
+    });
+
     test("inline mode still flags an alerting child folded inside a swarm", () => {
       const parent = agent({ id: "codex:parent", status: "running" });
       const child = asking({ id: "codex:child", parentAgentId: "codex:parent" });
@@ -10424,7 +10947,10 @@ describe("FE-B: harness-backed client behavior", () => {
       expect(order.indexOf("agent:codex:w2")).toBeLessThan(order.indexOf("agent:codex:ask"));
     });
 
-    test("two alerting rows keep the server's order — the sort is stable, not recency", () => {
+    test("two undated alerting rows keep the server's order — recency only speaks when it has a stamp", () => {
+      // No alertSince on either: the server has not said which ask started
+      // first, so the client must not invent an answer. Partition still holds —
+      // both lead the calm row.
       const program = {
         id: "p2", name: "P2", agents: [
           agent({ id: "codex:first-ask", status: "attention", outcome: "needs-you", lifecycle: "waiting" }),
@@ -10439,6 +10965,68 @@ describe("FE-B: harness-backed client behavior", () => {
       const order = fkeysInOrder(root);
       expect(order.indexOf("agent:codex:first-ask")).toBeLessThan(order.indexOf("agent:codex:second-ask"));
       expect(order.indexOf("agent:codex:second-ask")).toBeLessThan(order.indexOf("agent:codex:calm"));
+    });
+
+    test("B5 the newer ask leads the older one inside a lifecycle section", () => {
+      /* The server's order is agentSortRank, which knows nothing about when
+         anyone asked. With alertSince published, the queue is a queue: newest
+         ask on top, and the calm row it passed stays put. */
+      const program = {
+        id: "p2r", name: "P2R", agents: [
+          agent({
+            id: "codex:older-ask", status: "attention", outcome: "needs-you",
+            lifecycle: "waiting", alertSince: "2026-08-16T10:00:00.000Z",
+          }),
+          agent({ id: "codex:calm-r", status: "waiting", lifecycle: "waiting" }),
+          agent({
+            id: "codex:newer-ask", status: "attention", outcome: "needs-you",
+            lifecycle: "waiting", alertSince: "2026-08-16T12:00:00.000Z",
+          }),
+        ],
+      };
+      const root = newNode("div");
+      withDom(() => M.syncProgramList(root, [{ program, agents: program.agents }], inlineUi({
+        snap: { schemaVersion: 1, programs: [program] },
+      })));
+      const order = fkeysInOrder(root);
+      expect(order.indexOf("agent:codex:newer-ask")).toBeLessThan(order.indexOf("agent:codex:older-ask"));
+      expect(order.indexOf("agent:codex:older-ask")).toBeLessThan(order.indexOf("agent:codex:calm-r"));
+    });
+
+    test("B5 a reply that only advances the transcript clocks does not reorder the queue", () => {
+      /* Acceptance 3, as the defect it prevents: `lastHumanFacingAt` advances
+         every time a lane says anything, and `hookLifecycleAt` re-stamps the
+         SAME needsInput about every 25 seconds. Ranking on either one makes the
+         top of the strip reshuffle while nobody asked anything new. Same two
+         rows, same alertSince, wildly different transcript clocks — order must
+         be identical. */
+      const build = (chatty: boolean) => ({
+        id: "p2c", name: "P2C", agents: [
+          agent({
+            id: "codex:ask-old", status: "attention", outcome: "needs-you", lifecycle: "waiting",
+            alertSince: "2026-08-16T10:00:00.000Z",
+            lastHumanFacingAt: chatty ? "2026-08-16T23:59:00.000Z" : "2026-08-16T10:00:00.000Z",
+            hookLifecycleAt: chatty ? "2026-08-16T23:59:30.000Z" : "2026-08-16T10:00:00.000Z",
+            updatedAt: chatty ? "2026-08-16T23:59:59.000Z" : "2026-08-16T10:00:00.000Z",
+          }),
+          agent({
+            id: "codex:ask-new", status: "attention", outcome: "needs-you", lifecycle: "waiting",
+            alertSince: "2026-08-16T12:00:00.000Z",
+            lastHumanFacingAt: "2026-08-16T12:00:00.000Z",
+            hookLifecycleAt: "2026-08-16T12:00:00.000Z",
+            updatedAt: "2026-08-16T12:00:00.000Z",
+          }),
+        ],
+      });
+      const orderOf = (program: { id: string; agents: unknown[] }) => {
+        const root = newNode("div");
+        withDom(() => M.syncProgramList(root, [{ program, agents: program.agents }], inlineUi({
+          snap: { schemaVersion: 1, programs: [program] },
+        })));
+        return fkeysInOrder(root).filter((key: string) => key.startsWith("agent:"));
+      };
+      expect(orderOf(build(true))).toEqual(orderOf(build(false)));
+      expect(orderOf(build(true))[0]).toBe("agent:codex:ask-new");
     });
 
     test("an acknowledged alert does not rise — the sort shares the strip's presented membership", () => {
@@ -10463,14 +11051,19 @@ describe("FE-B: harness-backed client behavior", () => {
 
     test("alertFirst runs after byRole in the builder, so alert outranks role in worktree programs", () => {
       // Composed stable sorts: the LAST sort is the primary key. byRole must
-      // run first and alertFirst after it, or a worktree program's role order
-      // would bury an alerting worker under a calm orchestrator.
+      // run first, alertFirst after it (or a worktree program's role order
+      // would bury an alerting worker under a calm orchestrator), and
+      // alertRecent after THAT — it may only reorder inside the hot prefix
+      // alertFirst has already gathered.
       const src = source.replace(/\s+/g, " ");
-      const role = src.indexOf("for (const bucket of buckets.values()) byRole(bucket);");
-      const alert = src.indexOf("for (const bucket of buckets.values()) alertFirst(bucket, sectionHot);");
+      const role = src.indexOf("byRole(bucket);");
+      const alert = src.indexOf("alertFirst(bucket, sectionHot);");
+      const recent = src.indexOf("alertRecent(bucket, sectionHot, sinceOf);");
       expect(role).toBeGreaterThan(-1);
       expect(alert).toBeGreaterThan(-1);
+      expect(recent).toBeGreaterThan(-1);
       expect(role).toBeLessThan(alert);
+      expect(alert).toBeLessThan(recent);
     });
 
     test("SORT-INK-2 the status cell is the row's only in-row alert mark — and it cannot be dieted away", () => {
@@ -13425,7 +14018,7 @@ describe("FE-C: an agent that starts waiting reaches the operator outside the ta
        the button cannot report a different population than the panel it opens. */
     const renderFn = source.match(/\nfunction render\(\)[\s\S]*?\n\}/)?.[0] ?? "";
     expect(renderFn).toContain("renderNotificationCenter()");
-    expect(source).toContain("renderNotifyToggle(model.count, model.tone, open)");
+    expect(source).toContain("renderNotifyToggle(model.count, model.tone, open");
   });
 
   test("(4) the badge's ink is the verdict, and it always renders a reading", () => {

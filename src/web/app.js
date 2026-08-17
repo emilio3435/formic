@@ -155,6 +155,7 @@ import {
 import {
   alerting,
   alertFirst,
+  alertRecent,
   buildClusters,
   contextUsage,
   deriveActivity,
@@ -1559,7 +1560,7 @@ globalThis.TheAntHill = {
   lifecycleOf, provenanceOf, scopeOf, isTerminal, isLive, isStalled, operatorState, stallThresholdMs, DEFAULT_STALL_THRESHOLD_MS, isUnverified, wantsHuman,
   declaredQuiet, declaredDone,
   controlUnavailableText,
-  totalsOf, issuesOf, alerting, alertFirst, viewMatches, matchesQuery, buildClusters, tokenSummary,
+  totalsOf, issuesOf, alerting, alertFirst, alertRecent, viewMatches, matchesQuery, buildClusters, tokenSummary,
   issueLifecycle, issueStateLabel, recentlyResolvedOf,
   contextUsage, contextDisplayValue, typicalRequestOf,
   roleView, formatLastHumanMessage, rowSummary, rowSummaryParts, NO_READABLE_MESSAGE,
@@ -1636,7 +1637,7 @@ globalThis.TheAntHill = {
   // The Needs-you display preference: where alerting rows are drawn.
   needsYouDisplayOf, loadNeedsYouDisplay, setNeedsYouDisplay,
   // The strip chip's words and its jump, assertable without a DOM.
-  stripChipLabel, jumpToProgramGroup,
+  stripChipLabel, jumpToProgramGroup, teamIdOfProgram,
   swarmOpen, toggleSwarm, historyProvenance, historyChips, renderRowFacts,
   boardIndex, sharedRowNames, rowDisplayName, landingView, LEGACY_VIEW_ALIASES,
   // ROW_NAV_KEYS is deliberately absent — it is a `const` declared below this
@@ -1648,11 +1649,11 @@ globalThis.TheAntHill = {
   // sections ARE and what each subsection is CALLED, decidable without a DOM.
   // (RUN_GROUP_PREFIX stays out — it is a `const` declared below this block,
   // the TDZ hazard the note above is about.)
-  repoGroups, worktreeLabel,
+  repoGroups, teamGroups, worktreeLabel,
   /* TINT-F. The colour join, the two paints, and the three surfaces that wear
      them — exported so the treatments are assertable as functions rather than
      as substrings of this file. */
-  setRepoColors, repoTintFor, repoTintOfProgram, normalizeRepoHex, fetchRepoColors,
+  setRepoColors, repoTintFor, repoTintOfProgram, tintOfProgram, normalizeRepoHex, fetchRepoColors,
   liveRepoSig, maybeRefreshRepoColors, openSettingsPanel, closeSettingsPanel,
   renderRepoSection, repoShellSig, stripRowOpts, renderStripGroupHead,
   // The shelf's governor. Exported because the lookback clause inside it is the
@@ -3267,7 +3268,7 @@ function notifyWaitText(item) {
 
    This row shows "<program> · <impact>" and named itself "<impact> <evidence>",
    dropping the program the operator can see — WCAG 2.5.3 Label in Name. A voice
-   operator reading "example-repo · …" off the screen and saying it got no match,
+   operator reading "the-ant-hill · …" off the screen and saying it got no match,
    and a screen-reader operator heard an agent with no program on a board where
    the same lane name recurs across several. The blocking row above already puts
    the program in its name ("… In <program>. Opens the session."); this is the
@@ -3365,7 +3366,13 @@ function renderNotificationCenter() {
     { ...NOTIFY_DEPS, queueError: state.queueError });
   // One derivation, two surfaces: the badge is a reading off the same list the
   // panel renders, so the button can never disagree with what it opens.
-  renderNotifyToggle(model.count, model.tone, open);
+  /* The badge's digit stays `model.count` — blocking only, per DESIGN-LANGUAGE.
+     The SPOKEN name carries two more facts the digit cannot: how many sessions
+     are asking (the strip's population, fleet-wide) and how many the watcher is
+     merely keeping an eye on. Without the first, the bell could say "nobody
+     waiting on you" over a strip with four rows in it. */
+  const waiting = fleetStripAlerting(state.snap);
+  renderNotifyToggle(model.count, model.tone, open, waiting, model.watching.length);
   panel.hidden = !open;
   if (paintUnchanged("notifyPanel", notifyPanelPaintSig(model, open))) return;
   panel.textContent = "";
@@ -3776,7 +3783,7 @@ function renderSettingsPanel() {
    instead of overflow clay — which is why a second click on a yours-swatch
    clears the override rather than only offering a global wipe.
 
-   Assignment keys are origin/band names (`example-repo`). Rows with no live
+   Assignment keys are origin/band names (`the-ant-hill`). Rows with no live
    session stay pickable and are marked not on the board. The list paints into
    `#repo-colors-host` so a colour GET cannot rebuild the Settings form. */
 function paintRepoColorSettings() {
@@ -3862,6 +3869,40 @@ async function putRepoColor(repoKey, hex) {
     renderSettingsPanel();
   } catch (err) {
     toast(err && err.message ? err.message : "Colour save failed", "warn");
+  }
+}
+
+async function putTeamColor(groupId, hex) {
+  const normalized = normalizeRepoHex(hex);
+  if (!normalized) {
+    toast("That is not a colour this board can store", "warn");
+    return;
+  }
+  try {
+    const res = await apiFetch("/api/team-colors/" + encodeURIComponent(groupId), {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ hex: normalized }),
+    }, API_WRITE_TIMEOUT_MS);
+    const body = await res.json().catch(() => null);
+    if (!res.ok || !body) {
+      throw new Error(body && body.error ? body.error : "Save failed (HTTP " + res.status + ")");
+    }
+    const stored = body.settings && body.settings.assignments && body.settings.assignments[groupId];
+    paintLiveTeamHex(groupId, normalizeRepoHex(stored && stored.hex) || normalized);
+    render();
+  } catch (err) {
+    toast(err && err.message ? err.message : "Colour save failed", "warn");
+  }
+}
+
+function paintLiveTeamHex(groupId, hex) {
+  const snap = state.snap;
+  if (!snap || !Array.isArray(snap.programs)) return;
+  for (const program of snap.programs) {
+    for (const agent of program.agents || []) {
+      if (agent.team && agent.team.id === groupId) agent.team = { ...agent.team, hex };
+    }
   }
 }
 
@@ -4450,13 +4491,22 @@ function programForTldrRepo(snap, repoName) {
   return null;
 }
 
-function deterministicRepoStats(program) {
+/* Every "N need you" on this client, counting one population.
+
+   `snap` is a parameter rather than a read of module state so the count stays
+   testable, and so the caller cannot accidentally count one snapshot's rows
+   against another's acks. */
+function deterministicRepoStats(program, snap = state.snap) {
   if (!program) return null;
   const agents = Array.isArray(program.agents) ? program.agents : [];
   const live = agents.filter((a) => a.lifecycle === "working" || a.lifecycle === "waiting").length;
   const working = agents.filter((a) => a.lifecycle === "working").length;
   const idle = agents.filter((a) => a.lifecycle === "waiting").length;
-  const needsYou = agents.filter((a) => a.attentionSignal && a.lifecycle !== "finished").length;
+  /* stripAlerting, the same predicate as the strip, the rollup and Momentum.
+     It used to be "has an attentionSignal and is not finished", which is a
+     third population: it counts a row the operator has already acknowledged,
+     and it misses every ask that arrives as an outcome rather than a signal. */
+  const needsYou = agents.filter((a) => stripAlerting(a, snap)).length;
   const failed = agents.filter((a) => a.outcome === "failed").length;
   const blocked = agents.filter((a) => a.outcome === "blocked").length;
   // branch/dirty/PRs from first agent that has them, or from repo identity
@@ -4480,15 +4530,40 @@ function deterministicRepoStats(program) {
   return { live, working, idle, needsYou, failed, blocked, branch, dirty, headShort, prCount, total: agents.length };
 }
 
+/* How many sessions across the whole snapshot are asking and unacknowledged.
+   One expression, so no surface can quietly grow a second answer. */
+function fleetStripAlerting(snap) {
+  const programs = Array.isArray(snap?.programs) ? snap.programs : [];
+  return programs.reduce(
+    (count, program) => count + (program.agents || []).filter((a) => stripAlerting(a, snap)).length, 0);
+}
+
 function tldrAttentionCount(snap, repoName = "ALL") {
   if (repoName && repoName !== "ALL") {
-    const stats = deterministicRepoStats(programForTldrRepo(snap, repoName));
+    const stats = deterministicRepoStats(programForTldrRepo(snap, repoName), snap);
     return stats ? stats.needsYou : 0;
   }
-  const totals = snap && snap.totals;
-  if (totals && Number.isFinite(totals.attention)) return totals.attention;
-  const programs = Array.isArray(snap?.programs) ? snap.programs : [];
-  return programs.reduce((count, program) => count + (deterministicRepoStats(program)?.needsYou ?? 0), 0);
+  /* NOT `totals.attention`. That field is unread cmux toasts — a "PR merged"
+     popup — and reading it here made the largest digit on the page count
+     notifications while every other need-you digit counted asks.
+
+     And NOT `totals.needsYou` either, which is the server's own mirror of this
+     predicate. Preferring it looks like the drift-proof choice and is the
+     opposite: measured on :4712 against the live fleet on 2026-08-17, with
+     ZERO acks outstanding, `totals.needsYou` read 1 while this client's strip
+     held 6 — the five rows between them are `attentionSignal.kind:
+     "input-requested"`, which `taskStateWantsHuman` admits here and the server
+     mirror does not. Reading the server field would have made the biggest digit
+     on the page say 1 over a strip showing 6 and a Momentum reading 6: the same
+     "one phrase, three meanings" defect this lane exists to remove, moved to a
+     new pair of surfaces.
+
+     So the CLIENT counts with the client's one predicate, and every digit it
+     draws agrees with every other one it draws. Server/client agreement is a
+     real requirement and a separate repair — it belongs where the two
+     predicates are reconciled, not in a fallback chain that hides which one
+     answered. */
+  return fleetStripAlerting(snap);
 }
 
 function tldrCardSignalClass(signal) {
@@ -4712,7 +4787,7 @@ function renderTldrRepoLane(lane, parsed, agent, time, repoName, attentionCount)
     || parsed.repos.find((r) => r.repo === repoName)
     || { repo: repoName, summary: "", blocker: "none reported", signal: "ok" };
   const program = programForTldrRepo(state.snap, repoName);
-  const stats = deterministicRepoStats(program);
+  const stats = deterministicRepoStats(program, state.snap);
   const resolvedAttention = Number.isFinite(attentionCount) ? attentionCount : (stats ? stats.needsYou : 0);
   const attentionText = resolvedAttention > 0 ? `${resolvedAttention} need you` : "all clear";
   const sigClass = tldrCardSignalClass(repo.signal);
@@ -5832,11 +5907,30 @@ function setFacetProgram(programId) {
   }
 }
 
+/* The lookback is a recency window over `updatedAt`, and `updatedAt` is
+   heartbeats — so the rows it drops FIRST are the ones quiet longest, which on
+   this board is precisely the blocked-on-a-human population it exists to
+   surface. A lane that asked a question eight hours ago and has been sitting at
+   its prompt ever since is the most important row on the fleet and the first
+   casualty of a 6h window.
+
+   The exemption is `stripAlerting`, not `alerting`: an ACKED ask goes back
+   under the window's authority, because the operator has already answered it
+   and it is no longer the thing they are being kept from seeing.
+
+   It lives at the call sites rather than inside passesLookback, which stays
+   pure: that helper is shared with History and the shelf, and teaching it
+   presentation state would make one window mean two things depending on who
+   asked. */
+function withinWindowOrAsking(agent, view, lookbackHours, snap = state.snap) {
+  return stripAlerting(agent, snap) || passesLookback(agent, view, lookbackHours);
+}
+
 function currentFilter() {
   return (agent, program) =>
     dashboardVisible(agent) &&
     viewMatches(state.view, agent) &&
-    passesLookback(agent, state.view, state.lookbackHours) &&
+    withinWindowOrAsking(agent, state.view, state.lookbackHours) &&
     matchesQuery(agent, program, state.query) &&
     passesReviewVisibility(
       agent,
@@ -5895,7 +5989,7 @@ function shelfFilter() {
     dashboardVisible(agent) &&
     (isTerminal(agent) || declaredDone(agent)) &&
     !viewMatches(state.view, agent) &&
-    passesLookback(agent, state.view, state.lookbackHours) &&
+    withinWindowOrAsking(agent, state.view, state.lookbackHours) &&
     matchesQuery(agent, program, state.query) &&
     passesReviewVisibility(
       agent,
@@ -5978,7 +6072,9 @@ function workingSet(ui = state, view = ui.view) {
     .filter((agent) =>
       dashboardVisible(agent)
       && viewMatches(view, agent)
-      && passesLookback(agent, view, ui.lookbackHours)
+      // Same exemption as currentFilter, and it has to be the same or the
+      // "showing N of M" sentence disagrees with the list right under it.
+      && withinWindowOrAsking(agent, view, ui.lookbackHours, ui.snap)
       && passesReviewVisibility(agent, view, ui.showReviewWorkers));
 }
 
@@ -7039,11 +7135,11 @@ let repoColorsVersion = 0;      // bumped on every load; paint signatures read i
    entry failing normalizeRepoHex, so the map stayed empty and the board never
    tinted while every test stayed green.
 
-   The two names genuinely differ when origin and folder disagree: the
-   repository's origin is `…/example-repo.git`, so RepoIdentity.repoName — what
-   the band prints — is `example-repo`, while repoKeyForCwd reads the git common
-   dir and answers the checkout folder name. The table exists precisely for that
-   split, which is why `name === key` is never a safe shortcut. */
+   The two names genuinely differ on this very checkout: the repository's origin
+   is `…/the-ant-hill.git`, so RepoIdentity.repoName — what the band prints — is
+   `the-ant-hill`, while repoKeyForCwd reads the git common dir and answers
+   `the-mountain`. The table exists precisely for that split, which is why
+   `name === key` is never a safe shortcut. */
 function setRepoColors(repoNames, settings) {
   repoColors.clear();
   const assignments = (settings && settings.assignments) || {};
@@ -7092,6 +7188,26 @@ function paintRepoTint(node, hex, className) {
 function repoTintOfProgram(program) {
   const repo = repoOf(program);
   return repoTintFor(repo && repo.repoName);
+}
+
+/* Team overlay: if every agent that carries a team shares one hex, that hex
+   is the program's colour. Mixed hexes (or none) fall back to the repo —
+   never an average. Case is spelling: `#5F7F2A` and `#5f7f2a` are one colour. */
+function tintOfProgram(program) {
+  const agents = (program && program.agents) || [];
+  const teams = agents.map((a) => a && a.team).filter((t) => t && t.hex);
+  if (!teams.length) return repoTintOfProgram(program);
+  const first = normalizeRepoHex(teams[0].hex) || teams[0].hex;
+  if (teams.every((t) => (normalizeRepoHex(t.hex) || t.hex) === first)) return first;
+  return repoTintOfProgram(program);
+}
+
+/* Same unanimous-id rule teamGroups uses: one team id on the program's
+   agents, or none. Mixed programs have no single band to jump to. */
+function teamIdOfProgram(program) {
+  const agents = (program && program.agents) || [];
+  const ids = [...new Set(agents.map((a) => a && a.team && a.team.id).filter(Boolean))];
+  return ids.length === 1 ? ids[0] : "";
 }
 
 function baseName(path) {
@@ -7220,7 +7336,7 @@ function repoGroups(visible) {
     /* A band's only checkout needs no disambiguator: `@directory` earns its
        place by separating siblings, and there are none — while on the live
        board the directory half actively contradicted the band name above it
-       (`…@checkout-folder` under "example-repo"). Multi-worktree bands keep
+       (`…@the-mountain-main` under "the-ant-hill"). Multi-worktree bands keep
        both halves; uniqueness within the band is what the suffix is FOR. */
     if (group.worktrees.length === 1) {
       const branch = (repo && repo.branch) || "";
@@ -7228,11 +7344,80 @@ function repoGroups(visible) {
     }
     const urls = new Set();
     for (const { program } of group.worktrees) {
-      for (const agent of program.agents) for (const url of agent.pullRequestUrls || []) urls.add(url);
+      for (const agent of program.agents || []) for (const url of agent.pullRequestUrls || []) urls.add(url);
     }
     group.pullRequestUrls = [...urls];
   }
   return sections;
+}
+
+/* Team axis in front of today's repo groups. An entry whose agents (live or
+   finished) share one team joins a `{ kind: "team" }` band labeled with the
+   group name and wearing `team.hex`. Mixed-team programs split — one slice
+   per team, leftover ungrouped agents go through `repoGroups`. Never average. */
+function teamWorktree(entry, agents, finished) {
+  const path = entry.program && entry.program.groupPath;
+  const worktreeKey = Array.isArray(path) ? String(path[1] || "") : "";
+  return {
+    program: entry.program,
+    agents,
+    finished,
+    worktreeKey,
+    label: worktreeLabel(entry.program),
+  };
+}
+
+function teamGroups(visible) {
+  const teamSections = [];
+  const byTeam = new Map();
+  const remainder = [];
+  for (const entry of visible) {
+    const agents = [...(entry.agents || []), ...(entry.finished || [])];
+    const ids = [...new Set(agents.map((a) => a && a.team && a.team.id).filter(Boolean))];
+    if (ids.length === 0) {
+      remainder.push(entry);
+      continue;
+    }
+    if (ids.length === 1) {
+      const team = agents.find((a) => a.team && a.team.id === ids[0]).team;
+      let group = byTeam.get(team.id);
+      if (!group) {
+        group = { kind: "team", key: team.id, name: team.name, hex: team.hex, pullRequestUrls: [], worktrees: [] };
+        byTeam.set(team.id, group);
+        teamSections.push(group);
+      }
+      group.worktrees.push(teamWorktree(entry, entry.agents, entry.finished));
+      continue;
+    }
+    // Split mixed-team programs by team; leftover agents (no team) go remainder.
+    for (const id of ids) {
+      const sample = agents.find((a) => a.team && a.team.id === id).team;
+      const sliceAgents = (entry.agents || []).filter((a) => a.team && a.team.id === id);
+      const sliceFinished = (entry.finished || []).filter((a) => a.team && a.team.id === id);
+      const slice = teamWorktree(
+        { ...entry, program: { ...entry.program, agents: sliceAgents } },
+        sliceAgents,
+        sliceFinished,
+      );
+      let group = byTeam.get(id);
+      if (!group) {
+        group = { kind: "team", key: id, name: sample.name, hex: sample.hex, pullRequestUrls: [], worktrees: [] };
+        byTeam.set(id, group);
+        teamSections.push(group);
+      }
+      group.worktrees.push(slice);
+    }
+    const leftoverAgents = (entry.agents || []).filter((a) => !(a && a.team && a.team.id));
+    const leftoverFinished = (entry.finished || []).filter((a) => !(a && a.team && a.team.id));
+    if (leftoverAgents.length || leftoverFinished.length) {
+      remainder.push({
+        program: { ...entry.program, agents: leftoverAgents },
+        agents: leftoverAgents,
+        finished: leftoverFinished,
+      });
+    }
+  }
+  return [...teamSections, ...repoGroups(remainder)];
 }
 
 /* Paint keys for the two new axes. programId keyed every paint cache before
@@ -7277,9 +7462,11 @@ function toggleRepo(group) {
    nodes have neither scrollIntoView nor focus. */
 function jumpToProgramGroup(program) {
   if (!program) return;
-  const repoKey = Array.isArray(program.groupPath) ? String(program.groupPath[0] || "") : "";
-  if (repoKey && state.repoOverrides.get(repoKey) === "closed") {
-    state.repoOverrides.delete(repoKey);
+  const teamId = teamIdOfProgram(program);
+  const repoKey = teamId ? "" : (Array.isArray(program.groupPath) ? String(program.groupPath[0] || "") : "");
+  const bandKey = teamId || repoKey;
+  if (bandKey && state.repoOverrides.get(bandKey) === "closed") {
+    state.repoOverrides.delete(bandKey);
     saveRepoOverrides();
   }
   if (state.programOverrides.get(program.id) === "closed") {
@@ -7288,9 +7475,10 @@ function jumpToProgramGroup(program) {
   }
   render();
   /* A group whose every session is pinned draws no shell, so its own caret may
-     not be in the DOM — fall back to the repo band that would hold it. */
+     not be in the DOM — fall back to the team band, or the repo band when
+     there is no team. */
   const head = document.querySelector(`[data-fkey="${CSS.escape("prog:" + program.id)}"]`)
-    || (repoKey ? document.querySelector(`[data-fkey="${CSS.escape("repo:" + repoKey)}"]`) : null);
+    || (bandKey ? document.querySelector(`[data-fkey="${CSS.escape("repo:" + bandKey)}"]`) : null);
   if (!head) return;
   head.scrollIntoView?.({ block: "center" });
   head.focus?.({ preventScroll: true });
@@ -7320,7 +7508,7 @@ function repoShellSig(group, ui) {
        boot, and again whenever an operator picks a colour — with nothing else
        in this signature moving, so without it the first paint's untinted card
        is the card forever. */
-    repoTintFor(group.name),
+    group.hex || repoTintFor(group.name),
     repoOpen(group, ui) ? "open" : "shut",
     String(group.worktrees.length),
     group.pullRequestUrls.join(","),
@@ -7340,11 +7528,25 @@ function pullRequestLabel(url) {
   return number ? "PR " + number : "PR";
 }
 
+function teamBandPicker(group, tint) {
+  return el("label", { class: "repo-tint-picker" },
+    el("input", {
+      type: "color",
+      class: "visually-hidden",
+      tabindex: "-1",
+      value: tint || "#888888",
+      "aria-label": "Colour for " + group.name,
+      dataset: { fkey: "team-color:" + group.key },
+      onchange: (event) => { void putTeamColor(group.key, event.currentTarget.value); },
+    }),
+    tint ? el("span", { class: "repo-dot", "aria-hidden": "true" }) : null);
+}
+
 function renderRepoSection(group, ui = state) {
   const open = repoOpen(group, ui);
   const bodyId = "repo-body-" + group.key;
   const count = group.worktrees.length;
-  const tint = repoTintFor(group.name);
+  const tint = group.hex || repoTintFor(group.name);
   /* The band is the program tier, so it carries the program-tier facts: the
      fold, the name, the PRs, and the rollup over its WHOLE population —
      before this the unit the operator buckets attention by was the only unit
@@ -7365,8 +7567,11 @@ function renderRepoSection(group, ui = state) {
        is the loudest word in this tier and colouring it would spend identity on
        the one thing that already carries it (rule 6). Decorative — the name is
        right beside it, so there is nothing here for a screen reader to say and
-       nothing lost to a reader who cannot separate the hues. */
-    tint ? el("span", { class: "repo-dot", "aria-hidden": "true" }) : null,
+       nothing lost to a reader who cannot separate the hues. A team band's
+       picker reuses this chrome and PUTs /api/team-colors/:groupId. */
+    ...(group.kind === "team" ? [teamBandPicker(group, tint)] : [
+      tint ? el("span", { class: "repo-dot", "aria-hidden": "true" }) : null,
+    ]),
     el("span", { class: "repo-name", text: group.name }),
     el("span", {
       class: "repo-worktree-count",
@@ -7484,20 +7689,20 @@ const agentRowCache = new Map();       // "<programId>\u001f<rowKey>" -> { sig, 
    server-side because the event stream redacts their bodies — and `acks`, the
    operator's own judgments.
 
-   The Ack is the one that has to be said twice. It hides a row from the alert
-   list and it changes NOTHING about the session: it does not write to cmux, it
-   does not answer the agent, and the fleet counters keep counting the agent
-   because the agent really is still waiting. It self-revokes SERVER-side on a
-   fresh alert fingerprint, which is why nothing in this client remembers an
-   ack — the only reason a row is hidden is that this snapshot says so, so a
-   revoked ack comes back on the next poll with no expiry timer here to get
-   stuck. (An expiring record kept client-side is exactly the shape the
-   attention snooze above has a scar for.)
+   Ack is the operator's "I'm done with this row". The server writes the
+   Formic ack and then mark_reads unread cmux notices on the attested
+   surface. Clearing a notice from the panel is the other door into the
+   same funnel: toast-only rows are acked, a live needsInput is not.
+   This client still makes one request per verb.
 
-   And the two are deliberately independent. Clearing a notification does not
-   take a row out of Needs-you: "cmux is holding an unread alert" and "this
-   agent is asking for a person" were one field once, and folding them lost the
-   second one every time the first was answered. */
+   The Ack hides a row from the alert list and it changes NOTHING about the
+   session: it does not answer the agent, and the fleet counters keep counting
+   the agent because the agent really is still waiting. It self-revokes
+   SERVER-side on a fresh alert fingerprint, which is why nothing in this
+   client remembers an ack — the only reason a row is hidden is that this
+   snapshot says so, so a revoked ack comes back on the next poll with no
+   expiry timer here to get stuck. (An expiring record kept client-side is
+   exactly the shape the attention snooze above has a scar for.) */
 
 const cmuxNotifyCache = new WeakMap();  // snap -> Map<workspaceId, unread summaries>
 const ackCache = new WeakMap();         // snap -> Set<agentId>
@@ -7556,7 +7761,7 @@ function ackedAgent(agent, snap = state.snap) {
    asking for a human (its state word, its ink, its place in the rollup); what
    it loses is its seat in the strip. */
 function stripAlerting(agent, snap = state.snap) {
-  return alerting(agent) && !ackedAgent(agent, snap);
+  return (alerting(agent) || agent.attention === true) && !ackedAgent(agent, snap);
 }
 
 /* How many rows the operator's own judgment is holding out of the alert list.
@@ -7600,6 +7805,27 @@ function needsYouStrip(visible, ui = state) {
   for (const { program, agents } of visible) {
     for (const agent of agents) if (stripAlerting(agent, ui.snap)) rows.push({ agent, program });
   }
+  /* One global queue, newest ask on top. The walk above is per program, so
+     without this the strip's order is decided by which repo the server happened
+     to list first — which ask a person sees first is then an accident of
+     collection order. Recency is `alertSince`, first-seen of the current
+     fingerprint; see alertRecent in agent-model.js for why no other clock on
+     the record is allowed to rank it. Undated rows sort last, in the order the
+     walk produced.
+
+     The consequence, deliberate: a program's rows are NO LONGER contiguous, so
+     the run-length grouping below can print the same repo's heading more than
+     once. That is the honest rendering of an interleaved queue — the heading is
+     a label on the run, not the thing that ordered it. */
+  rows.sort((left, right) => {
+    const a = Date.parse(left.agent.alertSince || "");
+    const b = Date.parse(right.agent.alertSince || "");
+    const aOk = Number.isFinite(a);
+    const bOk = Number.isFinite(b);
+    if (aOk && bOk) return b - a;
+    if (aOk !== bOk) return aOk ? -1 : 1;
+    return 0;
+  });
   return rows;
 }
 
@@ -7787,6 +8013,11 @@ function agentRowSig(agent, ui, opts = {}) {
     // this signature moving, so it has to be in here or the row keeps its
     // cached, unmarked node.
     opts.alerting ? "alert-mark" : "",
+    /* The recency stamp. A newer ask arriving on ANOTHER row re-ranks this one
+       with nothing on its own record moving, so without this the row keeps its
+       cached node, the stamp goes stale, and the float compares a rank the row
+       no longer has — which is worse than not flying at all. */
+    "rank:" + (opts.alertRank == null ? "" : opts.alertRank),
     opState || "",
     /* Quiet-row age is lastThreadAt. Working rows tick duration from
        workingSince in place; a later tool must not rebuild the row or the
@@ -7966,7 +8197,7 @@ function syncProgramList(root, visible, ui = state) {
      under keys that name their axis. A program the server could not resolve a
      repo for is still one flat section keyed by its id, drawn by the same
      renderer, so nothing about that path moved. */
-  const groups = repoGroups(visible);
+  const groups = teamGroups(visible);
   /* Hollow groups plan no shell at all — not a head, not a column bar. Their
      rows are in the strip under a heading that says exactly where they belong,
      and `shown` still counts them below, because where a row is DRAWN never
@@ -7974,7 +8205,7 @@ function syncProgramList(root, visible, ui = state) {
   const liveWorktrees = (group) =>
     group.worktrees.filter(({ agents, finished }) => !hollowInPane(agents, finished, ui));
   for (const group of groups) {
-    if (group.kind === "repo") {
+    if (group.kind === "repo" || group.kind === "team") {
       if (!liveWorktrees(group).length) continue;
       sections.push({
         key: repoSectionKey(group.key),
@@ -7996,7 +8227,7 @@ function syncProgramList(root, visible, ui = state) {
      to wait until both levels have been reconciled. A collapsed band plans no
      subsections, exactly as a collapsed program plans no rows. */
   for (const group of groups) {
-    if (group.kind !== "repo") continue;
+    if (group.kind !== "repo" && group.kind !== "team") continue;
     const band = programBodies.get(repoSectionKey(group.key));
     if (!band) continue;
     const plan = repoOpen(group, ui)
@@ -8024,23 +8255,36 @@ function syncProgramList(root, visible, ui = state) {
     /* Grouped by program, in first-appearance order: one heading per run of
        rows, so eight pinned sessions read as short sections under names
        instead of eight chips fighting eight titles for the same line.
-       needsYouStrip walks `visible` per program, so a program's rows are
-       always contiguous and a run-length pass is the whole grouping. */
+       The strip is recency-ordered now (needsYouStrip), so a run is no longer
+       the same thing as a program: one program can own two runs with another
+       repo's newer ask between them. The run index is therefore part of both
+       keys. Without it the reconcile cache hands the second run the FIRST
+       run's node and merely MOVES it — the earlier heading disappears and its
+       rows end up filed under the wrong repo — and two heading buttons sharing
+       a focus key send restore-by-fkey to whichever came first. */
     const plan = [];
     let headFor = null;
+    const runsSeen = new Map();
+    let hotRank = 0;
     for (const { agent, program } of strip) {
       if (program.id !== headFor) {
         headFor = program.id;
+        const run = runsSeen.get(program.id) || 0;
+        runsSeen.set(program.id, run + 1);
         const label = stripChipLabel(program);
         plan.push({
-          key: STRIP_ID + "\u001fhead:" + program.id,
+          key: STRIP_ID + "\u001fhead:" + program.id + "\u001f" + run,
           // The pill's hex too, or the heading keeps its cached, pill-less
           // node when the colour endpoint answers.
-          sig: "head\u001f" + label + "\u001f" + repoTintOfProgram(program),
-          build: () => renderStripGroupHead(program, label),
+          sig: "head\u001f" + label + "\u001f" + tintOfProgram(program),
+          build: () => renderStripGroupHead(program, label, run),
         });
       }
-      const opts = stripRowOpts(program, board);
+      /* Every strip row is hot by construction, so its rank IS its index in the
+         list needsYouStrip just sorted — the stamp the float compares across a
+         paint to see that an already-hot row changed places. */
+      const opts = stripRowOpts(program, board, hotRank);
+      hotRank += 1;
       plan.push({
         key: STRIP_ID + "\u001frow:" + agent.id,
         sig: agentRowSig(agent, ui, opts),
@@ -8063,7 +8307,7 @@ function syncProgramList(root, visible, ui = state) {
      band hides rows without changing how many sessions matched, which is the
      number the scope note reports. */
   for (const group of groups) {
-    if (group.kind === "repo") {
+    if (group.kind === "repo" || group.kind === "team") {
       const open = repoOpen(group, ui);
       for (const { program, agents, finished, worktreeKey } of group.worktrees) {
         shown += agents.length;
@@ -8082,10 +8326,10 @@ function syncProgramList(root, visible, ui = state) {
    board section below says, as the jump control back to it. A heading rather
    than a per-row chip, because the chip stole the title's width on every line
    and repeated one fact per row that a run of rows shares. */
-function renderStripGroupHead(program, label) {
+function renderStripGroupHead(program, label, run = 0) {
   const repo = repoOf(program);
   const repoName = (repo && repo.repoName) || "";
-  const tint = repoTintFor(repoName);
+  const tint = tintOfProgram(program);
   /* Signal's quiet repo pill. The strip is the board's one surface with no band
      name above it, so this is where the repository is said — a bordered pill,
      never tinted text (rule 6). The word inside it is already the first half of
@@ -8102,7 +8346,11 @@ function renderStripGroupHead(program, label) {
     class: "strip-group-head",
     title: "Jump to " + label,
     "aria-label": "Jump to program group: " + label,
-    dataset: { fkey: "strip-head:" + program.id },
+    /* One key per RUN, not per program: recency can split a repo across two
+       runs, and two focus stops answering to the same key send restore-by-fkey
+       to whichever came first. The first run keeps the bare key, so a strip
+       that never interleaves has the focus behaviour it always had. */
+    dataset: { fkey: "strip-head:" + program.id + (run ? ":" + run : "") },
     onclick: () => jumpToProgramGroup(program),
   },
     pill,
@@ -8119,7 +8367,7 @@ function renderStripGroupHead(program, label) {
    sessions asking for a person, and a child that is asking is asking whether or
    not its parent is on screen. Its nesting is still true, and still shown, in
    the group below and in the drawer's lineage spine. */
-function stripRowOpts(program, board) {
+function stripRowOpts(program, board, alertRank = "") {
   return {
     depth: 0,
     childCount: 0,
@@ -8127,27 +8375,35 @@ function stripRowOpts(program, board) {
     fullById: board.byId,
     ambiguousNames: board.ambiguous,
     sharedNames: board.sharedNames,
-    /* NO repo tint here, deliberately, and that omission is the whole fix for
-       authority rule 5 on this surface.
+    /* Where this row sits in the one recency queue the strip is. Membership
+       alone cannot see a swap of two rows that were both already hot, so the
+       float reads this too — and it must come from the list that was just
+       sorted, never recomputed from another one. */
+    alertRank,
+    /* The band tint, OFFERED — the reversal of authority rule 5 on this
+       surface. Same hue the heading wears: team hex when the program is
+       unanimous, repo otherwise.
 
-       `needsYouStrip` admits only alerting agents, so every row in this strip
-       is an attention row. Rule 5 gives an attention row to status outright, so
-       identity is carried by the heading pill above the run rather than by
-       anything on the row itself.
+       It used to be withheld here on purpose, and that was correct while rule 5
+       said an attention row belongs to status outright: an offered tick would
+       have painted a repo wash on an attention row, and the shape that made it
+       unfixable in CSS is still true — a hook-needsInput agent is alerting with
+       a HEALTHY outcome, so it wears none of the is-needs-you / is-blocked /
+       is-failed classes a `:not()` could have caught it by.
 
-       Offering a tick here and relying on the stylesheet to drop it does NOT
-       work, and that is the trap: most strip rows get an ember class from their
-       OUTCOME (needs-you / blocked / failed), but a hook-needsInput agent is
-       alerting with a HEALTHY outcome and so carries none of them. It would
-       match every `:not(.is-…)` identity selector and wear a repo wash on an
-       attention row — precisely inverted.
+       What changed is the rule, not the shape. Attention no longer evicts the
+       wash; it adds an outline in a bolder version of the same hue
+       (`.agent-row.is-alert-hot`). So the row that needs a person keeps its
+       repository and gets louder on top of it, and the heading pill goes back
+       to being what it reads as — a jump control — instead of the only place
+       the repo is said.
 
-       The tempting second fix — set `alerting: true` so the row takes the ember
-       class — is wrong here for a reason outside this lane: pane mode
-       deliberately does not double-mark, because the strip IS the signal
-       ("inline mode marks every row the strip would have taken", in
-       tests/web-client.test.ts). Not offering identity in the first place
-       closes the hole without overruling that. */
+       Still NOT `alerting: true`. That would give pane mode a second mark for
+       something its strip already says ("inline mode marks every row the strip
+       would have taken", tests/web-client.test.ts); is-alert-hot is the mark
+       both modes share, and it is stamped from stripAlerting inside
+       renderAgentRow rather than passed in here. */
+    repoTint: tintOfProgram(program),
   };
 }
 
@@ -8167,7 +8423,10 @@ function hiddenByLookback(ui = state) {
   let hidden = 0;
   for (const { agent, program } of snapshotAgents(ui.snap)) {
     if (!dashboardVisible(agent)) continue;
-    if (passesLookback(agent, ui.view, ui.lookbackHours)) continue;   // inside the window
+    // Inside the window, or exempt from it because it is an unacked ask — and
+    // an exempt row is on screen, so counting it as hidden would send the
+    // operator off to widen a window for a row they are looking at.
+    if (withinWindowOrAsking(agent, ui.view, ui.lookbackHours, ui.snap)) continue;
     if (!viewMatches(ui.view, agent)) continue;
     if (!matchesQuery(agent, program, ui.query)) continue;
     if (!passesReviewVisibility(
@@ -8255,6 +8514,13 @@ function rowAlertMarked(row) {
   return Boolean(row.dataset) && row.dataset.hot === "true";
 }
 
+/* Position inside the alert list, "" for anything not in it. Read as a string
+   on purpose — it is compared for CHANGE, never for magnitude, and a row that
+   left the list must compare unequal to every rank it ever held. */
+function rowAlertRank(row) {
+  return (row.dataset && row.dataset.alertRank) || "";
+}
+
 function captureRowFlights(root) {
   /* Null is the no-motion answer, and it must be reachable from every guard:
      render correctness can never depend on the float running. */
@@ -8265,7 +8531,11 @@ function captureRowFlights(root) {
     if (typeof row.animate !== "function" || typeof row.getBoundingClientRect !== "function") return null;
     const key = row.dataset && row.dataset.fkey;
     if (!key) continue;
-    before.set(key, { top: row.getBoundingClientRect().top, alerted: rowAlertMarked(row) });
+    before.set(key, {
+      top: row.getBoundingClientRect().top,
+      alerted: rowAlertMarked(row),
+      rank: rowAlertRank(row),
+    });
   }
   return before.size ? before : null;
 }
@@ -8290,7 +8560,13 @@ function playRowFlights(root, before) {
     const key = row.dataset && row.dataset.fkey;
     const prior = key ? before.get(key) : undefined;
     if (!prior || typeof row.animate !== "function") continue;
-    const mover = prior.alerted !== rowAlertMarked(row);
+    /* Two ways a row's place in the alert list can change: it joined or left
+       (membership), or it kept its seat and the queue re-ranked around it
+       (recency). The second is only asked of rows that are STILL hot — a calm
+       row's rank is "" in both captures, so it can never become a mover on
+       geometry alone, which is what keeps a routine repaint motionless. */
+    const mover = prior.alerted !== rowAlertMarked(row)
+      || (rowAlertMarked(row) && prior.rank !== rowAlertRank(row));
     if (mover) hasMover = true;
     candidates.push({ row, prior, mover });
   }
@@ -8713,7 +8989,7 @@ function agentRowPlan(program, agents, ui = state, board = boardIndex(ui), opts 
      than the value it looks like. The stylesheet drops the tick again on any
      row wearing an attention class, so this is identity offered and status
      taking precedence, never the two mixed. */
-  const rowRepoTint = opts.banded ? "" : repoTintOfProgram(program);
+  const rowRepoTint = opts.banded ? "" : tintOfProgram(program);
   const visibleIds = new Set(agents.map((agent) => agent.id));
   const programById = new Map(program.agents.map((agent) => [agent.id, agent]));
   const relevantIds = new Set(visibleIds);
@@ -8821,6 +9097,10 @@ function agentRowPlan(program, agents, ui = state, board = boardIndex(ui), opts 
            "open me and see" must only fire when opening shows it. */
         swarmAlerting: !open && hasDrawnAlertingDescendant(agent.id),
         alerting: markAlerting && stripAlerting(agent, ui.snap),
+        /* Rank inside this section's hot prefix, or "" for anything the sort
+           did not rank — calm rows, and swarm children, which are drawn under
+           their parent rather than in the queue. */
+        alertRank: hotRanks.has(agent.id) ? hotRanks.get(agent.id) : "",
         repoTint: rowRepoTint,
       };
       plan.push({
@@ -8911,10 +9191,31 @@ function agentRowPlan(program, agents, ui = state, board = boardIndex(ui), opts 
      order is the server's order, not recency. Membership is the PRESENTED
      membership — stripAlerting, the same predicate the strip and the row's
      is-alerting class read — so an acknowledged row never rises with a muted
-     word. */
+     word.
+
+     Then recency INSIDE that hot prefix, newest ask first, keyed on
+     `alertSince` and on nothing else — see alertRecent. A section's calm rows
+     are untouched by it, and no row crosses a section boundary: a Waiting alert
+     that climbed into Active would still make the heading a lie however recent
+     it is. */
   const sectionHot = (a) => stripAlerting(a, ui.snap);
+  const sinceOf = (a) => a.alertSince;
+  /* Where each hot row sits in the list it was just sorted into — the stamp the
+     float compares across a paint. Recomputing it from any other list would let
+     the sort and the flight disagree, which is the teleport this closes. Ranked
+     per section, because that is the list the operator's eye follows. */
+  const hotRanks = new Map();
+  const rankHot = (list) => {
+    for (let i = 0; i < list.length && sectionHot(list[i]); i += 1) hotRanks.set(list[i].id, i);
+  };
   alertFirst(unsectioned, sectionHot);
-  for (const bucket of buckets.values()) alertFirst(bucket, sectionHot);
+  alertRecent(unsectioned, sectionHot, sinceOf);
+  rankHot(unsectioned);
+  for (const bucket of buckets.values()) {
+    alertFirst(bucket, sectionHot);
+    alertRecent(bucket, sectionHot, sinceOf);
+    rankHot(bucket);
+  }
 
   /* Exactly what appendTree will put on screen for this root: its own row, or
      an anchor holding children that are still drawn. Mirroring the walk rather
@@ -9190,13 +9491,17 @@ function rowSummaryParts(agent) {
 const PROVIDER_MARK = {
   openai: { src: "/icons/openai.svg" },
   claude: { src: "/icons/claude.svg" },
-  spark: { src: "/icons/meta.svg" },
+  spark: { src: "/icons/muse.svg" },
+  gemini: { src: "/icons/gemini.svg" },
   grok: { src: "/icons/grok.svg" },
   xai: { src: "/icons/xai.svg" },
   cursor: { src: "/icons/cursor.svg" },
   prime: { src: "/icons/prime-orch.svg" },
   factory: { src: "/icons/factory.svg" },
   omp: { src: "/icons/omp.svg" },
+  muse: { src: "/icons/muse.svg" },
+  copilot: { src: "/icons/copilot.svg" },
+  antigravity: { src: "/icons/antigravity.png", raster: true },
 };
 
 /* Harness vs Agent — two badges per row. Harness = where it ran (provider), Agent = what thought (model family).
@@ -9210,19 +9515,20 @@ const HARNESS_MARK = {
   omp: { src: "/icons/omp.svg", label: "OMP" },
   grok: { src: "/icons/xai.svg", label: "Grok Build" },
   hermes: { src: "/icons/formic-mark.svg", label: "Hermes" },
-  muse: { label: "Muse" },
-  antigravity: { label: "Antigravity" },
-  copilot: { label: "Copilot CLI" },
+  muse: { src: "/icons/muse.svg", label: "Muse Code" },
+  antigravity: { src: "/icons/antigravity.png", label: "Antigravity", raster: true },
+  copilot: { src: "/icons/copilot.svg", label: "Copilot CLI" },
   omni: { src: "/icons/omp.svg", label: "OMP" },
 };
 const AGENT_MARK = {
-  spark: { src: "/icons/meta.svg", label: "Spark" },
+  spark: { src: "/icons/muse.svg", label: "Muse Spark" },
   grok: { src: "/icons/grok.svg", label: "Grok" },
   claude: { src: "/icons/claude.svg", label: "Claude" },
   openai: { src: "/icons/openai.svg", label: "OpenAI" },
   cursor: { src: "/icons/cursor.svg", label: "Cursor" },
   sol: { src: "/icons/openai.svg", label: "Sol" },
   luna: { src: "/icons/openai.svg", label: "Luna" },
+  gemini: { src: "/icons/gemini.svg", label: "Gemini" },
 };
 
 function harnessKeyOf(agent) {
@@ -9239,6 +9545,7 @@ function agentKeyOf(agent) {
   const m = (agent.model || "").toLowerCase();
   if (/grok/i.test(m)) return "grok";
   if (/muse-spark|spark/i.test(m)) return "spark";
+  if (/gemini/i.test(m)) return "gemini";
   if (/fable|opus|sonnet|haiku/i.test(m)) return "claude";
   if (/composer/i.test(m)) return "cursor";
   if (/sol|luna/i.test(m)) return "sol";
@@ -9285,7 +9592,7 @@ function providerMark(agent) {
   const grok = /grok/i.test(agent.model || "");
   const spark = /muse-spark|spark/i.test(agent.model || "");
   const key = grok ? "grok" : spark ? "spark" : agent.provider === "codex" ? "openai" : agent.provider;
-  const label = grok ? "Grok" : spark ? "Meta Spark" : agent.provider === "codex" ? "OpenAI Codex" : agent.provider === "claude" ? "Anthropic Claude" : providerLabel(agent.provider);
+  const label = grok ? "Grok" : spark ? "Muse Spark" : agent.provider === "codex" ? "OpenAI Codex" : agent.provider === "claude" ? "Anthropic Claude" : providerLabel(agent.provider);
   const mark = PROVIDER_MARK[key];
   if (!mark) {
     return el("span", { class: "provider-mark provider-mark-text", title: label, "aria-label": label, text: label.slice(0, 1) });
@@ -9825,6 +10132,13 @@ function renderAgentRow(agent, program, opts = {}) {
        A row can be in the set with a healthy outcome (hook needsInput), so
        this mark and is-needs-you are two different facts. */
     (opts.alerting ? " is-alerting" : "") +
+    /* The mark BOTH modes share, and the only one that means "needs a person"
+       wherever the row is drawn: is-alerting is inline-only (pane's strip is
+       that signal, and double-marking it was refused), presentedOutcome mutes
+       only needs-you, and a hook-shaped ask has a HEALTHY outcome and so wears
+       no ink class at all. Same predicate as data-hot and as the sort, from the
+       same snapshot, so paint and order can never disagree. */
+    (stripAlerting(agent, state.snap) ? " is-alert-hot" : "") +
     /* Strip rows already sit inside the needs-you pane — the strip IS the
        signal. Adding is-needs-you here would double-mark and let a healthy
        hook-shaped alert wear identity paint the :not() selectors cannot catch
@@ -9886,6 +10200,15 @@ function renderAgentRow(agent, program, opts = {}) {
          input and the "acked" fragment covers the veto, so a membership flip
          always rebuilds the node that carries this stamp. */
       hot: stripAlerting(agent, state.snap) ? "true" : "false",
+      /* WHERE in that list, which membership cannot say. Two rows that were
+         both already hot swapping places is a real move on the one surface
+         whose job is "look here", and the pre-recency mover test — membership
+         flipped or it did not — reports nothing for it, so both rows teleport
+         between frames. Empty off the list: rank is meaningless for a calm row,
+         and an empty stamp can never make one a mover. */
+      alertRank: stripAlerting(agent, state.snap) && opts.alertRank !== "" && opts.alertRank != null
+        ? String(opts.alertRank)
+        : "",
     },
     onclick: (e) => {
       if (e.target.closest(".agent-rename, .rename-form, .swarm-chip")) return;
@@ -11443,7 +11766,7 @@ function renderAgentDrawer(pane, view) {
   desk.append(el("div", { id: "drawer-evidence-body", class: "drawer-evidence-body" },
     renderEvidence(agent),
     renderLineageSpine(agent)));
-  const deskTint = repoTintOfProgram(program) || repoTintFor(agent.repo && agent.repo.repoName);
+  const deskTint = tintOfProgram(program) || repoTintFor(agent.repo && agent.repo.repoName);
   paintRepoTint(desk, deskTint, "has-repo-tint");
 
   let grid = null;
@@ -13419,13 +13742,17 @@ async function sendControl(agent, action, instruction) {
 
 /* ---------- SYNC-NF · the two writes ----------
 
-   `/api/sync/notifications` carries a clear through the server's action funnel
-   to cmux; `/api/sync/ack/:agentId` writes the operator's board-local judgment
-   and never touches cmux at all. They share one request shape because they
-   share one honesty rule: HTTP completion is not evidence. cmux answers a wrong
-   parameter with exit code 0 and does nothing, so the server surfaces its
-   refusals as a typed `ActionResult` and this believes `ok` only when the
-   envelope says so in a boolean. Anything else is a refusal with a name.
+   Ack is the operator's "I'm done with this row". The server writes the
+   Formic ack and then mark_reads unread cmux notices on the attested
+   surface. Clearing a notice from the panel is the other door into the
+   same funnel: toast-only rows are acked, a live needsInput is not.
+   This client still makes one request per verb.
+
+   They share one request shape because they share one honesty rule: HTTP
+   completion is not evidence. cmux answers a wrong parameter with exit code 0
+   and does nothing, so the server surfaces its refusals as a typed
+   `ActionResult` and this believes `ok` only when the envelope says so in a
+   boolean. Anything else is a refusal with a name.
 
    In-flight keys live here rather than in client-state.js: they are this file's
    own bookkeeping, and the shared state object is contended by three lanes. */
@@ -13441,7 +13768,12 @@ async function syncRequest(url, method, body) {
     }, API_WRITE_TIMEOUT_MS);
     let envelope = null;
     try { envelope = await res.json(); } catch { /* a build without the route answers HTML */ }
-    if (envelope && envelope.ok === true) return { ok: true };
+    if (envelope && envelope.ok === true) {
+      return {
+        ok: true,
+        cmuxWarnings: Array.isArray(envelope.cmuxWarnings) ? envelope.cmuxWarnings : [],
+      };
+    }
     return {
       ok: false,
       // The server's own refusal class when it named one ("invalid_state"), and
@@ -13491,8 +13823,20 @@ async function applySyncAck(agent, on) {
      because the next snapshot's `acks` says so. A refused ack therefore moves
      nothing at all, which is exactly right — the operator's judgment did not
      land, so the board must not act as though it had. */
-  if (result.ok) await fetchSnapshot();
-  else toast(syncFailureText(on ? "Ack" : "Unack", result), "err");
+  if (result.ok) {
+    const warnings = result.cmuxWarnings || [];
+    if (on && warnings.length) {
+      const first = warnings[0];
+      toast(
+        "Ack saved, but cmux did not clear [" + (first.code || "cmux_failed") + "]"
+          + (first.detail ? ": " + first.detail : ""),
+        "err",
+      );
+    }
+    await fetchSnapshot();
+  } else {
+    toast(syncFailureText(on ? "Ack" : "Unack", result), "err");
+  }
   render();
   return result;
 }
@@ -14538,7 +14882,7 @@ Object.assign(globalThis.TheAntHill, {
   settingsPreview, settingsPreviewText, SETTINGS_PRESETS, renderSettingsPanel,
   requestCloseSettingsPanel,
   // TINT-F: the repo-colour region and its one write.
-  renderRepoColorSettings, paintRepoColorSettings, putRepoColor,
+  renderRepoColorSettings, paintRepoColorSettings, putRepoColor, putTeamColor,
   passesLookback, isUnverified,
   // `const`s, so they would be a TDZ error in the hoisted block above.
   STRIP_ID, SECTION_HEADS,

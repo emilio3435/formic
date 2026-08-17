@@ -129,8 +129,15 @@ describe("the badge is ember only when a person is the blocker", () => {
     expect(model.count).toBe(0);
     expect(toggle.notifyToggleView({ enabled: false, permission: "default" }, true, 0, "clear").count).toBe(0);
     /* The digit is painted unconditionally; an absent badge would be
-       indistinguishable from a broken one. */
-    expect(appjs.includes("renderNotifyToggle(model.count, model.tone, open)")).toBe(true);
+       indistinguishable from a broken one.
+
+       Matched as a prefix, not as a whole call: the claim is that the badge is
+       painted from the PANEL's own count and tone, which is what stops the
+       button disagreeing with what it opens. The call also carries the spoken
+       name's two extra populations now (waiting = stripAlerting fleet-wide,
+       watching = the watcher's list length), and pinning the closing paren made
+       this an assertion about arity, which it was never trying to be. */
+    expect(appjs.includes("renderNotifyToggle(model.count, model.tone, open")).toBe(true);
   });
 
   test("semantic danger is the fill of exactly one badge tone", () => {

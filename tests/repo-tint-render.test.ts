@@ -492,31 +492,43 @@ describe("Signal", () => {
     expect(row.props["--repo-tint"]).toBeUndefined();
   });
 
-  test("the strip offers NO tick — identity never reaches an attention row", () => {
-    /* needsYouStrip admits only alerting agents, so every strip row is an
-       attention row and rule 5 gives it to status outright. Identity is carried
-       by the heading pill instead.
+  test("B7 the strip OFFERS the tick — identity is back on the row that needs a person", () => {
+    /* The inversion. Withholding the tick was the right fix while rule 5 said
+       attention evicts identity: an offered tick would have painted a repo wash
+       on an attention row, and a hook-needsInput agent — alerting with a HEALTHY
+       outcome, so wearing none of the is-needs-you / is-blocked / is-failed
+       classes — would have slipped through every `:not()` that was supposed to
+       stop it.
 
-       Withholding the tick, rather than offering one for the stylesheet to
-       drop, is what makes this airtight for the hook-needsInput shape below:
-       that agent is alerting with a HEALTHY outcome, so it carries none of the
-       is-needs-you / is-blocked / is-failed classes the identity selectors
-       exclude. An offered tick would paint on it. */
+       Rule 5 is reversed now. The row that needs a person keeps its repository,
+       and gets louder on top of it; the heading pill is a jump control rather
+       than the only place the repo is said. */
     useColors({ "the-mountain": "mtn" }, { mtn: SIENNA });
     const opts = M.stripRowOpts(program(), boardIndexStub());
-    expect(opts.repoTint).toBeUndefined();
+    expect(opts.repoTint).toBe(SIENNA);
 
     const hookShaped = agent({ status: "waiting", lifecycle: "waiting", hookLifecycle: "needsInput" });
     const row = withDom(() => M.renderAgentRow(hookShaped, program(), opts)) as unknown as FakeNode;
-    expect(row.classList.contains("has-repo-tick")).toBe(false);
-    expect(row.props["--repo-tint"]).toBeUndefined();
-    /* Pinning the shape that makes this necessary: no attention class either,
-       because pane mode deliberately does not double-mark — the strip IS the
-       signal. So there is nothing for a `:not()` to catch, and the only safe
-       treatment is none. */
+    expect(row.classList.contains("has-repo-tick")).toBe(true);
+    expect(row.props["--repo-tint"]).toBe(SIENNA);
+    // The loud part is is-alert-hot, the mark BOTH modes share…
+    expect(row.classList.contains("is-alert-hot")).toBe(true);
+    /* …and is-alerting is still inline-only. Setting it here to "make the tint
+       work" would double-mark pane mode, which is the thing the strip's
+       existence already says. */
     for (const attention of ["is-needs-you", "is-blocked", "is-failed", "is-alerting"]) {
       expect(row.classList.contains(attention), attention).toBe(false);
     }
+  });
+
+  test("B7 a calm row wears identity without the alert mark", () => {
+    // The mark is stripAlerting, not "is on a surface that shows alerts".
+    useColors({ "the-mountain": "mtn" }, { mtn: SIENNA });
+    const one = agent();
+    const plan = planFor([one], false);
+    const row = withDom(() => plan.find((item: { key: string }) => item.key === "row:" + one.id).build()) as unknown as FakeNode;
+    expect(row.classList.contains("has-repo-tick")).toBe(true);
+    expect(row.classList.contains("is-alert-hot")).toBe(false);
   });
 
   test("the strip heading wears the quiet repo pill, bordered rather than inked", () => {
@@ -561,17 +573,43 @@ describe("status outranks identity (authority rule 5)", () => {
     expect(repoRowSelectors().length).toBeGreaterThanOrEqual(4);
   });
 
-  test("every repo row treatment excludes every attention class, and selection", () => {
-    /* Written as :not() exclusions rather than left to source order. Order is a
-       fact about the stylesheet; "an alerting row REPLACES the repo wash, never
-       blends with it" is a fact about the product, and the second one should
-       not be enforced by the first. */
+  test("B8 rule 5 is reversed — no repo row treatment excludes an attention class", () => {
+    /* The measured defect this inverts: on the live board a calm row in the
+       the-mountain band read `color(srgb 0.993725 0.961569 0.996078)` — a pale
+       magenta wash — and the same row with `is-alerting` read
+       `rgba(0, 0, 0, 0)`, falling through to white paper. Attention evicted the
+       only fill the row had, and (since SORT-INK-1 retired the ember wash)
+       nothing replaced it. The row that most needed to be recognisable was the
+       one that stopped looking like anywhere.
+
+       Status is geometry and outline now. It adds; it does not evict. */
     for (const selector of repoRowSelectors()) {
-      for (const attention of [...ATTENTION, "is-selected"]) {
-        expect(selector, `${selector} must exclude .${attention}`)
-          .toContain(`:not(.${attention})`);
+      for (const attention of ATTENTION) {
+        expect(selector, `${selector} must NOT exclude .${attention}`)
+          .not.toContain(`:not(.${attention})`);
       }
     }
+  });
+
+  test("B8 selection and flight still outrank identity", () => {
+    // The two exclusions that survive, and the reason they are different in
+    // kind: both are transient states the OPERATOR is causing right now — the
+    // row they picked, and the row mid-glide — not a fact about the session.
+    for (const selector of repoRowSelectors()) {
+      for (const transient of ["is-selected", "is-floating"]) {
+        expect(selector, `${selector} must exclude .${transient}`)
+          .toContain(`:not(.${transient})`);
+      }
+    }
+  });
+
+  test("B8 the alerting row in a band keeps the 4% wash", () => {
+    /* The acceptance criterion as a selector fact: the band's wash rule must
+       still match a row wearing is-alerting / is-needs-you, which after the
+       inversion means it simply says nothing about them. */
+    const wash = styles.match(/\.repo-section\.has-repo-tint \.agent-row[^{]*\{[^}]*var\(--repo-tint\) 4%[^}]*\}/)?.[0] ?? "";
+    expect(wash).not.toBe("");
+    for (const attention of ATTENTION) expect(wash).not.toContain(`:not(.${attention})`);
   });
 
   test("the retired attention paint stays retired — no ember wash or rail returns to the row", () => {

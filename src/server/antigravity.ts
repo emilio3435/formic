@@ -2,7 +2,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { basename, join } from "node:path";
 import type { TokenUsage } from "../shared/types";
 import { instanceIdFor, type CollectorKind } from "./collector-instances";
-import { makeAgent, type ParseMetadata } from "./collectors";
+import { claudeContextWindow, makeAgent, type ParseMetadata } from "./collectors";
 import {
   ForeignSqliteReadError,
   foreignSqliteFailureMessage,
@@ -254,6 +254,10 @@ async function collectConversation(
     nowMs,
     thresholds,
   };
+  const contextWindow = claudeContextWindow(hints.model);
+  const tokens: TokenUsage = contextWindow !== undefined
+    ? { scope: "unknown", provenance: "unknown", contextWindow }
+    : UNKNOWN_TOKENS;
   const agent = makeAgent({
     provider: "antigravity",
     sourceSessionId,
@@ -263,7 +267,7 @@ async function collectConversation(
     task: transcript?.task,
     startedAt,
     updatedAt,
-    tokens: UNKNOWN_TOKENS,
+    tokens,
     transcriptTail: transcript?.tail,
     humanMessages: transcript?.messages ?? [],
     meta,

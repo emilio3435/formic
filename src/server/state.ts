@@ -3,14 +3,20 @@ import { homedir, uptime } from "node:os";
 import type { AgentSnapshot, CmuxNotificationSummary, HubSnapshot, IssueLifecycle, OperatorIssue, Provider, SourceHealth, TriageQueueSummary } from "../shared/types";
 import { PROVIDERS } from "../shared/types";
 import { alertFingerprintFor, MemoryAckStore, type AckStore } from "./ack";
+import { MemoryAlertSinceStore, type AlertSinceStore } from "./alert-since";
 import {
   collectCmux,
+  collectCmuxGroups,
   collectCmuxNotificationSummaries,
   collectCmuxNotifications,
   collectCmuxSidebar,
   collectCmuxWorkspaceEnvs,
   DEFAULT_CMUX_EXECUTABLE,
+  type CmuxWindowGroups,
 } from "./cmux";
+import type { RepoGroupProvenanceStore } from "./cmux-groups";
+import type { JsonTeamColorsStore } from "./team-colors";
+import { attachTeams, buildOperatorTeams, indexTeamsByWorkspace, type CmuxTeam } from "../shared/team-tint";
 /* TINT-S */ import { syncCmuxColors } from "./cmux-color-sync";
 import {
   CmuxEventsSupervisor,
@@ -38,6 +44,7 @@ import { collectHermesSpendSources } from "./hermes";
 import { buildSnapshot, type ProgramHint, withIssueDecoration, withPulse } from "./snapshot";
 import { isLive } from "./live";
 import { rollupFor } from "./snapshot-programs";
+import { agentIsStripAlerting } from "./strip-alerting";
 import { PulseTracker } from "./pulse";
 import type {
   ArchiveStore,
@@ -80,7 +87,6 @@ import {
   type SenderTranscriptTailReader,
 } from "./sender-verification";
 import { ProviderSettlementCoordinator } from "./provider-settlement";
-import { taskStateWantsHuman } from "./task-state";
 
 type Abortable<T extends (...args: any[]) => any> = (
   ...args: [...Parameters<T>, signal?: AbortSignal]
@@ -93,6 +99,7 @@ export interface HubCollectors {
   spendSources?: typeof collectHermesSpendSources;
   cmux: Abortable<typeof collectCmux>;
   sidebar?: typeof collectCmuxSidebar;
+  groups?: typeof collectCmuxGroups;
   workspaceEnv?: typeof collectCmuxWorkspaceEnvs;
   manifests?: typeof readRunManifests;
   notifications: Abortable<typeof collectCmuxNotifications>;
@@ -107,6 +114,7 @@ const DEFAULT_COLLECTORS: HubCollectors = {
   spendSources: collectHermesSpendSources,
   cmux: collectCmux,
   sidebar: collectCmuxSidebar,
+  groups: collectCmuxGroups,
   workspaceEnv: collectCmuxWorkspaceEnvs,
   manifests: readRunManifests,
   notifications: collectCmuxNotifications,
@@ -229,8 +237,11 @@ export interface HubStateOptions {
   sessionNames?: JsonSessionNameStore;
   witnessStore?: ProcessWitnessStore;
   ackStore?: AckStore;
+  alertSinceStore?: AlertSinceStore;
   /** Injectable so tests can pin a boot without a clock. */
   bootId?: string;
+  teamColorsStore?: Pick<JsonTeamColorsStore, "get">;
+  repoGroupProvenance?: Pick<RepoGroupProvenanceStore, "list">;
 }
 
 export class HubState {
@@ -282,6 +293,7 @@ export class HubState {
     provider,
     { healthy: false, lastHealthyAt: null },
   ])) as Record<Provider, SourceHealth>;
+  #operatorTeams: CmuxTeam[] = [];
 
   #scanWindowHours = DEFAULT_SCAN_WINDOW_HOURS;
   readonly #providerSettlement = new ProviderSettlementCoordinator<Provider, SessionProviderResult>(
@@ -305,6 +317,9 @@ export class HubState {
   private readonly sessionNames?: JsonSessionNameStore;
   private readonly witnessStore?: ProcessWitnessStore;
   private readonly ackStore: AckStore;
+  private readonly alertSinceStore: AlertSinceStore;
+  private readonly teamColorsStore?: Pick<JsonTeamColorsStore, "get">;
+  private readonly repoGroupProvenance?: Pick<RepoGroupProvenanceStore, "list">;
 
   constructor(
     private readonly runner: CommandRunner,
@@ -327,6 +342,9 @@ export class HubState {
     this.sessionNames = options.sessionNames;
     this.witnessStore = options.witnessStore;
     this.ackStore = options.ackStore ?? new MemoryAckStore();
+    this.alertSinceStore = options.alertSinceStore ?? new MemoryAlertSinceStore();
+    this.teamColorsStore = options.teamColorsStore;
+    this.repoGroupProvenance = options.repoGroupProvenance;
     this.#bootId = options.bootId ?? currentBootId(uptime(), Date.now());
     this.#pulse = new PulseTracker(this.burnReader);
     const bootSettings = this.settingsReader?.();
@@ -355,6 +373,10 @@ export class HubState {
 
   get(): HubSnapshot {
     return this.#snapshot;
+  }
+
+  teams(): readonly CmuxTeam[] {
+    return this.#operatorTeams;
   }
 
   surfaces(): readonly CmuxSurface[] {
@@ -620,7 +642,7 @@ export class HubState {
         return endedByCmux(agent);
       });
       return agents.some((agent, index) => agent !== program.agents[index])
-        ? { ...program, agents, rollup: rollupFor(agents, Date.now()) }
+        ? { ...program, agents, rollup: rollupFor(agents, Date.now(), this.#snapshot.acks ?? []) }
         : program;
     });
     if (!changed) return;
@@ -649,7 +671,7 @@ export class HubState {
           finished: countLifecycle("finished"),
         },
         needsYou: observed.filter((agent) =>
-          agent.lifecycle !== "finished" && taskStateWantsHuman(agent)).length,
+          agentIsStripAlerting(agent, this.#snapshot.acks ?? [])).length,
         history: allAgents.filter((agent) => agent.activity === "ended").length,
       },
     });
@@ -881,6 +903,7 @@ export class HubState {
     type SpendSourcesResult = Awaited<ReturnType<typeof collectHermesSpendSources>>;
     type CmuxResult = Awaited<ReturnType<HubCollectors["cmux"]>>;
     type SidebarResult = Awaited<ReturnType<typeof collectCmuxSidebar>>;
+    type GroupsResult = Awaited<ReturnType<typeof collectCmuxGroups>>;
     type WorkspaceEnvResult = Awaited<ReturnType<typeof collectCmuxWorkspaceEnvs>>;
     type NotificationsResult = Awaited<ReturnType<HubCollectors["notifications"]>>;
     type SyncNotificationsResult = Awaited<ReturnType<typeof collectCmuxNotificationSummaries>>;
@@ -892,6 +915,7 @@ export class HubState {
     const lastKnownSourceReasons: Partial<Record<Provider, string>> = {};
     let cmuxResult: CmuxResult | undefined;
     let sidebarResult: SidebarResult | undefined;
+    let groupsResult: GroupsResult | undefined;
     let workspaceEnvResult: WorkspaceEnvResult | undefined;
     let runManifestsResult: RunManifest[] | undefined;
     let notificationsResult: NotificationsResult | undefined;
@@ -1041,6 +1065,18 @@ export class HubState {
                   }),
                   (value) => {
                     sidebarResult = value;
+                  },
+                )]
+              : []),
+            ...(this.collectors.groups
+              ? [capture(
+                  "cmux group discovery failed",
+                  this.collectors.groups(this.runner, this.cmuxExecutable, {
+                    deadlineMs: controlTimeoutMs,
+                    signal,
+                  }),
+                  (value) => {
+                    groupsResult = value;
                   },
                 )]
               : []),
@@ -1257,6 +1293,9 @@ export class HubState {
     const sidebar = options.cmux && this.collectors.sidebar
       ? sidebarResult ?? { value: [], errors: [reasonFor("cmux sidebar discovery failed")] }
       : undefined;
+    const groups = options.cmux && this.collectors.groups
+      ? groupsResult ?? { value: [] as CmuxWindowGroups[], errors: [reasonFor("cmux group discovery failed")] }
+      : undefined;
     const workspaceEnv = options.cmux && this.collectors.workspaceEnv
       ? workspaceEnvResult ?? { value: [], errors: [reasonFor("cmux workspace env discovery failed")] }
       : undefined;
@@ -1359,16 +1398,42 @@ export class HubState {
       if (sidebar && sidebar.errors.length === 0) {
         this.#sidebarWorkspaces = sidebar.value;
       }
+      /* A total miss must not wipe last-good teams: TINT-S still runs when
+         surfaces collected, and an empty index re-asserts the repo hex. */
+      if (groups && !(groups.errors.length > 0 && groups.value.length === 0)) {
+        this.#operatorTeams = buildOperatorTeams(
+          groups.value,
+          new Set((this.repoGroupProvenance?.list() ?? []).map((record) => record.groupId)),
+          this.teamColorsStore?.get() ?? { assignments: {} },
+        );
+      } else if (!groups) {
+        this.#operatorTeams = [];
+      }
       if (workspaceEnv && workspaceEnv.errors.length === 0) {
         this.#workspaceEnvs = workspaceEnv.value;
       }
       if (runManifestsResult) {
         this.#runManifests = runManifestsResult;
       }
-      /* TINT-S */ if (this.#cmuxReachable) void syncCmuxColors({ runner: this.runner, executable: this.cmuxExecutable, surfaces: this.#surfaces, settings });
+      /* TINT-S */ if (this.#cmuxReachable) {
+        const teamByWorkspaceId = new Map(
+          [...indexTeamsByWorkspace(this.#operatorTeams)].map(([workspaceId, team]) => [
+            workspaceId,
+            { id: team.id, hex: team.hex },
+          ]),
+        );
+        void syncCmuxColors({
+          runner: this.runner,
+          executable: this.cmuxExecutable,
+          surfaces: this.#surfaces,
+          settings,
+          teamByWorkspaceId,
+        });
+      }
       this.#cmuxErrors = [...new Set([
         ...cmux.errors,
         ...(sidebar?.errors ?? []),
+        ...(groups?.errors ?? []),
         ...(workspaceEnv?.errors ?? []),
         ...(notifications?.errors ?? []),
         ...(syncNotifications?.errors ?? []),
@@ -1495,14 +1560,25 @@ export class HubState {
       processRosterComplete: this.#rosterComplete,
       senderTranscriptTails,
     }));
+    const teamProvenanceIds = new Set(
+      (this.repoGroupProvenance?.list() ?? []).map((record) => record.groupId),
+    );
+    const teamSettings = this.teamColorsStore?.get() ?? { assignments: {} };
+    const teamed = {
+      ...built,
+      programs: built.programs.map((program) => ({
+        ...program,
+        agents: attachTeams(program.agents, this.#operatorTeams, teamProvenanceIds, teamSettings),
+      })),
+    };
     this.#hasSourceSnapshot = true;
-    this.#recentlyResolved = [...(built.recentlyResolved ?? [])];
+    this.#recentlyResolved = [...(teamed.recentlyResolved ?? [])];
     const nextLifecycle = new Map<string, IssueLifecycle>();
-    for (const issue of [...(built.issues ?? []), ...this.#recentlyResolved]) {
+    for (const issue of [...(teamed.issues ?? []), ...this.#recentlyResolved]) {
       if (issue.lifecycle) nextLifecycle.set(issue.id, issue.lifecycle);
     }
     this.#issueLifecycle = nextLifecycle;
-    const classified = withAttentionClasses(built);
+    const classified = withAttentionClasses(teamed);
     const currentAlerts = new Map<string, string>();
     for (const agent of classified.programs.flatMap((program) => program.agents)) {
       const fingerprint = alertFingerprintFor(agent);
@@ -1512,11 +1588,23 @@ export class HubState {
       "acknowledgement reconciliation",
       () => this.ackStore.reconcile(currentAlerts),
     );
+    await tailStep(
+      "alert-since observation",
+      () => this.alertSinceStore.observe(currentAlerts),
+    );
     if (signal.aborted || this.#superseded(generation)) {
       clearTailDeadline();
       return this.#snapshot;
     }
-    const published = { ...classified, acks: [...this.ackStore.list()] };
+    const alertSinceOf = (id: string) => this.alertSinceStore.get(id);
+    const programs = classified.programs.map((program) => ({
+      ...program,
+      agents: program.agents.map((agent) => {
+        const alertSince = alertSinceOf(agent.id);
+        return alertSince ? { ...agent, alertSince } : agent;
+      }),
+    }));
+    const published = { ...classified, programs, acks: [...this.ackStore.list()] };
     const pulseNowMs = Date.now();
     this.#pulse.observe(published, pulseNowMs);
     this.#pulse.maybeRefreshBurnCost();

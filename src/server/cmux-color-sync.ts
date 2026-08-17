@@ -330,6 +330,9 @@ export interface ReconcileInput {
   /** Group anchors. Collection already drops them; this is the second lock, so
    *  an anchor reaching this function by any other route is still inert. */
   anchorWorkspaceIds?: ReadonlySet<string>;
+  /** Operator-team members. A workspace in this index is never re-asserted to
+   *  its repo hex — four Formic swarms must not be forced back to magenta. */
+  teamByWorkspaceId?: ReadonlyMap<string, { id: string; hex: string }>;
 }
 
 export async function reconcileWorkspaceColors(input: ReconcileInput): Promise<ReconcileResult> {
@@ -408,6 +411,33 @@ export async function reconcileWorkspaceColors(input: ReconcileInput): Promise<R
       errors.push(`repo ${assignment.repoKey} has an unusable assigned color ${assignment.hex}`);
       record("ignore", observed, "assigned color is not a usable hex");
       continue;
+    }
+    const team = input.teamByWorkspaceId?.get(workspaceId);
+    if (team) {
+      const teamHex = normalizeHex(team.hex);
+      if (teamHex && observed === teamHex) {
+        record("ignore", teamHex, "operator team color already matches");
+        continue;
+      }
+      if (teamHex && observed !== teamHex) {
+        let written = false;
+        try {
+          written = await runtime.funnel.setWorkspaceColor(workspaceId, teamHex, "team-reassert");
+        } catch (error) {
+          errors.push(
+            `re-assert of team ${team.id} color on workspace ${workspaceId} threw: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          record("failed", observed, "funnel write threw; workspace left as cmux has it");
+          continue;
+        }
+        if (!written) {
+          errors.push(`re-assert of team ${team.id} color on workspace ${workspaceId} failed`);
+          record("failed", observed, "funnel write reported failure; workspace left as cmux has it");
+          continue;
+        }
+        record("reassert", teamHex, "operator team hex written");
+        continue;
+      }
     }
     if (observed === assigned) {
       record("ignore", assigned, "cmux color already matches the assignment");
@@ -563,6 +593,7 @@ export interface SyncCmuxColorsInput {
   /** Where to resolve the implementations from, when `runtime` is not given.
    *  Lets a test assert what the pass does when one of them is MISSING. */
   modules?: Partial<ColorRuntimeModules>;
+  teamByWorkspaceId?: ReadonlyMap<string, { id: string; hex: string }>;
 }
 
 /** One reconcile pass, piggybacked on the cmux collector poll (locked decision
@@ -586,6 +617,7 @@ export async function syncCmuxColors(input: SyncCmuxColorsInput): Promise<Reconc
           observations: collected.value,
           surfaces: input.surfaces,
           anchorWorkspaceIds: new Set(collected.anchorWorkspaceIds),
+          teamByWorkspaceId: input.teamByWorkspaceId,
           settings: { ...settings, assignments: {} },
           runtime: {
             repoKeyForCwd: () => null,
@@ -604,6 +636,7 @@ export async function syncCmuxColors(input: SyncCmuxColorsInput): Promise<Reconc
         observations: collected.value,
         surfaces: input.surfaces,
         anchorWorkspaceIds: new Set(collected.anchorWorkspaceIds),
+        teamByWorkspaceId: input.teamByWorkspaceId,
         settings,
         runtime,
       });
