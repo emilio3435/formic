@@ -53,7 +53,7 @@ export function indexTeamsByWorkspace(
   return map;
 }
 
-export function attachTeams<T extends { target?: { workspaceId?: string }; team?: { id: string; name: string; hex: string } }>(
+export function attachTeams<T extends { target?: { workspaceId?: string }; team?: { id: string; name: string; hex: string; windowId: string } }>(
   agents: readonly T[],
   teams: readonly CmuxTeam[],
   _provenanceIds: ReadonlySet<string>,
@@ -64,7 +64,7 @@ export function attachTeams<T extends { target?: { workspaceId?: string }; team?
     const workspaceId = agent.target?.workspaceId;
     const team = workspaceId ? index.get(workspaceId) : undefined;
     if (!team) return agent;
-    return { ...agent, team: { id: team.id, name: team.name, hex: team.hex } };
+    return { ...agent, team: { id: team.id, name: team.name, hex: team.hex, windowId: team.windowId } };
   });
 }
 
@@ -80,23 +80,34 @@ export interface TeamWindowGroups {
   groups: readonly TeamWindowGroup[];
 }
 
-/** Hex priority: user PUT > live cmux custom_color > auto slot. */
-export function buildOperatorTeams(
+export interface TeamColorIngest {
+  groupId: string;
+  hex: string;
+}
+
+/** Last-write-wins, except a pending write-echo keeps disk until live matches or the process restarts. */
+export function resolveOperatorTeams(
   windows: readonly TeamWindowGroups[],
   provenanceIds: ReadonlySet<string>,
   settings: TeamTintSettings,
-): CmuxTeam[] {
+  expectEcho: ReadonlyMap<string, string> = new Map(),
+): { teams: CmuxTeam[]; ingested: TeamColorIngest[] } {
   const taken = new Set<string>();
   const teams: CmuxTeam[] = [];
+  const ingested: TeamColorIngest[] = [];
   for (const window of windows) {
     for (const group of window.groups) {
       const name = group.name ?? "";
       if (!isOperatorTeam(name, group.id, provenanceIds)) continue;
-      const stored = settings.assignments[group.id];
-      const userHex = stored?.source === "user" ? normalizeHex(stored.hex) : null;
       const liveHex = normalizeHex(group.customColor);
-      const hex = userHex
-        ?? liveHex
+      const diskHex = normalizeHex(settings.assignments[group.id]?.hex);
+      const expected = normalizeHex(expectEcho.get(group.id));
+      const echoPending = Boolean(expected && liveHex !== expected);
+      if (liveHex && liveHex !== diskHex && !echoPending) {
+        ingested.push({ groupId: group.id, hex: liveHex });
+      }
+      const hex = (liveHex && liveHex !== diskHex && !echoPending ? liveHex : null)
+        ?? diskHex
         ?? assignTeamHex(group.id, settings, taken);
       taken.add(hex);
       teams.push({
@@ -108,5 +119,14 @@ export function buildOperatorTeams(
       });
     }
   }
-  return teams;
+  return { teams, ingested };
+}
+
+export function buildOperatorTeams(
+  windows: readonly TeamWindowGroups[],
+  provenanceIds: ReadonlySet<string>,
+  settings: TeamTintSettings,
+  expectEcho?: ReadonlyMap<string, string>,
+): CmuxTeam[] {
+  return resolveOperatorTeams(windows, provenanceIds, settings, expectEcho).teams;
 }

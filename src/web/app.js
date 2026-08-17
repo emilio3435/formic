@@ -239,7 +239,9 @@ bindSettingsPanel({
   postSettings,
   setNeedsYouDisplay,
   fetchRepoColors,
+  fetchTeamColors,
   paintRepoColorSettings,
+  paintTeamColorSettings,
   render,
 });
 
@@ -1654,6 +1656,7 @@ globalThis.TheAntHill = {
      them — exported so the treatments are assertable as functions rather than
      as substrings of this file. */
   setRepoColors, repoTintFor, repoTintOfProgram, tintOfProgram, normalizeRepoHex, fetchRepoColors,
+  fetchTeamColors, renderTeamColorSettings, paintTeamColorSettings,
   liveRepoSig, maybeRefreshRepoColors, openSettingsPanel, closeSettingsPanel,
   renderRepoSection, repoShellSig, stripRowOpts, renderStripGroupHead,
   // The shelf's governor. Exported because the lookback clause inside it is the
@@ -1662,6 +1665,8 @@ globalThis.TheAntHill = {
   shelfFilter, shelfOpen,
   dashboardVisible, dashboardPrograms,
   currentFilter, passesReviewVisibility, reviewWorkerCount, emptyListMessage, hiddenByLookback, renderTabs, filterChip, renderFilterBar, renderScopeNote, renderLabelForm, renderTriage, renderUsagePanel,
+  setGrouping, toggleSelectMode, defaultGroupingName, groupingWorkspaceIds,
+  groupingSharedWindowId, createGroupingTeam, startTeamRename, submitTeamRename, ungroupTeam,
   /* The two-layer model's own seam. `workingSet` is the population every count
      on the page is taken over, and the menus are the surfaces that report it —
      both are reachable so "a lens never moves the tab number" can be asserted
@@ -3889,10 +3894,291 @@ async function putTeamColor(groupId, hex) {
       throw new Error(body && body.error ? body.error : "Save failed (HTTP " + res.status + ")");
     }
     const stored = body.settings && body.settings.assignments && body.settings.assignments[groupId];
+    if (Array.isArray(body.teams)) state.teamColors = body.teams;
     paintLiveTeamHex(groupId, normalizeRepoHex(stored && stored.hex) || normalized);
     render();
+    paintTeamColorSettings();
   } catch (err) {
     toast(err && err.message ? err.message : "Colour save failed", "warn");
+  }
+}
+
+const GROUP_N_NAME = /^Group \d+$/;
+const TEAM_PALETTE = ["#5f7f2a", "#2e66a8", "#b05f3a", "#0e9494", "#9e3355", "#8a4fc0"];
+
+function groupingIdSet() {
+  if (!state.groupingIds || typeof state.groupingIds.has !== "function") {
+    state.groupingIds = new Set();
+  }
+  return state.groupingIds;
+}
+
+function groupableWorkspaceId(agent) {
+  const id = agent && agent.target && agent.target.workspaceId;
+  return typeof id === "string" && id.trim() ? id.trim() : "";
+}
+
+function findAgentById(agentId) {
+  for (const program of (state.snap && state.snap.programs) || []) {
+    for (const agent of program.agents || []) {
+      if (agent && agent.id === agentId) return agent;
+    }
+  }
+  return null;
+}
+
+function groupingPicks() {
+  const wanted = groupingIdSet();
+  if (!wanted.size) return [];
+  const picks = [];
+  for (const program of (state.snap && state.snap.programs) || []) {
+    for (const agent of program.agents || []) {
+      if (wanted.has(agent.id)) picks.push({ agent, program });
+    }
+  }
+  return picks;
+}
+
+function groupingWorkspaceIds() {
+  const ids = [];
+  const seen = new Set();
+  for (const { agent } of groupingPicks()) {
+    const id = groupableWorkspaceId(agent);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
+}
+
+function defaultGroupingName() {
+  for (const { program } of groupingPicks()) {
+    const name = programName(program);
+    if (name && !GROUP_N_NAME.test(name.trim())) return name;
+  }
+  return "Team";
+}
+
+function nextGroupingHex() {
+  const taken = new Set((state.teamColors || []).map((team) => normalizeRepoHex(team.hex)));
+  return TEAM_PALETTE.find((hex) => !taken.has(hex)) || "#64707c";
+}
+
+function groupingSharedWindowId() {
+  const picks = groupingPicks().filter((pick) => groupableWorkspaceId(pick.agent));
+  if (!picks.length) return "";
+  const first = picks[0].agent.team && picks[0].agent.team.windowId;
+  if (!first) return "";
+  return picks.every((pick) => pick.agent.team && pick.agent.team.windowId === first) ? first : "";
+}
+
+function setGrouping(agentId, on) {
+  const ids = groupingIdSet();
+  if (!on) {
+    ids.delete(agentId);
+    if (!ids.size) state.groupingName = "";
+    return;
+  }
+  const agent = findAgentById(agentId);
+  if (agent && !groupableWorkspaceId(agent)) return;
+  ids.add(agentId);
+  state.lastGroupingId = agentId;
+  if (!state.groupingName) state.groupingName = defaultGroupingName();
+  if (!state.groupingHex) state.groupingHex = nextGroupingHex();
+}
+
+function toggleSelectMode() {
+  state.selectMode = !state.selectMode;
+  if (!state.selectMode) {
+    state.groupingIds = new Set();
+    state.groupingName = "";
+  }
+  render();
+}
+
+function rangeGroupTo(agentId) {
+  const rows = typeof document !== "undefined" && document.getElementById
+    ? navigableRows()
+    : [];
+  const ids = rows.map((row) => String(row.id || "").replace(/^agent-/, ""));
+  const from = state.lastGroupingId ? ids.indexOf(state.lastGroupingId) : -1;
+  const to = ids.indexOf(agentId);
+  if (from < 0 || to < 0) {
+    setGrouping(agentId, true);
+    return;
+  }
+  const start = Math.min(from, to);
+  const end = Math.max(from, to);
+  for (let index = start; index <= end; index++) setGrouping(ids[index], true);
+}
+
+function groupingCheckNode(agent, displayName) {
+  if (!state.selectMode) return null;
+  const workspaceId = groupableWorkspaceId(agent);
+  const picked = groupingIdSet().has(agent.id);
+  return el("input", {
+    type: "checkbox",
+    class: "grouping-check",
+    checked: picked ? "" : null,
+    disabled: workspaceId ? null : "",
+    title: workspaceId ? "Include in the new team" : "No cmux workspace — cannot join a team",
+    "aria-label": workspaceId
+      ? "Select " + displayName + " for a team"
+      : displayName + " has no cmux workspace",
+    dataset: { fkey: "group-pick:" + agent.id },
+    onclick: (event) => event.stopPropagation(),
+    onchange: (event) => {
+      setGrouping(agent.id, Boolean(event.currentTarget.checked));
+      render();
+    },
+  });
+}
+
+function renderGroupingChip() {
+  const count = groupingWorkspaceIds().length || groupingIdSet().size;
+  const noun = count === 1 ? "terminal" : "terminals";
+  const hex = normalizeRepoHex(state.groupingHex) || nextGroupingHex();
+  const name = el("input", {
+    type: "text",
+    value: state.groupingName || defaultGroupingName(),
+    maxlength: "80",
+    "aria-label": "Team name",
+    dataset: { fkey: "grouping-name" },
+    oninput: (event) => { state.groupingName = event.target.value; },
+    onclick: (event) => event.stopPropagation(),
+  });
+  const picker = el("input", {
+    type: "color",
+    class: "visually-hidden",
+    tabindex: "-1",
+    value: hex,
+    "aria-label": "Team colour",
+    dataset: { fkey: "grouping-color" },
+    onchange: (event) => { state.groupingHex = event.currentTarget.value; },
+  });
+  const swatch = el("button", {
+    type: "button",
+    class: "repo-tint-picker swatch",
+    "aria-label": "Team colour",
+    onclick: (event) => {
+      event.stopPropagation();
+      if (typeof picker.click === "function") picker.click();
+    },
+  });
+  return el("span", { class: "filter-chip grouping-chip", dataset: { fkey: "grouping-chip" } },
+    el("span", { class: "grouping-chip-label", text: "Group " + count + " " + noun }),
+    name,
+    el("span", {}, paintRepoTint(swatch, hex, "has-repo-tint"), picker),
+    el("button", {
+      type: "button",
+      class: "btn primary",
+      disabled: state.groupingPending ? "" : null,
+      dataset: { fkey: "grouping-create" },
+      onclick: (event) => { event.stopPropagation(); void createGroupingTeam(); },
+    }, state.groupingPending ? "Grouping…" : "Group"));
+}
+
+async function createGroupingTeam() {
+  const workspaceIds = groupingWorkspaceIds();
+  if (!workspaceIds.length) {
+    toast("Pick at least one mapped terminal", "warn");
+    return;
+  }
+  const name = String(state.groupingName || defaultGroupingName()).trim();
+  if (!name || GROUP_N_NAME.test(name)) {
+    toast("Name the team something other than Group N", "warn");
+    return;
+  }
+  const hex = normalizeRepoHex(state.groupingHex) || nextGroupingHex();
+  const windowId = groupingSharedWindowId();
+  const payload = { workspaceIds, name, hex };
+  if (windowId) payload.windowId = windowId;
+  if (state.groupingPending) return;
+  state.groupingPending = true;
+  try {
+    const res = await apiFetch("/api/teams", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    }, API_WRITE_TIMEOUT_MS);
+    const body = await res.json().catch(() => null);
+    if (!res.ok || !body || !body.team) {
+      throw new Error(body && body.error ? body.error : "Group failed (HTTP " + res.status + ")");
+    }
+    state.groupingIds = new Set();
+    state.groupingName = "";
+    state.selectMode = false;
+    toast("Grouped as " + body.team.name, "ok");
+    void fetchSnapshot();
+    void fetchTeamColors();
+  } catch (err) {
+    toast(err && err.message ? err.message : "Group failed", "warn");
+  } finally {
+    state.groupingPending = false;
+    render();
+  }
+}
+
+function startTeamRename(group) {
+  state.teamRenaming = group.key;
+  state.teamRenameDraft = group.name;
+  state.teamRenameError = "";
+  render();
+}
+
+async function submitTeamRename(groupId) {
+  const name = String(state.teamRenameDraft || "").trim();
+  if (!name || GROUP_N_NAME.test(name)) {
+    state.teamRenameError = "Name the team something other than Group N";
+    render();
+    return;
+  }
+  if (state.teamRenamePending) return;
+  state.teamRenamePending = true;
+  try {
+    const res = await apiFetch("/api/teams/" + encodeURIComponent(groupId), {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name }),
+    }, API_WRITE_TIMEOUT_MS);
+    const body = await res.json().catch(() => null);
+    if (!res.ok) {
+      throw new Error(body && body.error ? body.error : "Rename failed (HTTP " + res.status + ")");
+    }
+    state.teamRenaming = null;
+    toast("Team renamed to " + name, "ok");
+    void fetchSnapshot();
+    void fetchTeamColors();
+  } catch (err) {
+    state.teamRenameError = err && err.message ? err.message : "Rename failed";
+    toast(state.teamRenameError, "warn");
+  } finally {
+    state.teamRenamePending = false;
+    render();
+  }
+}
+
+async function ungroupTeam(groupId, name) {
+  const ask = (typeof globalThis !== "undefined" && globalThis.confirm)
+    || (typeof window !== "undefined" && window.confirm);
+  if (typeof ask === "function" && !ask("Ungroup " + (name || "this team") + "? Terminals stay open.")) {
+    return;
+  }
+  try {
+    const res = await apiFetch("/api/teams/" + encodeURIComponent(groupId), {
+      method: "DELETE",
+    }, API_WRITE_TIMEOUT_MS);
+    const body = await res.json().catch(() => null);
+    if (!res.ok) {
+      throw new Error(body && body.error ? body.error : "Ungroup failed (HTTP " + res.status + ")");
+    }
+    toast("Ungrouped " + (name || "team"), "ok");
+    void fetchSnapshot();
+    void fetchTeamColors();
+  } catch (err) {
+    toast(err && err.message ? err.message : "Ungroup failed", "warn");
+  } finally {
+    render();
   }
 }
 
@@ -3903,6 +4189,66 @@ function paintLiveTeamHex(groupId, hex) {
     for (const agent of program.agents || []) {
       if (agent.team && agent.team.id === groupId) agent.team = { ...agent.team, hex };
     }
+  }
+}
+
+function paintTeamColorSettings() {
+  if (typeof document === "undefined") return;
+  const host = $("team-colors-host");
+  if (!host) return;
+  const sig = JSON.stringify(state.teamColors || []);
+  if (paintUnchanged("team-colors", sig) && host.childElementCount) return;
+  host.textContent = "";
+  host.append(renderTeamColorSettings());
+}
+
+function renderTeamColorSettings(teams = state.teamColors) {
+  const list = Array.isArray(teams) ? teams.slice() : [];
+  if (!list.length) {
+    return el("div", { class: "repos" },
+      el("p", {
+        class: "repo-colors-empty",
+        text: "No operator groups.",
+      }));
+  }
+  list.sort((left, right) => String(left.name || left.id).localeCompare(String(right.name || right.id)));
+  return el("div", { class: "repos" }, ...list.map((team) => {
+    const id = String(team.id || "");
+    const name = String(team.name || id);
+    const hex = normalizeRepoHex(team.hex) || "";
+    const picker = el("input", {
+      type: "color",
+      class: "visually-hidden",
+      tabindex: "-1",
+      value: hex || "#888888",
+      "aria-label": "Colour for " + name,
+      dataset: { fkey: "team-color:" + id },
+      onchange: (event) => putTeamColor(id, event.currentTarget.value),
+    });
+    const row = el("button", {
+      type: "button",
+      class: "repo",
+      onclick: () => {
+        if (typeof picker.click === "function") picker.click();
+      },
+    },
+      el("span", { class: "swatch" }),
+      el("b", { text: name }));
+    return el("div", {}, paintRepoTint(row, hex, "has-repo-tint"), picker);
+  }));
+}
+
+async function fetchTeamColors() {
+  const generation = bootGeneration;
+  try {
+    const res = await apiFetch("/api/team-colors", { headers: { accept: "application/json" } }, API_READ_TIMEOUT_MS);
+    const body = await res.json();
+    if (!res.ok || !body || !Array.isArray(body.teams)) throw new Error("bad team-colour response");
+    if (generation !== bootGeneration) return;
+    state.teamColors = body.teams;
+    paintTeamColorSettings();
+  } catch (err) {
+    console.warn("team colour fetch failed:", err);
   }
 }
 
@@ -6854,6 +7200,15 @@ function renderFilterBar(ui = state) {
      the time control live together here, while the collector window below
      remains a server setting rather than a second filter. */
   place(el("span", { class: "filter-lead", text: "Filters" }));
+  /* Select is a mutation mode, not a lens. The Group chip exists only while
+     the pick-set is non-empty — the bar stays a filter bar the rest of the time. */
+  if (ui.view === "board") {
+    place(filterChip("Select", Boolean(state.selectMode), () => toggleSelectMode(), {
+      fkey: "select-mode",
+      title: "Pick mapped terminals and form a team",
+    }));
+    if (groupingIdSet().size) place(renderGroupingChip());
+  }
   /* The lenses: Class · Provider · Status · Model · Span · Context, in that
      order and in one flat row. Class leads because it answers who the agent is,
      and everything after it is a question about that same agent. Six closed
@@ -7518,6 +7873,9 @@ function repoShellSig(group, ui) {
        repaint this head or it freezes: nothing else in this signature moves
        when a session starts or stops asking. */
     programRollupCells(bandAgents(group), null, ui.snap).map((c) => c.value + " " + c.label + (c.alert ? "!" : "")).join(","),
+    ui.teamRenaming === group.key ? "renaming" : "",
+    ui.teamRenamePending ? "1" : "0",
+    ui.teamRenameError || "",
   ].join("\u001f");
 }
 
@@ -7529,17 +7887,24 @@ function pullRequestLabel(url) {
 }
 
 function teamBandPicker(group, tint) {
-  return el("label", { class: "repo-tint-picker" },
-    el("input", {
-      type: "color",
-      class: "visually-hidden",
-      tabindex: "-1",
-      value: tint || "#888888",
-      "aria-label": "Colour for " + group.name,
-      dataset: { fkey: "team-color:" + group.key },
-      onchange: (event) => { void putTeamColor(group.key, event.currentTarget.value); },
-    }),
-    tint ? el("span", { class: "repo-dot", "aria-hidden": "true" }) : null);
+  const picker = el("input", {
+    type: "color",
+    class: "visually-hidden",
+    tabindex: "-1",
+    value: tint || "#888888",
+    "aria-label": "Colour for " + group.name,
+    dataset: { fkey: "team-color:" + group.key },
+    onchange: (event) => { void putTeamColor(group.key, event.currentTarget.value); },
+  });
+  const swatch = el("button", {
+    type: "button",
+    class: "repo-tint-picker swatch",
+    "aria-label": "Colour for " + group.name,
+    onclick: () => {
+      if (typeof picker.click === "function") picker.click();
+    },
+  });
+  return el("span", {}, paintRepoTint(swatch, tint, "has-repo-tint"), picker);
 }
 
 function renderRepoSection(group, ui = state) {
@@ -7563,16 +7928,31 @@ function renderRepoSection(group, ui = state) {
       dataset: { fkey: "repo:" + group.key },
       onclick: () => toggleRepo(group),
     }, icon("caret")),
-    /* Whisper's mark on the head. A dot, not tinted text: the repository's name
-       is the loudest word in this tier and colouring it would spend identity on
-       the one thing that already carries it (rule 6). Decorative — the name is
-       right beside it, so there is nothing here for a screen reader to say and
-       nothing lost to a reader who cannot separate the hues. A team band's
-       picker reuses this chrome and PUTs /api/team-colors/:groupId. */
+    /* Whisper's mark on the head. A repo band keeps the decorative 7px dot.
+       A team band uses the Settings swatch so the operator can retint the
+       group — same PUT as the Teams plate, never the repo-colour endpoint. */
     ...(group.kind === "team" ? [teamBandPicker(group, tint)] : [
       tint ? el("span", { class: "repo-dot", "aria-hidden": "true" }) : null,
     ]),
-    el("span", { class: "repo-name", text: group.name }),
+    group.kind === "team"
+      ? el("button", {
+        type: "button",
+        class: "program-label repo-name",
+        "aria-label": "Rename " + group.name,
+        dataset: { fkey: "team-rename:" + group.key },
+        onclick: () => startTeamRename(group),
+      }, el("span", { class: "program-name", text: group.name }))
+      : el("span", { class: "repo-name", text: group.name }),
+    group.kind === "team"
+      ? el("button", {
+        type: "button",
+        class: "team-ungroup",
+        "aria-label": "Ungroup " + group.name,
+        title: "Ungroup — terminals stay open",
+        dataset: { fkey: "team-ungroup:" + group.key },
+        onclick: () => { void ungroupTeam(group.key, group.name); },
+      }, "Ungroup")
+      : null,
     el("span", {
       class: "repo-worktree-count",
       text: count === 1 ? "1 worktree" : count + " worktrees",
@@ -7599,6 +7979,43 @@ function renderRepoSection(group, ui = state) {
      checkouts read as eleven unrelated sections. Only while open: a shut fold
      has no columns to label. */
   if (open) section.append(renderAgentColumnHeader());
+  if (group.kind === "team" && state.teamRenaming === group.key) {
+    section.append(el("form", {
+      class: "rename-form",
+      onsubmit: (event) => { event.preventDefault(); void submitTeamRename(group.key); },
+    },
+      el("input", {
+        type: "text",
+        value: state.teamRenameDraft,
+        maxlength: "80",
+        placeholder: "Team name",
+        "aria-label": "New name for " + group.name,
+        disabled: state.teamRenamePending ? "" : null,
+        dataset: { fkey: "team-rename-input:" + group.key },
+        oninput: (event) => { state.teamRenameDraft = event.target.value; },
+        onkeydown: (event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            state.teamRenaming = null;
+            render();
+          }
+        },
+      }),
+      el("button", {
+        type: "submit",
+        class: "btn primary",
+        disabled: state.teamRenamePending ? "" : null,
+        dataset: { fkey: "team-rename-save:" + group.key },
+      }, state.teamRenamePending ? "Saving…" : "Save"),
+      el("button", {
+        type: "button",
+        class: "btn",
+        disabled: state.teamRenamePending ? "" : null,
+        dataset: { fkey: "team-rename-cancel:" + group.key },
+        onclick: () => { state.teamRenaming = null; render(); },
+      }, "Cancel"),
+      state.teamRenameError ? el("p", { class: "rename-error", role: "alert", text: state.teamRenameError }) : null));
+  }
   // Left empty on purpose, exactly as renderProgram leaves its body: the
   // worktree subsections are reconciled in by key, so a band rebuild never
   // destroys a subsection — or a row — that has not moved.
@@ -7978,6 +8395,8 @@ function agentRowSig(agent, ui, opts = {}) {
     ui.labels.get(presentationLabelKey(agentLabelTarget(agent))) || "",
     ui.labels.get(presentationLabelKey(preferredRenameTarget(agent))) || "",
     ui.selectedId === agent.id ? "1" : "0",
+    ui.selectMode ? "select" : "",
+    ui.groupingIds && ui.groupingIds.has && ui.groupingIds.has(agent.id) ? "grouping" : "",
     ui.renaming === presentationLabelKey(preferredRenameTarget(agent)) ? "1" : "0",
     ui.renamePending ? "1" : "0",
     ui.renameError || "",
@@ -8134,6 +8553,8 @@ function programsPaintSig(visible, ui) {
       ].join(":")).join(","),
     ).join("|"),
     emptyStateSig(visible, ui),
+    ui.selectMode ? "select" : "",
+    String((ui.groupingIds && ui.groupingIds.size) || 0),
   ].join("\u001f");
 }
 
@@ -9867,6 +10288,7 @@ function renderAgentRow(agent, program, opts = {}) {
   const activate = () => { selectAgent(agent.id); };
 
   const identity = el("span", { class: "row-identity has-dual-marks" },
+    groupingCheckNode(agent, displayName),
     harnessAgentMarks(agent),
     el("span", { class: "agent-name-wrap" },
       el("span", { class: "agent-name", text: rosterName(visibleName, program) }),
@@ -10127,6 +10549,7 @@ function renderAgentRow(agent, program, opts = {}) {
     (opts.depth > 0 ? " is-child depth-" + Math.min(opts.depth, 4) : "") +
     (opts.childCount ? " is-parent" : "") +
     (selected ? " is-selected" : "") +
+    (state.groupingIds && state.groupingIds.has && state.groupingIds.has(agent.id) ? " is-grouping" : "") +
     (presentedOutcome !== "healthy" ? " is-" + presentedOutcome : "") +
     /* Needs-you membership, not outcome: inline mode's stand-in for the strip.
        A row can be in the set with a healthy outcome (hook needsInput), so
@@ -10211,7 +10634,19 @@ function renderAgentRow(agent, program, opts = {}) {
         : "",
     },
     onclick: (e) => {
-      if (e.target.closest(".agent-rename, .rename-form, .swarm-chip")) return;
+      if (e.target.closest(".agent-rename, .rename-form, .swarm-chip, .grouping-check")) return;
+      if (state.selectMode && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setGrouping(agent.id, !(state.groupingIds && state.groupingIds.has(agent.id)));
+        render();
+        return;
+      }
+      if (state.selectMode && e.shiftKey) {
+        e.preventDefault();
+        rangeGroupTo(agent.id);
+        render();
+        return;
+      }
       activate();
     },
     onkeydown: (e) => {
@@ -13985,6 +14420,7 @@ async function submitRename(target) {
 let toastTimer = null;
 function toast(message, kind) {
   const node = $("toast");
+  if (!node) return;
   node.textContent = message;
   node.className = "toast show" + (kind ? " " + kind : "");
   clearTimeout(toastTimer);
@@ -14883,6 +15319,7 @@ Object.assign(globalThis.TheAntHill, {
   requestCloseSettingsPanel,
   // TINT-F: the repo-colour region and its one write.
   renderRepoColorSettings, paintRepoColorSettings, putRepoColor, putTeamColor,
+  fetchTeamColors, renderTeamColorSettings, paintTeamColorSettings,
   passesLookback, isUnverified,
   // `const`s, so they would be a TDZ error in the hoisted block above.
   STRIP_ID, SECTION_HEADS,
@@ -14910,6 +15347,8 @@ Object.assign(globalThis.TheAntHill, {
   syncInspectorViewportHeight,
   triageIssue, removeTriageItem, fetchTriageQueue,
   fetchLabels, submitRename, startRename,
+  setGrouping, toggleSelectMode, defaultGroupingName, groupingWorkspaceIds,
+  groupingSharedWindowId, createGroupingTeam, startTeamRename, submitTeamRename, ungroupTeam,
   // SYNC-RF: the cmux workspace rename path, driven end to end against a fake
   // fetch — the gate, the editor, the POST, and the refusal vocabulary.
   renameableWorkspace, renderWorkspaceRename,

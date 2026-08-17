@@ -202,7 +202,19 @@ describe("RC — condensed row, inspector docked (#158, Alt 2)", () => {
       return;
     }
     expect(mediaBlocks(styles, "(max-width: 1180px)")).toEqual(mediaBlocks(base.css, "(max-width: 1180px)"));
-    expect(mediaBlocks(styles, "(max-width: 720px)")).toEqual(mediaBlocks(base.css, "(max-width: 720px)"));
+    /* Team-parity added a NEW 720 block for 44px hit targets on the team
+       swatch, grouping checkbox, and ungroup. The condensed-row area map
+       must stay byte-equal to base; that extra block is allowed only if it
+       names those three selectors and nothing from Alt 2. */
+    const phoneNow = mediaBlocks(styles, "(max-width: 720px)");
+    const phoneBase = mediaBlocks(base.css, "(max-width: 720px)");
+    const extra = phoneNow.filter((block) => !phoneBase.includes(block));
+    expect(phoneNow.filter((block) => phoneBase.includes(block))).toEqual(phoneBase);
+    expect(extra).toHaveLength(1);
+    expect(extra[0]).toContain(".repo-tint-picker");
+    expect(extra[0]).toContain(".grouping-check");
+    expect(extra[0]).toContain(".team-ungroup");
+    expect(extra[0]).not.toContain("12.5rem");
     expect(foldOf(styles)).toBe(foldOf(base.css));
   });
 

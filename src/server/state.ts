@@ -16,7 +16,8 @@ import {
 } from "./cmux";
 import type { RepoGroupProvenanceStore } from "./cmux-groups";
 import type { JsonTeamColorsStore } from "./team-colors";
-import { attachTeams, buildOperatorTeams, indexTeamsByWorkspace, type CmuxTeam } from "../shared/team-tint";
+import { attachTeams, indexTeamsByWorkspace, resolveOperatorTeams, type CmuxTeam } from "../shared/team-tint";
+import { normalizeHex } from "../shared/repo-color";
 /* TINT-S */ import { syncCmuxColors } from "./cmux-color-sync";
 import {
   CmuxEventsSupervisor,
@@ -240,7 +241,7 @@ export interface HubStateOptions {
   alertSinceStore?: AlertSinceStore;
   /** Injectable so tests can pin a boot without a clock. */
   bootId?: string;
-  teamColorsStore?: Pick<JsonTeamColorsStore, "get">;
+  teamColorsStore?: Pick<JsonTeamColorsStore, "get" | "setCmuxColor" | "expectedEchoes" | "clearExpectedEcho">;
   repoGroupProvenance?: Pick<RepoGroupProvenanceStore, "list">;
 }
 
@@ -318,7 +319,7 @@ export class HubState {
   private readonly witnessStore?: ProcessWitnessStore;
   private readonly ackStore: AckStore;
   private readonly alertSinceStore: AlertSinceStore;
-  private readonly teamColorsStore?: Pick<JsonTeamColorsStore, "get">;
+  private readonly teamColorsStore?: Pick<JsonTeamColorsStore, "get" | "setCmuxColor" | "expectedEchoes" | "clearExpectedEcho">;
   private readonly repoGroupProvenance?: Pick<RepoGroupProvenanceStore, "list">;
 
   constructor(
@@ -1400,12 +1401,38 @@ export class HubState {
       }
       /* A total miss must not wipe last-good teams: TINT-S still runs when
          surfaces collected, and an empty index re-asserts the repo hex. */
+      const teamSettings = this.teamColorsStore?.get() ?? { assignments: {} };
       if (groups && !(groups.errors.length > 0 && groups.value.length === 0)) {
-        this.#operatorTeams = buildOperatorTeams(
+        if (this.teamColorsStore) {
+          for (const window of groups.value) {
+            for (const group of window.groups) {
+              const liveHex = normalizeHex(group.customColor);
+              const expected = this.teamColorsStore.expectedEchoes().get(group.id);
+              if (liveHex && expected && liveHex === normalizeHex(expected)) {
+                this.teamColorsStore.clearExpectedEcho(group.id);
+              }
+            }
+          }
+        }
+        const resolved = resolveOperatorTeams(
           groups.value,
           new Set((this.repoGroupProvenance?.list() ?? []).map((record) => record.groupId)),
-          this.teamColorsStore?.get() ?? { assignments: {} },
+          teamSettings,
+          this.teamColorsStore?.expectedEchoes() ?? new Map(),
         );
+        this.#operatorTeams = resolved.teams;
+        if (this.teamColorsStore) {
+          for (const row of resolved.ingested) {
+            try {
+              await this.teamColorsStore.setCmuxColor(row.groupId, row.hex);
+            } catch (error) {
+              console.error(
+                `[HubState] team color ingest persist failed for ${row.groupId}: `
+                  + (error instanceof Error ? error.message : String(error)),
+              );
+            }
+          }
+        }
       } else if (!groups) {
         this.#operatorTeams = [];
       }
@@ -1416,10 +1443,15 @@ export class HubState {
         this.#runManifests = runManifestsResult;
       }
       /* TINT-S */ if (this.#cmuxReachable) {
+        const storedAfter = this.teamColorsStore?.get() ?? teamSettings;
         const teamByWorkspaceId = new Map(
           [...indexTeamsByWorkspace(this.#operatorTeams)].map(([workspaceId, team]) => [
             workspaceId,
-            { id: team.id, hex: team.hex },
+            {
+              id: team.id,
+              hex: team.hex,
+              hexSource: storedAfter.assignments[team.id]?.source ?? "auto",
+            },
           ]),
         );
         void syncCmuxColors({

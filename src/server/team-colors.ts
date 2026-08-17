@@ -60,6 +60,7 @@ export function normalizeTeamTintSettings(value: unknown): TeamTintSettings {
 export class JsonTeamColorsStore {
   #settings: TeamTintSettings;
   #writeQueue: Promise<void> = Promise.resolve();
+  readonly #expectEcho = new Map<string, string>();
   readonly #loadError?: string;
 
   private constructor(
@@ -96,6 +97,22 @@ export class JsonTeamColorsStore {
     return { assignments: { ...this.#settings.assignments } };
   }
 
+  expectedEchoes(): ReadonlyMap<string, string> {
+    return this.#expectEcho;
+  }
+
+  clearExpectedEcho(groupId: string): void {
+    this.#expectEcho.delete(groupId);
+  }
+
+  clearExpectedEchoes(): void {
+    this.#expectEcho.clear();
+  }
+
+  #rememberEcho(groupId: string, hex: string): void {
+    this.#expectEcho.set(groupId, hex);
+  }
+
   async #write(next: TeamTintSettings): Promise<TeamTintSettings> {
     const write = this.#writeQueue.then(async () => {
       await this.files.makeDirectory(dirname(this.path));
@@ -109,13 +126,32 @@ export class JsonTeamColorsStore {
     return this.get();
   }
 
-  async setUserColor(groupId: string, hex: string): Promise<TeamTintSettings> {
+  async writeAssignment(
+    groupId: string,
+    hex: string,
+    source: "user" | "cmux",
+  ): Promise<TeamTintSettings> {
     const normalized = normalizeHex(hex);
     if (!groupId) throw new Error("groupId is required");
     if (!normalized) throw new Error("hex must be #RGB or #RRGGBB");
+    const existing = this.#settings.assignments[groupId];
+    if (existing && existing.hex === normalized && existing.source === source) {
+      return this.get();
+    }
     const assignments = { ...this.#settings.assignments };
-    assignments[groupId] = { groupId, hex: normalized, source: "user" };
+    assignments[groupId] = { groupId, hex: normalized, source };
     return this.#write({ assignments });
+  }
+
+  async setUserColor(groupId: string, hex: string): Promise<TeamTintSettings> {
+    const written = await this.writeAssignment(groupId, hex, "user");
+    const normalized = normalizeHex(hex);
+    if (normalized) this.#rememberEcho(groupId, normalized);
+    return written;
+  }
+
+  async setCmuxColor(groupId: string, hex: string): Promise<TeamTintSettings> {
+    return this.writeAssignment(groupId, hex, "cmux");
   }
 }
 

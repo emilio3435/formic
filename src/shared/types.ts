@@ -550,7 +550,7 @@ export interface AgentSnapshot {
   gates: string[];
   target: CmuxTarget;
   /** Operator team overlay from a cmux group. Absent when ungrouped — repo fallback. */
-  team?: { id: string; name: string; hex: string };
+  team?: { id: string; name: string; hex: string; windowId: string };
   /** Evidence trail behind `target`; excluded from the snapshot fingerprint. */
   identityTrace?: IdentityTrace;
   controls: ControlCapability[];

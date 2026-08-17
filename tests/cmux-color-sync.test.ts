@@ -862,14 +862,29 @@ describe("reconcile — an operator-team member is never forced back to the repo
     expect(spy.writes.some((w) => w.hex.toLowerCase() === "#d70ae6")).toBe(false);
   });
 
-  test("mapped workspace in an operator team is re-asserted to the TEAM hex, never the repo hex", async () => {
+  test("operator member teal is not overwritten when team hex is auto", async () => {
+    /* Auto olive is a fallback, not a write. Teal the operator set on the
+       workspace must stay teal — TINT-S used to paint olive back on every pass. */
+    const spy = funnelSpy();
+    const result = await reconcileWorkspaceColors({
+      observations: [observation("ws-a", "#0E9494", { currentDirectory: "/tmp/the-mountain" })],
+      surfaces: [],
+      settings: settings({ "the-mountain": assignment("the-mountain", "#d70ae6") }),
+      runtime: runtimeWith(spy.funnel),
+      teamByWorkspaceId: new Map([["ws-a", { id: "g1", hex: "#5f7f2a", hexSource: "auto" }]]),
+    });
+    expect(result.decisions[0]).toMatchObject({ outcome: "ingest", hex: "#0e9494" });
+    expect(spy.writes).toEqual([]);
+  });
+
+  test("mapped workspace in an operator team is re-asserted to the TEAM hex after a Formic PUT or live group hex", async () => {
     const spy = funnelSpy();
     const result = await reconcileWorkspaceColors({
       observations: [observation("ws-a", "#111111", { currentDirectory: "/tmp/the-mountain" })],
       surfaces: [],
       settings: settings({ "the-mountain": assignment("the-mountain", "#d70ae6") }),
       runtime: runtimeWith(spy.funnel),
-      teamByWorkspaceId: new Map([["ws-a", { id: "g1", hex: "#5f7f2a" }]]),
+      teamByWorkspaceId: new Map([["ws-a", { id: "g1", hex: "#5f7f2a", hexSource: "user" }]]),
     });
     expect(result.decisions[0]).toMatchObject({ outcome: "reassert", hex: "#5f7f2a" });
     expect(spy.writes).toEqual([{ workspaceId: "ws-a", hex: "#5f7f2a", reason: "team-reassert" }]);
