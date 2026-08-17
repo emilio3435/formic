@@ -5,17 +5,17 @@ alwaysApply: true
 
 # 4701 is a local process, not GitHub
 
-Merging a PR (and a green GitHub check) updates `origin/main` only. Production is bun + launchd serving **the files on disk** in `~/Developer/the-mountain-production`. Until that worktree is fast-forwarded and launchd restarted, Settings / UI / cache-bust on http://127.0.0.1:4701 stay on the previous commit.
+Merging a PR (and a green GitHub check) updates `origin/main` only. Production is bun + launchd serving **the files on disk** in `~/Developer/formic`. Until that worktree is fast-forwarded and launchd restarted, Settings / UI / cache-bust on http://127.0.0.1:4701 stay on the previous commit.
 
 Wrong: treat CI green as "it's live." Wrong: edit or `bun start` inside the production worktree. Wrong: fight port 4701 from a lane.
 
 After the user authorizes deploy:
 
 ```bash
-cd ~/Developer/the-mountain-production && bash scripts/anthill-deploy.sh
+cd ~/Developer/formic && bash scripts/anthill-deploy.sh
 ```
 
-That script fetches, fast-forwards when behind and clean, installs the lockfile, runs gates, restarts launchd, waits ~45s for `/api/health`. Dirty or diverged trees abort. Hermetic test red cannot be overridden. Quiet-fleet OpenBurnBar canary only: `ANTHILL_DEPLOY_QUIET_FLEET=1`.
+That script fetches, fast-forwards when behind and clean, installs the lockfile, runs gates, restarts launchd, waits ~45s for `/api/health`. Dirty or diverged trees abort. Origin must be public `emilio3435/formic` (https or ssh); `the-ant-hill` is refused. Hermetic test red cannot be overridden. Quiet-fleet OpenBurnBar canary only: `ANTHILL_DEPLOY_QUIET_FLEET=1`.
 
 Proof it moved: live `git log -1` matches `origin/main`, and `curl -sS http://127.0.0.1:4701/` contains the new `?v=ah-tXX`. Then hard-refresh the browser.
 

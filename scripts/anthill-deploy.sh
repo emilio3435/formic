@@ -4,6 +4,8 @@
 # Why this exists: deploys were done by hand (cherry-pick -> maybe run tests ->
 # restart), which once let a RED commit through. This script makes the safe path
 # the only path:
+#   - refuses unless this checkout is ~/Developer/formic
+#   - refuses unless origin is public emilio3435/formic (https or ssh)
 #   - refuses to run unless this worktree is on `main`
 #   - requires a clean tree (unrelated dirty work is never swept)
 #   - fetches origin/main and fast-forwards when this checkout is strictly behind
@@ -14,16 +16,16 @@
 #   - leaves the checkout unchanged and points to safe recovery if unhealthy
 #
 # A green GitHub merge is not a deploy. :4701 serves the local files of
-# ~/Developer/the-mountain-production until this script restarts launchd.
+# ~/Developer/formic until this script restarts launchd.
 #
-# Usage:  bash scripts/anthill-deploy.sh
+# Usage:  cd ~/Developer/formic && bash scripts/anthill-deploy.sh
 # Quiet fleet (OpenBurnBar canary only):  ANTHILL_DEPLOY_QUIET_FLEET=1 bash scripts/anthill-deploy.sh
 set -euo pipefail
 
 LABEL="ai.imaginethat.anthill"
 PROD_PORT=4701
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CANONICAL_ROOT="${HOME}/Developer/the-mountain-production"
+CANONICAL_ROOT="${HOME}/Developer/formic"
 cd "$ROOT"
 
 if [[ "${ROOT}" != "${CANONICAL_ROOT}" ]]; then
@@ -31,6 +33,22 @@ if [[ "${ROOT}" != "${CANONICAL_ROOT}" ]]; then
   echo "Current checkout: ${ROOT}" >&2
   exit 1
 fi
+
+ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
+ORIGIN_NORM="$(printf '%s' "${ORIGIN_URL}" | tr '[:upper:]' '[:lower:]')"
+ORIGIN_NORM="${ORIGIN_NORM%/}"
+ORIGIN_NORM="${ORIGIN_NORM%.git}"
+ORIGIN_NORM="${ORIGIN_NORM%/}"
+case "${ORIGIN_NORM}" in
+  https://github.com/emilio3435/formic|git@github.com:emilio3435/formic|ssh://git@github.com/emilio3435/formic|ssh://github.com/emilio3435/formic)
+    ;;
+  *)
+    echo "Develop and deploy on public formic only (emilio3435/formic)." >&2
+    echo "This checkout's origin is: ${ORIGIN_URL:-<missing>}" >&2
+    echo "https or ssh to emilio3435/formic is required. the-ant-hill or any other repo is refused." >&2
+    exit 1
+    ;;
+esac
 
 BRANCH="$(git branch --show-current)"
 if [ "$BRANCH" != "main" ]; then

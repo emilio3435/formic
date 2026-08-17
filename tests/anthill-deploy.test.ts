@@ -11,10 +11,41 @@ import { join } from "node:path";
 
 const PROJECT_ROOT = join(import.meta.dir, "..");
 const SCRATCH_ROOT = `/private/tmp/claude-501/anthill-deploy-tests-${process.pid}`;
+const FORMIC_HTTPS = "https://github.com/emilio3435/formic.git";
+const FORMIC_SSH = "git@github.com:emilio3435/formic.git";
 
 function executable(path: string, contents: string): void {
   writeFileSync(path, contents);
   chmodSync(path, 0o755);
+}
+
+function gitAt(root: string, ...args: string[]): void {
+  expect(Bun.spawnSync(
+    ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", ...args],
+    { cwd: root, env: { PATH: "/usr/bin:/bin" } },
+  ).exitCode).toBe(0);
+}
+
+function pointOriginAtPublicFormic(root: string, fetchTarget: string, originUrl = FORMIC_HTTPS): void {
+  gitAt(root, "remote", "set-url", "origin", originUrl);
+  gitAt(root, "config", `url.${fetchTarget}.insteadOf`, originUrl);
+}
+
+/* `git remote get-url` applies insteadOf, which would hide the configured
+   formic URL behind the local bare path. The deploy script must still call
+   get-url; this wrapper returns the configured remote so the origin gate
+   sees https/ssh formic while fetch stays local. */
+function writeGitGetUrlWrapper(fakeBin: string): void {
+  executable(
+    join(fakeBin, "git"),
+    `#!/bin/bash
+if [ "$1" = "remote" ] && [ "$2" = "get-url" ] && [ "$3" = "origin" ]; then
+  /usr/bin/git config --get remote.origin.url
+  exit $?
+fi
+exec /usr/bin/git "$@"
+`,
+  );
 }
 
 afterAll(() => {
@@ -24,7 +55,7 @@ afterAll(() => {
 describe("Ant Hill deploy health check", () => {
   test("a stale health response fails loudly without rewriting the production checkout", () => {
     const home = join(SCRATCH_ROOT, "home");
-    const root = join(home, "Developer", "the-mountain-production");
+    const root = join(home, "Developer", "formic");
     const scripts = join(root, "scripts");
     const fakeBin = join(root, "fake-bin");
     const curlLog = join(root, "curl.log");
@@ -37,6 +68,7 @@ describe("Ant Hill deploy health check", () => {
     executable(join(fakeBin, "bunx"), "#!/bin/bash\nexit 0\n");
     executable(join(fakeBin, "bun"), "#!/bin/bash\nexit 0\n");
     executable(join(fakeBin, "launchctl"), "#!/bin/bash\nexit 0\n");
+    writeGitGetUrlWrapper(fakeBin);
     executable(join(fakeBin, "sleep"), "#!/bin/bash\nexit 0\n");
     executable(
       join(fakeBin, "curl"),
@@ -68,6 +100,7 @@ describe("Ant Hill deploy health check", () => {
       ["git", "push", "-q", "-u", "origin", "main"],
       { cwd: root, env: { PATH: "/usr/bin:/bin" } },
     ).exitCode).toBe(0);
+    pointOriginAtPublicFormic(root, remote);
     const plist = join(home, "Library", "LaunchAgents", "ai.imaginethat.anthill.plist");
     mkdirSync(join(home, "Library", "LaunchAgents"), { recursive: true });
     writeFileSync(plist, `<?xml version="1.0" encoding="UTF-8"?>
@@ -123,16 +156,9 @@ describe("Ant Hill deploy gate", () => {
     bunLog: string;
   }
 
-  function gitAt(root: string, ...args: string[]): void {
-    expect(Bun.spawnSync(
-      ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", ...args],
-      { cwd: root, env: { PATH: "/usr/bin:/bin" } },
-    ).exitCode).toBe(0);
-  }
-
-  function lab(name: string): Lab {
+  function lab(name: string, originUrl = FORMIC_HTTPS): Lab {
     const home = join(SCRATCH_ROOT, name, "home");
-    const root = join(home, "Developer", "the-mountain-production");
+    const root = join(home, "Developer", "formic");
     const scripts = join(root, "scripts");
     const fakeBin = join(root, "fake-bin");
     const launchLog = join(root, "launchctl.log");
@@ -145,6 +171,7 @@ describe("Ant Hill deploy gate", () => {
     }
     writeFileSync(join(root, "src/web/index.html"), `<script src="app.js?v=ah-t99"></script>\n`);
     executable(join(fakeBin, "bunx"), "#!/bin/bash\nexit 0\n");
+    writeGitGetUrlWrapper(fakeBin);
     /* Answers as the real bun would for the two phases the gate now runs, so
        the test can make the hermetic suite and the evidence gates disagree —
        which is the whole point of the split. */
@@ -167,6 +194,7 @@ exit 0
     expect(Bun.spawnSync(["git", "init", "-q", "--bare", remote], { env: { PATH: "/usr/bin:/bin" } }).exitCode).toBe(0);
     gitAt(root, "remote", "add", "origin", remote);
     gitAt(root, "push", "-q", "-u", "origin", "main");
+    pointOriginAtPublicFormic(root, remote, originUrl);
     mkdirSync(join(home, "Library", "LaunchAgents"), { recursive: true });
     writeFileSync(join(home, "Library", "LaunchAgents", "ai.imaginethat.anthill.plist"), `<?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict>
@@ -287,5 +315,54 @@ exit 0
       stdout: "pipe",
     }).stdout.toString().trim();
     expect(after).toBe(before);
+  });
+
+  test("origin the-ant-hill is a hard refuse and restarts nothing", () => {
+    const it = lab("ant-hill-origin");
+    gitAt(it.root, "remote", "set-url", "origin", "https://github.com/emilio3435/the-ant-hill.git");
+    const run = deploy(it, { CI_EXIT: "0", LOCAL_EXIT: "0" });
+    expect(run.exitCode).toBe(1);
+    expect(run.restarted).toBe(false);
+    expect(run.output).toContain("Develop and deploy on public formic only");
+    expect(run.output).toContain("the-ant-hill");
+  });
+
+  test("any other origin is refused", () => {
+    const it = lab("other-origin");
+    gitAt(it.root, "remote", "set-url", "origin", "https://github.com/emilio3435/not-formic.git");
+    const run = deploy(it, { CI_EXIT: "0", LOCAL_EXIT: "0" });
+    expect(run.exitCode).toBe(1);
+    expect(run.restarted).toBe(false);
+    expect(run.output).toContain("Develop and deploy on public formic only");
+  });
+
+  test("accepts ssh origin for emilio3435/formic", () => {
+    const it = lab("ssh-origin", FORMIC_SSH);
+    const run = deploy(it, { CI_EXIT: "0", LOCAL_EXIT: "0" });
+    expect(run.exitCode).toBe(0);
+    expect(run.restarted).toBe(true);
+  });
+
+  test("refuses a checkout that is not ~/Developer/formic", () => {
+    const home = join(SCRATCH_ROOT, "wrong-tree", "home");
+    const root = join(home, "Developer", "the-mountain-production");
+    const scripts = join(root, "scripts");
+    mkdirSync(scripts, { recursive: true });
+    copyFileSync(join(PROJECT_ROOT, "scripts/anthill-deploy.sh"), join(scripts, "anthill-deploy.sh"));
+    gitAt(root, "init", "-q", "-b", "main");
+    writeFileSync(join(root, "fixture"), "fixture\n");
+    gitAt(root, "add", ".");
+    gitAt(root, "commit", "-qm", "fixture");
+    const result = Bun.spawnSync(["bash", join(scripts, "anthill-deploy.sh")], {
+      cwd: root,
+      env: { HOME: home, PATH: "/usr/bin:/bin" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const output = `${result.stdout.toString()}${result.stderr.toString()}`;
+    expect(result.exitCode).toBe(1);
+    expect(output).toContain(`${home}/Developer/formic`);
+    expect(output).toContain(root);
+    expect(output).not.toContain("kickstart");
   });
 });
