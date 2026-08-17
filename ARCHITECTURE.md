@@ -96,6 +96,7 @@ should read is a separate stage, and most of it does not live in `snapshot.ts`:
 | `run-manifests.ts` | Declared run/lane identity from manifests and the four `ANTHILL_*` workspace variables, plus additive lane succession derived from per-run history JSONL; manifest facts win conflicts, and malformed files or history lines are skipped rather than partly believed |
 | `task-state.ts` | Whether a hook's `needsInput` is current after a declared lane state; its browser mirror is `src/web/task-state.js`, and both execute `tests/fixtures/task-state-attention-truth-table.json` |
 | `attention-signal.ts` | Whether an agent needs a human, and the sentence saying why. Ships `attentionSignal` plus the wire union `attentionClass?: "blocking" \| "noticed"`: permission/input requests, unresolved forks, stated handoffs, pending questions, and stated assumptions are blocking; `stalled-active` is noticed; silent kinds carry no class. Parked/done declarations suppress older asks, while a strictly newer `needsInput` re-alerts. The row's own summary line is `lastHumanMessage`, which is `string \| null` — `null` is preserved as absence, never rendered as an empty string. |
+| `notification-binding.ts` | Whether an unread cmux Waiting toast binds to an already-resolved session surface. Bound toasts keep that mapping; unmatched ones publish as `unboundWaiting` — workspace title plus "no session bound" — and never mint a session id or `resolution: exact`. |
 | `ack.ts` | Board-local alert acknowledgements in `data/acks.json`. A fingerprint pairs the current alert source/state with its own since-timestamp; unchanged evidence stays acknowledged, while a changed or absent alert removes the Ack during the same snapshot pass. This store never mutates agent state or cmux. |
 | `ack-cmux.ts` | The two-way Ack funnel: Formic Ack writes the board store first, then `mark_read`s matching unread cmux toasts; a cmux dismiss/mark-read acks the Formic row unless a live hook ask must survive. Failures on the cmux side become warnings, not a rolled-back Ack. |
 | `alert-since.ts` | First-seen time of the current `alertFingerprint`, persisted in `data/alert-since.json`. `firstSeenAt` advances only when the fingerprint changes; dropped alerts leave the store. Published on the agent as `alertSince` so the board can rank asks without using transcript clocks. |
@@ -236,7 +237,9 @@ each with its own provenance — and this is attention: discrete items carrying
 kind, severity, source, lifecycle, evidence, impact and a route to a drawer. The
 seam is one line: the header never links, and the center never aggregates. It
 imports leaf modules only, so the two resolvers that live in `app.js`
-(`programName`, `issueImpactLine`) are injected rather than re-derived.
+(`programName`, `issueImpactLine`) are injected rather than re-derived. An
+unread cmux Waiting toast with no bound session is a blocking handoff labeled
+**no session bound**; it is not a minted agent row.
 
 `lifecycle.js` is the client's mirror of `src/server/lifecycle.ts`, and it is
 the one module here that is deliberately a copy. The server publishes

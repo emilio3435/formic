@@ -183,6 +183,28 @@ function handoffItem(agent, program, attentionClass, now, programNameFor) {
   };
 }
 
+/* An unmatched unread Waiting toast. Control plane says a person is owed;
+   no snapshot session carries that surface. Own item, never a minted agent. */
+function unboundWaitingItem(note) {
+  const title = typeof note.workspaceTitle === "string" ? note.workspaceTitle.trim() : "";
+  return {
+    id: "cmux-unbound:" + note.notificationId,
+    kind: "handoff",
+    severity: "blocking",
+    source: {
+      workspaceId: note.workspaceId || "",
+      workspaceTitle: title,
+      programName: title,
+      notificationId: note.notificationId,
+    },
+    lifecycle: "unknown",
+    evidence: "no session bound",
+    impact: title ? title + " — no session bound" : "no session bound",
+    since: null,
+    route: { kind: "unbound-waiting", id: note.notificationId },
+  };
+}
+
 /* The one line with a FACT in it.
 
    A degraded-source issue arrives carrying three layers of category and one
@@ -280,6 +302,11 @@ export function hasCurrentImpact(item, snap) {
     return attentionClassOf(found.agent) !== null;
   }
 
+  if (item.route.kind === "unbound-waiting") {
+    const list = Array.isArray(snap && snap.unboundWaiting) ? snap.unboundWaiting : [];
+    return list.some((note) => note && note.notificationId === item.route.id);
+  }
+
   if (item.route.kind === "investigation") {
     /* A queue row's liveness IS its existence — it was built from state.queueItems
        this paint. Investigations carry no affected-agent set to go stale, and
@@ -342,6 +369,7 @@ function demotionReason(item, snap) {
     if (isTerminal(found.agent)) return "session ended";
     return "no longer asking";
   }
+  if (item.route.kind === "unbound-waiting") return "notification bound or cleared";
   if (item.route.kind === "investigation") return "queue row cleared";
   const issue = issuesOf(snap).find((i) => i.id === item.route.id);
   if (!issue) return "source healthy — finding cleared";
@@ -397,6 +425,14 @@ export function notificationCandidates(snap, queueItems = [], now = Date.now(), 
     const attentionClass = attentionClassOf(agent);
     if (!attentionClass) continue;
     const item = handoffItem(agent, program, attentionClass, now, programNameFor);
+    candidates.push(item);
+    taken.add(item.id);
+  }
+
+  for (const note of Array.isArray(snap && snap.unboundWaiting) ? snap.unboundWaiting : []) {
+    if (!note || typeof note.notificationId !== "string" || !note.notificationId) continue;
+    const item = unboundWaitingItem(note);
+    if (taken.has(item.id)) continue;
     candidates.push(item);
     taken.add(item.id);
   }
@@ -545,9 +581,11 @@ export function notificationPanelModel(snap, queueItems = [], now = Date.now(), 
        would be the surface describing something it does not show. */
     verdict: VERDICT[tone],
     count: blocking.length,
-    lede: blocking.length
-      ? `${blocking.length} agent${blocking.length === 1 ? "" : "s"} stopped`
-      : "Nothing is stopped",
+    lede: blocking.length === 0
+      ? "Nothing is stopped"
+      : blocking.some((item) => item.route && item.route.kind === "unbound-waiting")
+        ? `${blocking.length} waiting on you`
+        : `${blocking.length} agent${blocking.length === 1 ? "" : "s"} stopped`,
     rest: [
       watching.length ? `${watching.length} quiet` : "",
       investigations.length ? `${investigations.length} running below` : "",

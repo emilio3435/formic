@@ -661,7 +661,8 @@ export class HubState {
       totals: {
         ...this.#snapshot.totals,
         live: observed.filter((agent) => isLive(agent, Date.now())).length,
-        attention: observed.filter((agent) => agent.attention === true).length,
+        attention: observed.filter((agent) => agent.attention === true).length
+          + (this.#snapshot.unboundWaiting?.length ?? 0),
         working: observed.filter((agent) => agent.activity === "working").length,
         idle: observed.filter((agent) => agent.activity === "idle").length,
         ended: allAgents.filter((agent) => agent.activity === "ended").length,

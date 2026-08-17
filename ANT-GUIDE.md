@@ -234,7 +234,7 @@ Every live item is one of three kinds:
 
 | Kind | What it is |
 |---|---|
-| **handoff** | A session whose attention class is **blocking** or **noticed** — a person-blocker or a watcher notice. Routes to that agent. |
+| **handoff** | A session whose attention class is **blocking** or **noticed** — a person-blocker or a watcher notice. Routes to that agent. An unread cmux Waiting toast with no bound session is the same kind, labeled **no session bound**, and does not mint a session. |
 | **dataflow** | A board finding (collector fault, stale source, tidy-up). Routes to an intervention or advisory drawer. |
 | **investigation** | A queued investigation. Routes to the investigation drawer. |
 
