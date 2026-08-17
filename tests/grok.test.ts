@@ -300,6 +300,29 @@ describe("the Grok harness stays distinct from its model badge", () => {
     expect(web.HARNESS_MARK.grok.src).not.toBe(web.AGENT_MARK.grok.src);
   });
 
+  test("Muse, Copilot, and Antigravity harness marks have official src files", () => {
+    expect(web.HARNESS_MARK.muse).toMatchObject({ src: "/icons/muse.svg", label: "Muse Code" });
+    expect(web.HARNESS_MARK.copilot).toMatchObject({ src: "/icons/copilot.svg", label: "Copilot CLI" });
+    expect(web.HARNESS_MARK.antigravity).toMatchObject({
+      src: "/icons/antigravity.png",
+      label: "Antigravity",
+      raster: true,
+    });
+    expect(web.HARNESS_MARK.muse.src).toBeTruthy();
+    expect(web.HARNESS_MARK.copilot.src).toBeTruthy();
+    expect(web.HARNESS_MARK.antigravity.src).toBeTruthy();
+    expect(web.HARNESS_MARK.muse.src).not.toBe("/icons/formic-mark.svg");
+    expect(web.HARNESS_MARK.copilot.src).not.toBe("/icons/formic-mark.svg");
+    expect(web.HARNESS_MARK.antigravity.src).not.toBe("/icons/formic-mark.svg");
+  });
+
+  test("Muse Spark and Gemini models use official agent marks", () => {
+    expect(web.agentKeyOf({ provider: "muse", model: "muse-spark-1.2" })).toBe("spark");
+    expect(web.AGENT_MARK.spark).toMatchObject({ src: "/icons/muse.svg", label: "Muse Spark" });
+    expect(web.agentKeyOf({ provider: "antigravity", model: "gemini-3.7-flash" })).toBe("gemini");
+    expect(web.AGENT_MARK.gemini).toMatchObject({ src: "/icons/gemini.svg", label: "Gemini" });
+  });
+
   test("Cursor-hosted Grok remains a Cursor harness", () => {
     const row = { provider: "cursor", model: "cursor-grok-4.6-high" };
 

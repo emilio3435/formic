@@ -35,6 +35,7 @@ import {
 } from "./snapshot-operator-issues";
 import { isLive } from "./live";
 import { agentSortRank, programFor, rollupFor, type ProgramHint } from "./snapshot-programs";
+import { agentIsStripAlerting } from "./strip-alerting";
 /* Re-exported so the program-resolution move stays invisible to callers:
    state.ts imports ProgramHint from "./snapshot". */
 export type { ProgramHint } from "./snapshot-programs";
@@ -73,7 +74,6 @@ import {
   senderVerificationFor,
   type SenderTranscriptEvidence,
 } from "./sender-verification";
-import { taskStateWantsHuman } from "./task-state";
 import {
   capTranscriptTail,
   type ArchiveStore,
@@ -512,7 +512,7 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
     const elapsedEndMs = terminal && Number.isFinite(updatedAtMs)
       ? Math.min(nowMs, updatedAtMs)
       : nowMs;
-    const outcome = lastKnown ? "healthy" as const : outcomeFor(source, terminal, Boolean(notification));
+    const outcome = lastKnown ? "healthy" as const : outcomeFor(source, terminal);
     const controlState = lastKnown ? "observed-only" as const : operatorControlState(target, terminal);
     const contextPct = lastKnown ? undefined : contextPctFor(source);
     const role = roleFor2(source, {
@@ -708,7 +708,10 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
         return 0;
       }),
     }))
-    .map((program) => ({ ...program, rollup: rollupFor(program.agents, nowMs) }))
+    .map((program) => ({
+      ...program,
+      rollup: rollupFor(program.agents, nowMs, input.acks ?? []),
+    }))
     .sort((left, right) =>
       (right.rollup.needsYou - left.rollup.needsYou) ||
       (right.rollup.working - left.rollup.working) ||
@@ -892,12 +895,11 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
       ended: allAgents.filter((agent) => agent.activity === "ended").length,
       byLifecycle,
       retained,
-      /* Agents waiting on a human, counted from the same signal the tab, the
-         title badge, the notifier and the program rollup all read. This was
-         issues.length — system findings — which meant the rollup cell and the
-         totals disagreed about what the word meant while sharing it. */
+      /* The exact unacked alert-strip population, shared with program rollups.
+         This was issues.length — system findings — so the same word named two
+         different populations. */
       needsYou: observedAgents.filter((agent) =>
-        agent.lifecycle !== "finished" && taskStateWantsHuman(agent)).length,
+        agentIsStripAlerting(agent, input.acks ?? [])).length,
       /* System findings keep their own vocabulary. A degraded collector and an
          agent that asked a question are both worth surfacing and neither is the
          other; folding them into one word is what made "needs you" unreadable. */

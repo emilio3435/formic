@@ -138,8 +138,8 @@ describe("orch peek", () => {
           { label: "Cursor transcript", path: "/tmp/transcript.jsonl", kind: "transcript" },
         ],
         repo: {
-          repoKey: "example-repo",
-          repoName: "example-repo",
+          repoKey: "the-ant-hill",
+          repoName: "the-ant-hill",
           worktreePath: "/Users/me/secret-worktree",
           branch: "feat/peek",
           ephemeral: false,
@@ -167,7 +167,7 @@ describe("orch peek", () => {
     expect(body.cards[0]?.lastReply).toBe("Writing the card projection.");
     expect(body.cards[0]?.files).toEqual(["gateway.json"]);
     expect(body.cards[0]?.cwd).toBe("/Users/me/proj");
-    expect(body.cards[0]?.repo).toBe("example-repo");
+    expect(body.cards[0]?.repo).toBe("the-ant-hill");
     expect(body.cards[0]?.contextPct).toBe(18);
   });
 

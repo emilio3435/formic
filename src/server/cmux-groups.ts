@@ -437,7 +437,7 @@ export async function reconcileRepoGroups(
 
       if (!live) {
         /* Do not mint a new sidebar group. Create-then-rename is what
-           paints a fresh window magenta with the repo name the moment a
+           paints a fresh window magenta `the-ant-hill` the moment a
            Formic pane lands there, and create() pulls members out of
            ANT · probe. We only maintain groups this module already
            recorded for this window. */

@@ -189,6 +189,11 @@ const HOME_MARK = {
   prime: "/icons/prime-orch.svg",
   omp: "/icons/omp.svg",
   hermes: "/icons/formic-mark.svg",
+  muse: "/icons/muse.svg",
+  copilot: "/icons/copilot.svg",
+  "antigravity-cli": "/icons/antigravity.png",
+  "antigravity-desktop": "/icons/antigravity.png",
+  "antigravity-ide": "/icons/antigravity.png",
   codex: "/icons/codex.webp",
   burnbar: "/icons/history.svg",
 };

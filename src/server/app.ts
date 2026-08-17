@@ -2,7 +2,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, extname, join, resolve, sep } from "node:path";
 import { PROVIDERS, type AgentSnapshot, type HubSnapshot, type ProgramSnapshot, type Provider, type SourceHealth, type TriageQueueItem } from "../shared/types";
-import { alertFingerprintFor, MemoryAckStore, type AckStore } from "./ack";
+import { MemoryAckStore, alertFingerprintFor, type AckStore } from "./ack";
+import { ackAgentAndClearCmux, clearCmuxAndMaybeAck } from "./ack-cmux";
 import { ARCHIVE_RETENTION_MS, MAX_ARCHIVE_RECORDS } from "./archive";
 import { handleBroadcastRequest } from "./broadcast";
 import { handleUsageRequest } from "./burnbar";
@@ -37,6 +38,7 @@ import {
   repoColorDiscovery,
   type RepoColorDiscovery,
 } from "./settings";
+import { handleTeamColorsRequest, JsonTeamColorsStore } from "./team-colors";
 /* TINT-F */
 import { setWorkspaceColor, setGroupColor, lastWrittenHex } from "./cmux-color";
 /* TINT integration wiring (master) */
@@ -44,7 +46,9 @@ import {
   registerRepoGroupInputs,
   JsonRepoGroupProvenanceStore,
   MemoryRepoGroupProvenanceStore,
+  type RepoGroupProvenanceStore,
 } from "./cmux-groups";
+import type { CmuxTeam } from "../shared/team-tint";
 import { folderKeyForCwd, sameHex } from "../shared/repo-color";
 import { snapshotFingerprint } from "./snapshot";
 import { handleTriageRequest, MemoryTriageQueueStore, type TriageInvestigationRunner, type TriageQueueStore } from "./triage";
@@ -58,6 +62,8 @@ export interface MountainAppState {
   markIssueBlocked?(issueId: string, result?: string): void | Promise<void>;
   /** Latest enriched cmux surfaces, for read-only identity debugging. */
   surfaces?(): readonly CmuxSurface[];
+  /** Operator teams from the last refresh; absent when the state cannot publish them. */
+  teams?(): readonly CmuxTeam[];
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -359,8 +365,15 @@ export interface MountainAppDependencies {
   /* TINT-F — repo colour assignments. Defaults to the shipped JSON file when
      the web root is the shipped one, and to memory everywhere else. */
   repoColorsStore?: JsonRepoColorsStore;
+  teamColorsStore?: JsonTeamColorsStore;
+  repoGroupProvenance?: RepoGroupProvenanceStore;
   /** TINT-F test seam: skip the cmux fan-out so route tests write nothing. */
   repoColorFanOut?: (writes: readonly { workspaceId: string; hex: string }[]) => void | Promise<void>;
+  /** TINT team-color test seam: skip live cmux writes so PUT tests never paint the sidebar. */
+  teamColorWrites?: {
+    setGroupColor: (groupId: string, hex: string, reason: string) => Promise<boolean>;
+    setWorkspaceColor: (workspaceId: string, hex: string, reason: string) => Promise<boolean>;
+  };
   /**
    * Grants this server process permission to mutate cmux workspace groups.
    * False by default: index.ts grants it only to the OS-exclusive production
@@ -418,7 +431,7 @@ function limitFrom(url: URL, fallback: number, maximum: number): number | Respon
    a store that only makes sense for one endpoint. Live colour keys come from
    the band name already on the snapshot (`agent.repo.repoName`). Folder git
    (`folderKeyForCwd`) is memoized by worktree path and used only as an alias
-   so persisted folder-key rows can rebase onto the origin/band name. A worktree's
+   so persisted the-mountain rows can rebase onto the-ant-hill. A worktree's
    repository does not change under it; a restart re-reads them all. */
 const repoKeyByWorktree = new Map<string, string | null>();
 
@@ -466,6 +479,18 @@ function defaultRepoColorsStore(webRoot: string): Promise<JsonRepoColorsStore> {
   return resolve(webRoot) === productionWebRoot
     ? JsonRepoColorsStore.open(resolve(productionWebRoot, "../../data/repo-colors.json"))
     : JsonRepoColorsStore.open("repo-colors.json", memorySettingsFiles());
+}
+
+function defaultTeamColorsStore(webRoot: string): Promise<JsonTeamColorsStore> {
+  const productionWebRoot = resolve(import.meta.dir, "../web");
+  return resolve(webRoot) === productionWebRoot
+    ? JsonTeamColorsStore.open(resolve(productionWebRoot, "../../data/team-colors.json"))
+    : JsonTeamColorsStore.open("team-colors.json", memorySettingsFiles());
+}
+
+function defaultRepoGroupProvenance(): Promise<RepoGroupProvenanceStore> {
+  const productionWebRoot = resolve(import.meta.dir, "../web");
+  return JsonRepoGroupProvenanceStore.open(resolve(productionWebRoot, "../../data/repo-group-provenance.json"));
 }
 
 async function fanOutRepoColors(writes: readonly { workspaceId: string; hex: string }[]): Promise<void> {
@@ -597,6 +622,12 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
   const repoColorsStore = dependencies.repoColorsStore
     ? Promise.resolve(dependencies.repoColorsStore)
     : defaultRepoColorsStore(dependencies.webRoot);
+  const teamColorsStore = dependencies.teamColorsStore
+    ? Promise.resolve(dependencies.teamColorsStore)
+    : defaultTeamColorsStore(dependencies.webRoot);
+  const repoGroupProvenance = dependencies.repoGroupProvenance
+    ? Promise.resolve(dependencies.repoGroupProvenance)
+    : defaultRepoGroupProvenance();
   /* TINT integration wiring (master): the one call TINT-G left to the
      integrator. The provider feeds the sidebar mirror from the same discovery
      walk and store the /api/repo-colors endpoint uses, so the mirror and the
@@ -609,9 +640,11 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
   void repoColorsStore.then((store) => { repoColorsForGroups = store; });
   let disposeRepoGroupRegistration: (() => void) | undefined;
   if (dependencies.repoGroupMirrorWriter === true) {
-    const groupProvenance = resolve(dependencies.webRoot) === resolve(import.meta.dir, "../web")
-      ? JsonRepoGroupProvenanceStore.open(resolve(import.meta.dir, "../../data/repo-group-provenance.json"))
-      : Promise.resolve(new MemoryRepoGroupProvenanceStore());
+    const groupProvenance = dependencies.repoGroupProvenance
+      ? Promise.resolve(dependencies.repoGroupProvenance)
+      : resolve(dependencies.webRoot) === resolve(import.meta.dir, "../web")
+        ? repoGroupProvenance
+        : Promise.resolve(new MemoryRepoGroupProvenanceStore());
     void groupProvenance.then((provenance) => {
       if (disposed) return;
       disposeRepoGroupRegistration = registerRepoGroupInputs(() => {
@@ -1073,6 +1106,17 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
           action as AttentionAction,
           until,
         );
+        if (action === "acknowledge" || action === "dismiss") {
+          const fingerprint = alertFingerprintFor(agent);
+          if (fingerprint) {
+            await ackAgentAndClearCmux({
+              agent,
+              ackStore,
+              notifications: dependencies.state.get().cmuxNotifications ?? [],
+              markRead: markNotificationRead,
+            });
+          }
+        }
         try {
           await dependencies.state.refresh({ cmux: true });
         } catch (error) {
@@ -1339,6 +1383,15 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
         fanOut: dependencies.repoColorFanOut ?? fanOutRepoColors,
       });
     }
+    if (url.pathname === "/api/team-colors" || url.pathname.startsWith("/api/team-colors/")) {
+      const provenance = await repoGroupProvenance;
+      return handleTeamColorsRequest(request, await teamColorsStore, {
+        teams: () => dependencies.state.teams?.() ?? [],
+        provenanceIds: () => new Set(provenance.list().map((record) => record.groupId)),
+        setGroupColor: dependencies.teamColorWrites?.setGroupColor ?? setGroupColor,
+        setWorkspaceColor: dependencies.teamColorWrites?.setWorkspaceColor ?? setWorkspaceColor,
+      });
+    }
     /* end TINT-F routes */
     if (url.pathname.startsWith("/api/usage/")) {
       return handleUsageRequest(request);
@@ -1463,9 +1516,27 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
           "Body must contain exactly action (mark_read or dismiss) and a non-empty notification id.",
         );
       }
-      const result = action === "mark_read"
-        ? await markNotificationRead(id)
-        : await dismissNotification(id);
+      const snap = dependencies.state.get();
+      const result = await clearCmuxAndMaybeAck({
+        notificationId: id,
+        action,
+        agents: snap.programs.flatMap((program) => program.agents),
+        notifications: snap.cmuxNotifications ?? [],
+        ackStore,
+        applyCmux: (verb, noticeId) =>
+          verb === "mark_read" ? markNotificationRead(noticeId) : dismissNotification(noticeId),
+      });
+      if (result.ok === true) {
+        try {
+          await dependencies.state.refresh();
+        } catch (error) {
+          return responseError(
+            500,
+            "NOTIFY_REFRESH_FAILED",
+            `Notification was cleared, but the snapshot refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
       return Response.json(result, {
         status: result.ok ? 200 : result.code === "invalid_state" ? 409 : 502,
         headers: { ...SECURITY_HEADERS, "cache-control": "no-store" },
@@ -1490,15 +1561,26 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
       }
       try {
         if (request.method === "PUT") {
-          const agent = dependencies.state.get().programs
+          const snap = dependencies.state.get();
+          const agent = snap.programs
             .flatMap((program) => program.agents)
             .find((candidate) => candidate.id === agentId);
           if (!agent) return responseError(404, "AGENT_NOT_FOUND", "The agent is not present in the current snapshot.");
-          const alertFingerprint = alertFingerprintFor(agent);
-          if (!alertFingerprint) {
-            return responseError(409, "AGENT_NOT_ALERTING", "Only an agent with a current alert can be acknowledged.");
+          let acked;
+          try {
+            acked = await ackAgentAndClearCmux({
+              agent,
+              ackStore,
+              notifications: snap.cmuxNotifications ?? [],
+              markRead: markNotificationRead,
+            });
+          } catch (error) {
+            const code = (error as Error & { code?: string }).code;
+            if (code === "AGENT_NOT_ALERTING") {
+              return responseError(409, "AGENT_NOT_ALERTING", "Only an agent with a current alert can be acknowledged.");
+            }
+            throw error;
           }
-          const ack = await ackStore.put(agentId, alertFingerprint);
           try {
             await dependencies.state.refresh();
           } catch (error) {
@@ -1509,7 +1591,7 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
             );
           }
           return Response.json(
-            { ok: true, ack },
+            { ok: true, ack: acked.ack, cmuxWarnings: acked.cmuxWarnings },
             { headers: { ...SECURITY_HEADERS, "cache-control": "no-store" } },
           );
         }

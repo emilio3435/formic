@@ -28,14 +28,18 @@ async function fixtureHome(): Promise<string> {
   return home;
 }
 
-function writeConversationDb(path: string, cwd = CWD): void {
+function writeConversationDb(path: string, cwd = CWD, model?: string): void {
   const db = new Database(path);
-  db.run("create table trajectory_meta (trajectory_id text, cascade_id text, trajectory_type integer, source integer)");
+  db.run("create table trajectory_meta (trajectory_id text, cascade_id text, trajectory_type integer, source integer, last_selected_agent_model text)");
   db.run("create table trajectory_metadata_blob (data blob)");
-  db.run("insert into trajectory_meta(trajectory_id, cascade_id, trajectory_type, source) values (?, ?, 4, 1)", [
-    "208761a1-8733-4596-b6df-3dcba849df62",
-    ID,
-  ]);
+  db.run(
+    "insert into trajectory_meta(trajectory_id, cascade_id, trajectory_type, source, last_selected_agent_model) values (?, ?, 4, 1, ?)",
+    [
+      "208761a1-8733-4596-b6df-3dcba849df62",
+      ID,
+      model ?? null,
+    ],
+  );
   db.run("insert into trajectory_metadata_blob(data) values (?)", [
     `noise file://${cwd} more-noise`,
   ]);
@@ -101,6 +105,36 @@ test("a fixture .db plus transcript is an antigravity row with speech and unknow
     tokens: { scope: "unknown", provenance: "unknown" },
   });
   expect(result.value[0]?.callSizes).toBeUndefined();
+  expect(result.value[0]?.tokens).not.toHaveProperty("contextWindow");
+});
+
+test("a last_selected_agent_model that matches the catalog attaches that window and keeps tokens unknown", async () => {
+  const home = await fixtureHome();
+  const desktop = join(home, ".gemini/antigravity");
+  await mkdir(join(desktop, "conversations"), { recursive: true });
+  writeConversationDb(join(desktop, "conversations", `${ID}.db`), CWD, "gemini-3.7-flash");
+  await writeTranscript(desktop, ID);
+
+  const result = await collectAntigravitySessions([desktop], NOW_MS, WINDOW_MS);
+  expect(result.value[0]).toMatchObject({
+    model: "gemini-3.7-flash",
+    tokens: {
+      scope: "unknown",
+      provenance: "unknown",
+      contextWindow: 1_048_576,
+    },
+  });
+  expect(result.value[0]?.callSizes).toBeUndefined();
+});
+
+test("an unknown Antigravity model leaves the window unset", async () => {
+  const home = await fixtureHome();
+  const desktop = join(home, ".gemini/antigravity");
+  await mkdir(join(desktop, "conversations"), { recursive: true });
+  writeConversationDb(join(desktop, "conversations", `${ID}.db`), CWD, "custom-agent-v1");
+  const result = await collectAntigravitySessions([desktop], NOW_MS, WINDOW_MS);
+  expect(result.value[0]?.model).toBe("custom-agent-v1");
+  expect(result.value[0]?.tokens).toEqual({ scope: "unknown", provenance: "unknown" });
 });
 
 test("a .db without a transcript still publishes a row", async () => {

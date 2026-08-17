@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { JsonAckStore } from "./ack";
+import { JsonAlertSinceStore } from "./alert-since";
 import { JsonArchiveStore } from "./archive";
 import { createAgentLinkFetch } from "./agent-links";
 import { createMountainFetch } from "./app";
@@ -9,6 +10,8 @@ import { BunCommandRunner } from "./command";
 import { loadCmuxSocketEnv, runningInsideCmux } from "./cmux-auth";
 import { ensureFormicOrchToken } from "./orch";
 import { runtimeCmuxExecutable } from "./cmux";
+import { JsonRepoGroupProvenanceStore } from "./cmux-groups";
+import { JsonTeamColorsStore } from "./team-colors";
 import { JsonIdentityBindingStore } from "./identity-bindings";
 import { HubState, loadProgramHints } from "./state";
 import { JsonProcessWitnessStore } from "./process-witness";
@@ -57,6 +60,11 @@ const programHints = await loadProgramHints(join(PROJECT_ROOT, "config/programs.
    costs the names, not the boot. */
 const sessionNameStore = await JsonSessionNameStore.open();
 const ackStore = await JsonAckStore.open(join(PROJECT_ROOT, "data/acks.json"));
+const alertSinceStore = await JsonAlertSinceStore.open(join(PROJECT_ROOT, "data/alert-since.json"));
+const teamColorsStore = await JsonTeamColorsStore.open(join(PROJECT_ROOT, "data/team-colors.json"));
+const repoGroupProvenance = await JsonRepoGroupProvenanceStore.open(
+  join(PROJECT_ROOT, "data/repo-group-provenance.json"),
+);
 
 const state = new HubState(runner, archiveStore, programHints, {
   settingsReader: () => settingsStore.get(),
@@ -71,6 +79,9 @@ const state = new HubState(runner, archiveStore, programHints, {
   sessionNames: sessionNameStore,
   witnessStore: processWitnessStore,
   ackStore,
+  alertSinceStore,
+  teamColorsStore,
+  repoGroupProvenance,
 });
 
 const mountainFetch = createMountainFetch({
@@ -83,6 +94,8 @@ const mountainFetch = createMountainFetch({
   programAliasStore,
   settingsStore,
   collectorInstances: collectorInstanceStore,
+  teamColorsStore,
+  repoGroupProvenance,
   cleanupProposer: createWorkerCleanupProposer(PROJECT_ROOT),
   cleanupLauncher: createNativeCleanupLauncher({
     repoRoot: PROJECT_ROOT,

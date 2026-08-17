@@ -713,7 +713,8 @@ describe("cmux collection time truth", () => {
     });
     expect(state.surfaces()).toEqual([surface]);
     expect(healthy.programs[0]?.agents[0]).toMatchObject({
-      outcome: "needs-you",
+      attention: true,
+      outcome: "healthy",
       processState: "running",
       target: { surfaceId: surface.surfaceId, resolution: "exact" },
     });
@@ -1482,7 +1483,7 @@ describe("cmux collection time truth", () => {
     void refresh.then(() => {
       settled = true;
     });
-    for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
     expect(settled).toBe(true);
     expect(burnCalls).toBe(1);

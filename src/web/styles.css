@@ -6421,15 +6421,21 @@ a.artifact-path:hover { text-decoration: underline; }
 
    Two rules govern every selector below.
 
-   Status outranks identity (authority rule 5). Every repo treatment is written
-   :not() against the four attention classes and against selection, so an
-   alerting row REPLACES the repo wash with its ember rail and 6% ember wash
-   rather than mixing the two. Written as exclusions rather than left to source
-   order, because rule order is a fact about this file and the rule is a fact
-   about the product.
+   Status ADDS to identity; it does not evict it (authority rule 5, reversed
+   2026-08-16). The four attention classes used to be :not()-ed out of every
+   repo treatment, back when an alerting row replaced the wash with a 6% ember
+   fill and an inset rail. SORT-INK-1 retired that fill and nothing took its
+   place, so attention stopped meaning "louder" and started meaning "white":
+   measured on the live board, a calm the-mountain row washed to
+   `color(srgb 0.993725 0.961569 0.996078)` and the same row with is-alerting
+   fell through to `rgba(0, 0, 0, 0)` over white paper. The row that needed a
+   person was the only one that did not look like anywhere. Identity now stays
+   and status is geometry and outline on top of it — see .agent-row.is-alert-hot
+   below. Selection and flight still outrank identity: both are things the
+   OPERATOR is doing to the row right now, not facts about the session.
 
    Text never wears repo colour (rule 6). The marks are the spine, the dot, the
-   tick and the pill border. No selector below sets `color`. */
+   tick, the outline and the pill border. No selector below sets `color`. */
 
 /* Whisper — the grouped repo band. */
 .repo-section.has-repo-tint {
@@ -6447,21 +6453,29 @@ a.artifact-path:hover { text-decoration: underline; }
    rule's specificity would out-vote it without the exclusion. Landing is
    deliberately NOT excluded — identity is the right ground to fade back
    onto. */
-.repo-section.has-repo-tint .agent-row:not(.is-needs-you):not(.is-blocked):not(.is-failed):not(.is-alerting):not(.is-selected):not(.is-floating) {
+.repo-section.has-repo-tint .agent-row:not(.is-selected):not(.is-floating) {
   background: color-mix(in srgb, var(--repo-tint) 4%, var(--surface));
 }
-.repo-section.has-repo-tint .agent-row:not(.is-needs-you):not(.is-blocked):not(.is-failed):not(.is-alerting):not(.is-selected):not(.is-floating):hover {
+.repo-section.has-repo-tint .agent-row:not(.is-selected):not(.is-floating):hover {
   background: color-mix(in srgb, var(--repo-tint) 7%, var(--surface));
 }
 
 /* Signal — the flat Needs-you strip, where a row's repository is not written
    above it. A 3px tick rather than the band's 2px spine: it is carrying on one
    line what the band carries over a whole card. */
-.agent-row.has-repo-tick:not(.is-needs-you):not(.is-blocked):not(.is-failed):not(.is-alerting):not(.is-selected):not(.is-floating) {
+.agent-row.has-repo-tick:not(.is-selected):not(.is-floating) {
   background: color-mix(in srgb, var(--repo-tint) 4%, var(--surface));
+}
+/* The 3px tick and the alert outline want the same slot, and this chain
+   out-specifies `.agent-row.is-alert-hot` four compound classes to two — so
+   without the exclusion the tick would win and the outline would simply not
+   exist on the strip, the surface it matters most on. The wash above is a
+   separate rule and is NOT excluded: identity stays on the row, and the louder
+   repo mark replaces the quieter one rather than displacing the colour. */
+.agent-row.has-repo-tick:not(.is-alert-hot):not(.is-selected):not(.is-floating) {
   box-shadow: inset 3px 0 color-mix(in srgb, var(--repo-tint) 55%, transparent);
 }
-.agent-row.has-repo-tick:not(.is-needs-you):not(.is-blocked):not(.is-failed):not(.is-alerting):not(.is-selected):not(.is-floating):hover {
+.agent-row.has-repo-tick:not(.is-selected):not(.is-floating):hover {
   background: color-mix(in srgb, var(--repo-tint) 7%, var(--surface));
 }
 /* The focus ring is a navigation cue and outranks the tick, the same way it
@@ -6469,8 +6483,77 @@ a.artifact-path:hover { text-decoration: underline; }
 /* The flight outranks the tick the same way: a newly-calm row sinking home
    must wear the lift shadow, and the tick chain's specificity would out-rank
    .is-floating without this exclusion. */
-.agent-row.has-repo-tick:not(.is-needs-you):not(.is-blocked):not(.is-failed):not(.is-alerting):not(.is-selected):not(.is-floating):focus-visible {
+.agent-row.has-repo-tick:not(.is-alert-hot):not(.is-selected):not(.is-floating):focus-visible {
   box-shadow: inset 3px 0 color-mix(in srgb, var(--repo-tint) 55%, transparent), var(--color-focus-ring);
+}
+
+/* ---------- the alert mark: status as geometry and repo ink ----------
+
+   `is-alert-hot` ⇔ stripAlerting (alerting && !acked), stamped by
+   renderAgentRow in BOTH modes — the strip's rows and the inline group's — so
+   one rule paints both surfaces and a session drawn once is painted once.
+
+   The outline is a bolder version of the row's OWN colour rather than a second
+   status hue: an operator scanning eight repos should read "this repo, and it
+   needs me", not "some alert, somewhere". Fallback is amber, never ember —
+   ember belongs to blocking notification badges (DESIGN-LANGUAGE), and giving
+   it back to rows is how the retired wash would return by the side door.
+
+   Outline only. No background, no inset rail: SORT-INK-1 stays green and the
+   4% repo wash above is the row's whole ground. */
+.agent-row.is-alert-hot {
+  --alert-ink: color-mix(in srgb, var(--repo-tint, var(--color-status-warning)) 78%, #000 22%);
+  transform: translateY(-2px) scale(1.02);
+  transform-origin: center left;
+  z-index: 2;
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--alert-ink) 85%, transparent),
+    0 10px 22px -16px color-mix(in srgb, var(--alert-ink) 45%, transparent);
+}
+/* Opt-IN, so a UA that answers neither query gets the static outline. */
+@media (prefers-reduced-motion: no-preference) {
+  .agent-row.is-alert-hot {
+    animation: alert-outline-shimmer 2.4s ease-in-out infinite;
+  }
+}
+@keyframes alert-outline-shimmer {
+  0%, 100% {
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--alert-ink) 70%, transparent),
+      0 10px 22px -16px color-mix(in srgb, var(--alert-ink) 35%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--alert-ink) 100%, transparent),
+      0 12px 26px -14px color-mix(in srgb, var(--alert-ink) 55%, transparent);
+  }
+}
+/* Retro C1's composite, with one addition the shimmer forces: a running
+   animation outranks every normal declaration in the slot it animates, so
+   restating the ring in box-shadow is not enough on its own — the shimmer has
+   to stand down while the row is focused, or the ring blinks in and out on a
+   2.4s cycle on the row an operator most likely arrived at by keyboard. */
+.agent-row.is-alert-hot:focus-visible {
+  animation: none;
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--alert-ink) 85%, transparent),
+    inset 0 0 0 2px var(--color-interactive),
+    var(--color-focus-ring);
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-row.is-alert-hot {
+    animation: none;
+    transform: none;
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--alert-ink) 85%, transparent);
+  }
+  .agent-row.is-alert-hot:focus-visible {
+    animation: none;
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--alert-ink) 85%, transparent),
+      inset 0 0 0 2px var(--color-interactive),
+      var(--color-focus-ring);
+  }
 }
 .strip-repo-pill {
   flex: none;

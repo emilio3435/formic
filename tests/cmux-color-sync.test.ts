@@ -845,6 +845,51 @@ describe("syncCmuxColors — the pass the collector poll calls", () => {
   });
 });
 
+describe("reconcile — an operator-team member is never forced back to the repo hex", () => {
+  test("mapped workspace in an operator team is not re-asserted to the repo hex", async () => {
+    /* Four Formic swarms on the-mountain must not be painted magenta just
+       because the repo assignment is. The team hex already on the workspace
+       is the colour that stays. */
+    const spy = funnelSpy();
+    const result = await reconcileWorkspaceColors({
+      observations: [observation("ws-a", "#5F7F2A", { currentDirectory: "/tmp/the-mountain" })],
+      surfaces: [],
+      settings: settings({ "the-mountain": assignment("the-mountain", "#d70ae6") }),
+      runtime: runtimeWith(spy.funnel),
+      teamByWorkspaceId: new Map([["ws-a", { id: "g1", hex: "#5f7f2a" }]]),
+    });
+    expect(result.decisions[0]?.outcome).not.toBe("reassert");
+    expect(spy.writes.some((w) => w.hex.toLowerCase() === "#d70ae6")).toBe(false);
+  });
+
+  test("mapped workspace in an operator team is re-asserted to the TEAM hex, never the repo hex", async () => {
+    const spy = funnelSpy();
+    const result = await reconcileWorkspaceColors({
+      observations: [observation("ws-a", "#111111", { currentDirectory: "/tmp/the-mountain" })],
+      surfaces: [],
+      settings: settings({ "the-mountain": assignment("the-mountain", "#d70ae6") }),
+      runtime: runtimeWith(spy.funnel),
+      teamByWorkspaceId: new Map([["ws-a", { id: "g1", hex: "#5f7f2a" }]]),
+    });
+    expect(result.decisions[0]).toMatchObject({ outcome: "reassert", hex: "#5f7f2a" });
+    expect(spy.writes).toEqual([{ workspaceId: "ws-a", hex: "#5f7f2a", reason: "team-reassert" }]);
+    expect(spy.writes.some((w) => w.hex.toLowerCase() === "#d70ae6")).toBe(false);
+  });
+
+  test("ungrouped mapped workspace still re-asserts repo hex", async () => {
+    const spy = funnelSpy();
+    const result = await reconcileWorkspaceColors({
+      observations: [observation("ws-b", "#111111", { currentDirectory: "/tmp/the-mountain" })],
+      surfaces: [],
+      settings: settings({ "the-mountain": assignment("the-mountain", "#d70ae6") }),
+      runtime: runtimeWith(spy.funnel),
+      teamByWorkspaceId: new Map(),
+    });
+    expect(result.decisions[0]?.outcome).toBe("reassert");
+    expect(spy.writes[0]?.hex).toBe("#d70ae6");
+  });
+});
+
 describe("repoColorsSettingsFrom — reading TINT-F's settings without owning them", () => {
   test("answers with the locked defaults until repo-color settings exist", () => {
     expect(repoColorsSettingsFrom(undefined)).toEqual({

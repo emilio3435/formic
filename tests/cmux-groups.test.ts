@@ -185,7 +185,7 @@ function target(workspaceId: string, repoKey: string, hex: string): RepoGroupTar
 }
 
 /** TINT-G no longer mints groups. Tests that exercise add/rename/teardown
-    start from a group we already recorded, the way production Formic does. */
+    start from a group we already recorded, the way production FORMIC does. */
 async function own(
   cmux: FakeCmux,
   provenance: MemoryRepoGroupProvenanceStore,
@@ -611,8 +611,8 @@ describe("reconcileRepoGroups", () => {
 
   test("a new window does not get a minted repo folder for a targeted workspace", async () => {
     /* Drag orch into a fresh window. The first fix left those panes
-       "ungrouped", so the next tick created a repo folder, named it, painted
-       it, and ate the operator group. We only maintain groups we already
+       "ungrouped", so the next tick created the-ant-hill, named it, painted
+       it magenta, and ate ANT · probe. We only maintain groups we already
        recorded for that window. */
     const cmux = new FakeCmux({ "window-new": ["ws-orch"] });
     const result = await reconcileRepoGroups({
@@ -622,7 +622,7 @@ describe("reconcileRepoGroups", () => {
         mirrorGroups: true,
         targetsComplete: true,
         setGroupColor: funnel(cmux).setGroupColor,
-        targets: [target("ws-orch", "example-repo", "#d70ae6")],
+        targets: [target("ws-orch", "the-ant-hill", "#d70ae6")],
       },
     });
     expect(cmux.methodCalls("workspace.group.create")).toEqual([]);
@@ -632,20 +632,21 @@ describe("reconcileRepoGroups", () => {
   });
 
   test("a targeted workspace already in an operator group is not stolen into the repo group", async () => {
-    /* TINT-G used to file every repo-mapped workspace, including lanes the
-       operator already parked. create/add then pulled those members out of
-       the operator folder. Stealing members is the same annexation as
-       renaming an operator group. */
+    /* Tonight's thief: TINT-G files every repo-mapped workspace, including
+       lanes the operator already parked in ANT · program. create/add then
+       pull those members out of the operator folder and rename the new
+       group the-ant-hill. The header already forbids annexing an operator
+       group by name; stealing its members is the same annexation. */
     const cmux = new FakeCmux({ "window-1": ["ws-loose", "ws-program"] });
     cmux.seedGroup("ant-program", {
       windowId: "window-1",
-      name: "ANT · example-program",
+      name: "ANT · grok-build-connect",
       customColor: "#5F7F2A",
       members: ["ws-program"],
     });
     const provenance = new MemoryRepoGroupProvenanceStore();
     const colors = funnel(cmux);
-    const ours = await own(cmux, provenance, "window-1", "example-repo", ["ws-loose"], "#d70ae6");
+    const ours = await own(cmux, provenance, "window-1", "the-ant-hill", ["ws-loose"], "#d70ae6");
     await reconcileRepoGroups({
       runner: cmux,
       provenance,
@@ -654,15 +655,15 @@ describe("reconcileRepoGroups", () => {
         targetsComplete: true,
         setGroupColor: colors.setGroupColor,
         targets: [
-          target("ws-loose", "example-repo", "#d70ae6"),
-          target("ws-program", "example-repo", "#d70ae6"),
+          target("ws-loose", "the-ant-hill", "#d70ae6"),
+          target("ws-program", "the-ant-hill", "#d70ae6"),
         ],
       },
     });
 
     expect(cmux.groups.get("ant-program")).toEqual({
       windowId: "window-1",
-      name: "ANT · example-program",
+      name: "ANT · grok-build-connect",
       customColor: "#5F7F2A",
       members: ["ws-program"],
     });
@@ -677,10 +678,10 @@ describe("reconcileRepoGroups", () => {
     const cmux = new FakeCmux({ "window-1": ["ws-loose", "ws-program"] });
     const provenance = new MemoryRepoGroupProvenanceStore();
     const colors = funnel(cmux);
-    await own(cmux, provenance, "window-1", "example-repo", ["ws-loose"], "#d70ae6");
+    await own(cmux, provenance, "window-1", "the-ant-hill", ["ws-loose"], "#d70ae6");
     cmux.seedGroup("ant-program", {
       windowId: "window-1",
-      name: "ANT · example-program",
+      name: "ANT · grok-build-connect",
       customColor: "#5F7F2A",
       members: ["ws-program"],
     });
@@ -694,8 +695,8 @@ describe("reconcileRepoGroups", () => {
         targetsComplete: true,
         setGroupColor: colors.setGroupColor,
         targets: [
-          target("ws-loose", "example-repo", "#d70ae6"),
-          target("ws-program", "example-repo", "#d70ae6"),
+          target("ws-loose", "the-ant-hill", "#d70ae6"),
+          target("ws-program", "the-ant-hill", "#d70ae6"),
         ],
       },
     });
@@ -710,7 +711,7 @@ describe("reconcileRepoGroups", () => {
     const cmux = new FakeCmux({ "window-1": ["ws-a", "ws-b"] });
     cmux.seedGroup("ant-program", {
       windowId: "window-1",
-      name: "ANT · example-program",
+      name: "ANT · grok-build-connect",
       customColor: "#5F7F2A",
       members: ["ws-a", "ws-b"],
     });
@@ -723,8 +724,8 @@ describe("reconcileRepoGroups", () => {
         targetsComplete: true,
         setGroupColor: funnel(cmux).setGroupColor,
         targets: [
-          target("ws-a", "example-repo", "#d70ae6"),
-          target("ws-b", "example-repo", "#d70ae6"),
+          target("ws-a", "the-ant-hill", "#d70ae6"),
+          target("ws-b", "the-ant-hill", "#d70ae6"),
         ],
       },
     });

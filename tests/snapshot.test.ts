@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { SHARED_HOST_REASON, TWO_OWNER_REASON } from "../src/shared/identity-copy";
 import { PROVIDERS } from "../src/shared/types";
+import { alertFingerprintFor } from "../src/server/ack";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -12,15 +13,17 @@ import {
   withIssueDecoration,
   withPulse,
 } from "../src/server/snapshot";
-import { parseOmpJsonl } from "../src/server/collectors";
+import { parseOmpJsonl, type SessionProviderResults } from "../src/server/collectors";
 import { MemoryArchiveStore } from "../src/server/archive";
+import { MemoryAlertSinceStore } from "../src/server/alert-since";
 import {
   bridgeAgentsWithBindings,
   MemoryIdentityBindingStore,
   updateBindingsFromScan,
 } from "../src/server/identity-bindings";
 import { PulseTracker } from "../src/server/pulse";
-import type { ArchiveStore, CmuxSurface, CollectedAgent } from "../src/server/types";
+import { HubState, type HubCollectors } from "../src/server/state";
+import type { ArchiveStore, CmuxSurface, CollectedAgent, CommandRunner } from "../src/server/types";
 import type { HubPulse, IssueLifecycle, LifecycleState, OperatorIssue } from "../src/shared/types";
 
 const fixture = (name: string): string =>
@@ -61,6 +64,54 @@ const uniqueSurface: CmuxSurface = {
   cwd: "/Users/emilionunezgarcia/Developer/unique-project",
   sourceSessionIds: [],
 };
+
+describe("A4 HubState alertSince publication", () => {
+  test("A4.1 one live fingerprint keeps its first-seen time across clock-only refreshes", async () => {
+    let now = Date.parse("2026-08-16T12:00:00.000Z");
+    let hookLifecycleAt = "2026-08-16T12:00:00.000Z";
+    const source = (): CollectedAgent => collected({
+      id: "codex:alert-since",
+      sourceSessionId: "alert-since",
+      status: "waiting",
+      statusReason: "Waiting for operator input.",
+      hookLifecycle: "needsInput",
+      hookLifecycleAt,
+      updatedAt: hookLifecycleAt,
+    });
+    const emptySessions = (): SessionProviderResults => {
+      const sessions = Object.fromEntries(
+        PROVIDERS.map((provider) => [provider, { value: [], errors: [] }]),
+      );
+      return sessions as unknown as SessionProviderResults;
+    };
+    const collectors: HubCollectors = {
+      sessions: async () => ({
+        ...emptySessions(),
+        codex: { value: [source()], errors: [] },
+      }),
+      cmux: async () => ({ value: [], errors: [] }),
+      notifications: async () => ({ value: [], errors: [] }),
+      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const state = new HubState(runner, new MemoryArchiveStore(), [], {
+      collectors,
+      alertSinceStore: new MemoryAlertSinceStore(() => now),
+    });
+
+    await state.refresh();
+    const first = state.get().programs.flatMap(({ agents }) => agents)[0];
+    expect(first?.alertSince).toBe("2026-08-16T12:00:00.000Z");
+
+    now = Date.parse("2026-08-16T12:05:00.000Z");
+    hookLifecycleAt = "2026-08-16T12:05:00.000Z";
+    await state.refresh();
+    const second = state.get().programs.flatMap(({ agents }) => agents)[0];
+    expect(second?.alertSince).toBe("2026-08-16T12:00:00.000Z");
+  });
+});
 
 describe("snapshot control safety and SSE deduplication", () => {
   test("last-known lineage and names cannot change current role, name, or durable tags", () => {
@@ -1198,7 +1249,12 @@ describe("snapshot control safety and SSE deduplication", () => {
         { ...uniqueSurface, surfaceId: "SURFACE-CURSOR", sourceSessionIds: ["ended-turn"] },
         { ...uniqueSurface, surfaceId: "SURFACE-NOTIFY", sourceSessionIds: ["notification"] },
       ],
-      notifications: [{ surfaceId: "SURFACE-NOTIFY", body: "May I write to the database?" }],
+      notifications: [{
+        surfaceId: "SURFACE-NOTIFY",
+        title: "PR merged",
+        subtitle: "Completed",
+        body: "Merged and closed the active recovery chain.",
+      }],
       archiveStore,
       now: new Date("2026-07-21T23:00:30.000Z"),
     });
@@ -1224,19 +1280,20 @@ describe("snapshot control safety and SSE deduplication", () => {
       provenance: "process-died",
       activity: "ended",
     });
-    /* The overlay, and the whole of what changed about it: an unread
-       notification adds `attention` and an outcome, and leaves the lifecycle
-       exactly where it was. It used to overwrite the status outright. */
+    /* A completed toast is an overlay, not a human ask: it adds `attention`
+       while leaving both lifecycle and outcome exactly where they were.
+       D3: the overlay still belongs in the strip, so needsYou counts it. */
     expect(agents.find(({ id }) => id === "codex:notification")).toMatchObject({
       lifecycle: "working",
       attention: true,
-      outcome: "needs-you",
+      outcome: "healthy",
       controlState: "linked",
     });
     expect(snapshot.totals).toMatchObject({ working: 2, idle: 1, ended: 1, history: 1 });
     expect(snapshot.totals.byLifecycle).toEqual({ working: 2, waiting: 1, unverified: 0, finished: 1 });
-    // This one really is waiting on a human, and it is counted as one.
     expect(snapshot.totals.needsYou).toBe(1);
+    expect(snapshot.programs.find((program) =>
+      program.agents.some(({ id }) => id === "codex:notification"))?.rollup?.needsYou).toBe(1);
   });
 
   test("C-issue-two-owner: live conflicts describe two terminal owners, not a shared transcript", () => {
@@ -2269,13 +2326,10 @@ describe("a dead session is never given an instruction", () => {
   });
 });
 
-describe("needs you means agents waiting on a human", () => {
-  /* One phrase had three meanings and they could not agree: totals.needsYou
-     counted system findings (issues.length), the program rollup counted any
-     agent whose outcome was not healthy, and the client counted attention
-     signals. The tab is named for the third, ANT-GUIDE.md promises the third in
-     writing, and the north star is about the third. All three now read the same
-     collection, and system findings keep their own word. */
+describe("A9 needsYou equals the unacked alert strip", () => {
+  /* One phrase had three meanings and they could not agree. Server totals and
+     program rollups now read one alerting-and-not-acked population; system
+     findings keep their own word. */
   const asking = () => collected({
     id: "codex:asking",
     sourceSessionId: "asking",
@@ -2297,10 +2351,7 @@ describe("needs you means agents waiting on a human", () => {
     expect(snapshot.programs[0]?.rollup?.needsYou).toBe(1);
   });
 
-  test("a failed agent that asks nothing is NOT a to-do", () => {
-    /* The old rollup counted any non-healthy outcome. A failed session is a
-       fact about the work, not a request for a person — and the board already
-       shows the failure. */
+  test("A9.2 a failed live agent is an unacked alert", () => {
     const failed = collected({
       id: "codex:failed",
       sourceSessionId: "failed",
@@ -2317,8 +2368,8 @@ describe("needs you means agents waiting on a human", () => {
 
     expect(agent?.outcome).not.toBe("healthy");
     expect(agent?.attentionSignal).toBeUndefined();
-    expect(snapshot.totals.needsYou).toBe(0);
-    expect(snapshot.programs[0]?.rollup?.needsYou).toBe(0);
+    expect(snapshot.totals.needsYou).toBe(1);
+    expect(snapshot.programs[0]?.rollup?.needsYou).toBe(1);
   });
 
   test("a system finding is counted separately and never as a to-do", () => {
@@ -2348,6 +2399,43 @@ describe("needs you means agents waiting on a human", () => {
 
     expect(snapshot.totals.needsYou).toBe(1);
     expect(snapshot.totals.systemFindings ?? 0).toBeGreaterThan(0);
+  });
+
+  test("A9.5 an exact Ack removes a hook ask from totals and its program rollup", () => {
+    const hook = collected({
+      id: "codex:hook-asking",
+      sourceSessionId: "hook-asking",
+      status: "waiting",
+      statusReason: "Waiting for operator input.",
+      hookLifecycle: "needsInput",
+      hookLifecycleAt: "2026-07-21T23:00:00.000Z",
+    });
+    const unacked = buildSnapshot({
+      agents: [hook],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    const published = unacked.programs[0]!.agents[0]!;
+    const alertFingerprint = alertFingerprintFor(published);
+
+    expect(alertFingerprint).toBe("hook:needsInput:hook-input");
+    expect(unacked.totals.needsYou).toBe(1);
+    expect(unacked.programs[0]?.rollup?.needsYou).toBe(1);
+
+    const acked = buildSnapshot({
+      agents: [hook],
+      surfaces: [],
+      archiveStore,
+      acks: [{
+        agentId: hook.id,
+        ackedAt: "2026-07-21T23:00:10.000Z",
+        alertFingerprint: alertFingerprint!,
+      }],
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+    expect(acked.totals.needsYou).toBe(0);
+    expect(acked.programs[0]?.rollup?.needsYou).toBe(0);
   });
 });
 

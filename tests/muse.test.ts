@@ -8,7 +8,7 @@ import {
   identityFromSessionPath,
   isRecognizedAgentProcess,
 } from "../src/server/identity";
-import { collectMuseSessions, museTimestamp } from "../src/server/muse";
+import { collectMuseSessions, museTimestamp, parseMuseSession } from "../src/server/muse";
 
 const FIXTURE = join(import.meta.dir, "fixtures/muse");
 const PARENT = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
@@ -64,6 +64,36 @@ test("a Muse log without usage reports unknown tokens, not zero", async () => {
   const bare = result.value.find((agent) => agent.sourceSessionId === BARE);
   expect(bare?.tokens).toEqual({ scope: "unknown", provenance: "unknown" });
   expect(bare?.callSizes).toBeUndefined();
+  expect(bare?.tokens).not.toHaveProperty("contextWindow");
+});
+
+test("observed tokens plus a Spark model attach the catalog 1M window", () => {
+  const agent = parseMuseSession(PARENT, `${JSON.stringify({
+    recorded_at: 1_786_872_000_123_456,
+    payload: { event: { kind: "user_prompt_display", text: "Use Spark.", model: "muse-spark-1.2" } },
+  })}\n${JSON.stringify({
+    recorded_at: 1_786_872_001_123_456,
+    payload: { event: { kind: "model_completed", usage: { input_tokens: 10, output_tokens: 5, cached_tokens: 2 } } },
+  })}\n`);
+  expect(agent?.tokens).toMatchObject({
+    sessionTotal: 15,
+    sessionProcessed: 17,
+    provenance: "observed",
+    contextWindow: 1_000_000,
+  });
+});
+
+test("an unknown Muse model leaves the window unset", () => {
+  const agent = parseMuseSession(PARENT, `${JSON.stringify({
+    recorded_at: 1_786_872_000_123_456,
+    payload: { event: { kind: "user_prompt_display", text: "Unknown model.", model: "muse-1" } },
+  })}\n${JSON.stringify({
+    recorded_at: 1_786_872_001_123_456,
+    payload: { event: { kind: "model_completed", usage: { input_tokens: 10, output_tokens: 5 } } },
+  })}\n`);
+  expect(agent?.model).toBe("muse-1");
+  expect(agent?.tokens.provenance).toBe("observed");
+  expect(agent?.tokens).not.toHaveProperty("contextWindow");
 });
 
 test("a missing Muse store is absent", async () => {

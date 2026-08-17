@@ -4,7 +4,6 @@ import type { IncrementalParser, ParseMetadata } from "./collectors";
 import type { AgentStatus, TokenUsage } from "../shared/types";
 import { resolveAgentName } from "./naming";
 import { MAX_HEARTBEAT_TAIL_CHARS, capTranscriptTail } from "./types";
-import { MODEL_CONFIG } from "./model-config";
 import { claudeContextWindow } from "./collectors";
 import {
   DEFAULT_LIFECYCLE_THRESHOLDS,
@@ -166,7 +165,7 @@ export function createPrimeParser(): IncrementalParser {
     const sourceUpdatedAt = updatedAt ?? fallback;
     const recency = recencyStatus(sourceUpdatedAt, meta.nowMs ?? Date.now(), meta.thresholds);
     const agentModel = model || "prime";
-    const contextWindow = claudeContextWindow(agentModel, MODEL_CONFIG) ?? (agentModel.toLowerCase().includes("spark") ? 1_000_000 : agentModel.toLowerCase().includes("grok") ? 131_072 : undefined);
+    const contextWindow = claudeContextWindow(agentModel);
     const tokens: TokenUsage = lastUsage
       ? {
           input: lastUsage.input,
@@ -176,11 +175,14 @@ export function createPrimeParser(): IncrementalParser {
           sessionTotal,
           sessionCachedInput,
           sessionProcessed: callSizes.length ? callSizes.reduce((a,b)=>a+b,0) : undefined,
-          contextWindow,
+          ...(contextWindow !== undefined ? { contextWindow } : {}),
           scope: "latest-turn" as const,
           provenance: "observed" as const,
         }
-      : { provenance: "unknown" as const, contextWindow };
+      : {
+          provenance: "unknown" as const,
+          ...(contextWindow !== undefined ? { contextWindow } : {}),
+        };
     /* This exact reserved source is a synthetic infrastructure mailbox, not an
        interactive Prime session. The declaration classifies what it is; it
        deliberately contributes no process, surface, target, or route. */

@@ -320,16 +320,45 @@ describe("pager + attention + staleness", () => {
     expect(order.map((r: any) => r.repo)).toEqual(["hot", "busy", "quiet"]);
   });
 
-  test("TL;DR attention count follows snapshot and repo state, with an honest clear state", async () => {
+  test("B13 TL;DR attention count is the strip's population, in ALL and per repo", async () => {
+    /* The digit changed population with the alert-row program. It used to read
+       `totals.attention` for ALL — which is UNREAD CMUX TOASTS, so a "PR
+       merged" popup incremented "need you" — and, per repo, "any
+       attentionSignal on an unfinished row", which ignores the Ack entirely.
+       Three answers to one phrase, on the largest number on the page. It is
+       stripAlerting (alerting && !acked) everywhere now.
+
+       The expected numbers moved on this fixture for a reason worth naming
+       rather than re-baselining in silence: two of its rows carry
+       `outcome: "ok"`, which is not a wire OutcomeState (healthy | needs-you |
+       blocked | failed). deriveOutcome passes an unknown outcome through, and a
+       non-healthy outcome on a live row IS an ask under the one predicate. The
+       membership is pinned by id below, so repairing that fixture moves this
+       expectation deliberately instead of quietly. */
     const { doc, M } = await setupRailDom();
-    M.state.snap = repoSnapFixture();
+    const snap = repoSnapFixture();
+    const askingIds = snap.programs
+      .flatMap((p: any) => (p.agents || []).filter((a: any) => M.alerting(a)).map((a: any) => a.id));
+    expect(askingIds).toEqual(["codex:worker-1", "codex:blocked-1", "codex:home-1"]);
+
+    M.state.snap = snap;
     M.state.tldrView = "ALL";
     M.renderHealthTldrLane();
-    expect(textOf(findClass(doc.byId("health-tldr-lane"), "tldr-attention-count"))).toBe("1 need you");
+    expect(textOf(findClass(doc.byId("health-tldr-lane"), "tldr-attention-count"))).toBe("3 need you");
 
     M.state.tldrView = "the-mountain-main";
     M.renderHealthTldrLane();
+    expect(textOf(findClass(doc.byId("health-tldr-lane"), "tldr-attention-count"))).toBe("2 need you");
+
+    /* Acceptance 11, where it bites hardest: the Ack has to reach THIS digit
+       too, or acknowledging a row drops it from the strip and the rollup while
+       the headline keeps counting it. */
+    M.state.snap = { ...snap, acks: [{ agentId: "codex:blocked-1" }] };
+    M.renderHealthTldrLane();
     expect(textOf(findClass(doc.byId("health-tldr-lane"), "tldr-attention-count"))).toBe("1 need you");
+    M.state.tldrView = "ALL";
+    M.renderHealthTldrLane();
+    expect(textOf(findClass(doc.byId("health-tldr-lane"), "tldr-attention-count"))).toBe("2 need you");
 
     M.state.snap = twoRepoSnapFixture();
     M.state.tldrView = "ALL";

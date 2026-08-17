@@ -32,6 +32,28 @@ describe("Prime human-facing recency", () => {
     expect(agent?.status).toBe("running");
   });
 
+  test("a grok model uses the catalog 500k window instead of an invented 131k fallback", () => {
+    const agent = parsePrimeJsonl([
+      JSON.stringify({ type: "session", id: "prime-grok-window", cwd: "/tmp/formic", timestamp: "2026-08-11T10:00:00.000Z" }),
+      JSON.stringify({ type: "model_change", modelId: "grok-4.6" }),
+      JSON.stringify({ type: "message", timestamp: "2026-08-11T10:00:01.000Z", message: { role: "user", content: "Use Grok." } }),
+    ].join("\n"), { nowMs: Date.parse("2026-08-11T10:00:04.000Z") });
+
+    expect(agent?.model).toBe("grok-4.6");
+    expect(agent?.tokens.contextWindow).toBe(500_000);
+  });
+
+  test("an unknown Prime model leaves the window unset instead of inventing 131k", () => {
+    const agent = parsePrimeJsonl([
+      JSON.stringify({ type: "session", id: "prime-mystery-window", cwd: "/tmp/formic", timestamp: "2026-08-11T10:00:00.000Z" }),
+      JSON.stringify({ type: "model_change", modelId: "mystery-lite" }),
+      JSON.stringify({ type: "message", timestamp: "2026-08-11T10:00:01.000Z", message: { role: "user", content: "No catalog needle." } }),
+    ].join("\n"), { nowMs: Date.parse("2026-08-11T10:00:04.000Z") });
+
+    expect(agent?.model).toBe("mystery-lite");
+    expect(agent?.tokens).not.toHaveProperty("contextWindow");
+  });
+
   test("preserves the reserved heartbeat session classification", () => {
     const agent = parsePrimeJsonl([
       JSON.stringify({ type: "session", id: "ant-heartbeat-monitor", timestamp: "2026-08-11T10:00:00.000Z" }),

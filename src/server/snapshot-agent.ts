@@ -185,12 +185,12 @@ export function processStateFor(agent: CollectedAgent): ProcessState {
   return "unknown";
 }
 
-export function outcomeFor(agent: CollectedAgent, archived: boolean, hasNotification: boolean): OutcomeState {
+export function outcomeFor(agent: CollectedAgent, archived: boolean): OutcomeState {
   if (archived) return "healthy";
   const gates = agent.gates.join(" ");
   if (/\b(?:fail(?:ed|ing)?|error)\b/i.test(gates)) return "failed";
   if (agent.gates.length > 0) return "blocked";
-  if (hasNotification || agent.status === "attention") return "needs-you";
+  if (agent.status === "attention") return "needs-you";
   return "healthy";
 }
 

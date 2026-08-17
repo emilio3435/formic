@@ -8,6 +8,7 @@ import {
   MemoryActionLogStore,
   type MountainAppState,
 } from "../src/server/app";
+import { MemoryAckStore } from "../src/server/ack";
 import { MemoryAttentionStore } from "../src/server/cmux";
 import type { AgentSnapshot, HubSnapshot } from "../src/shared/types";
 import type { ArchiveStore, CollectedAgent, CommandResult, CommandRunner } from "../src/server/types";
@@ -66,6 +67,7 @@ function app(
     runner?: CommandRunner;
     actions?: MemoryActionLogStore;
     attention?: MemoryAttentionStore;
+    ackStore?: MemoryAckStore;
     refreshes?: Array<{ cmux?: boolean } | undefined>;
     now?: () => number;
     archiveStore?: ArchiveStore;
@@ -87,6 +89,7 @@ function app(
     archiveStore,
     actionLogStore: options.actions ?? new MemoryActionLogStore(),
     attentionStore: options.attention ?? new MemoryAttentionStore(),
+    ackStore: options.ackStore,
     now: options.now,
     webRoot: import.meta.dir,
   });
@@ -681,5 +684,66 @@ describe("POST /api/attention", () => {
     });
     expect(refreshes).toEqual([{ cmux: true }]);
     fetch.dispose();
+  });
+
+  test("acknowledge writes an ack and marks the toast read; snooze stays Formic-local", async () => {
+    const now = Date.parse("2026-07-28T09:01:00.000Z");
+    const current = snapshot();
+    const agent = current.programs[0]!.agents[0]!;
+    agent.outcome = "healthy";
+    agent.attention = true;
+    current.cmuxNotifications = [{
+      id: "notice-1",
+      workspaceId: "WORKSPACE-1",
+      surfaceId: "SURFACE-1",
+      title: "Completed",
+      subtitle: "",
+      body: "Needs operator",
+      isRead: false,
+      createdAt: "2026-07-28T09:00:00.000Z",
+    }];
+    const unread = {
+      id: "notice-1",
+      surfaceId: "SURFACE-1",
+      createdAt: "2026-07-28T09:00:00.000Z",
+      body: "Needs operator",
+    };
+
+    async function post(action: "acknowledge" | "snooze", extra: Record<string, string> = {}) {
+      const attention = new MemoryAttentionStore(() => now);
+      attention.observe([unread]);
+      const ackStore = new MemoryAckStore(() => now);
+      const runner = new StubRunner();
+      const fetch = app(current, {
+        attention,
+        ackStore,
+        runner,
+        now: () => now,
+      });
+      try {
+        const response = await fetch(new Request(`${ORIGIN}/api/attention`, {
+          method: "POST",
+          headers: { origin: ORIGIN, "content-type": "application/json" },
+          body: JSON.stringify({
+            action,
+            agentId: "codex:test-session",
+            ...extra,
+          }),
+        }));
+        return { response, ackStore, runner };
+      } finally {
+        fetch.dispose();
+      }
+    }
+
+    const acknowledged = await post("acknowledge");
+    expect(acknowledged.response.status).toBe(200);
+    expect(acknowledged.ackStore.list()).toHaveLength(1);
+    expect(acknowledged.runner.commands.map((command) => command[2])).toEqual(["notification.mark_read"]);
+
+    const snoozed = await post("snooze", { until: "2026-07-28T09:10:00.000Z" });
+    expect(snoozed.response.status).toBe(200);
+    expect(snoozed.ackStore.list()).toEqual([]);
+    expect(snoozed.runner.commands.map((command) => command[2])).toEqual([]);
   });
 });

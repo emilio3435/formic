@@ -45,10 +45,16 @@ export function alertFingerprintFor(agent: AgentSnapshot): string | undefined {
   }
   if (agent.taskState === "parked" || agent.taskState === "done") return undefined;
   if (agent.attentionSignal) {
+    if (agent.attentionSignal.kind === "stalled-active") {
+      return "signal:stalled-active";
+    }
     return withEvidence(`signal:${agent.attentionSignal.kind}`, agent);
   }
   if (agent.outcome && agent.outcome !== "healthy") {
     return `outcome:${agent.outcome}`;
+  }
+  if (agent.attention === true) {
+    return "attention:unread";
   }
   if (agent.status === "attention") {
     return "status:attention";

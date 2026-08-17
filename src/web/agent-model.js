@@ -439,13 +439,47 @@ export function alerting(agent) {
 
 /* Alert-first, stable, and nothing else: the caller hands in one lifecycle
    section's rows and the members its predicate marks hot rise to the top.
-   Stability is the contract — alert order is the server's order, not
-   recency — and the sort is in place to match byRole's convention in the
-   section builder. The predicate is REQUIRED: membership (including the
-   ack veto — see stripAlerting in app.js) is presentation-state the pure
-   model must not guess at. */
+   Stability is the contract — the PARTITION is the server's order, it says
+   nothing about which ask came first — and the sort is in place to match
+   byRole's convention in the section builder. Recency inside the hot bucket
+   is alertRecent's job, below, and is the only thing licensed to reorder it.
+   The predicate is REQUIRED: membership (including the ack veto — see
+   stripAlerting in app.js) is presentation-state the pure model must not
+   guess at. */
 export function alertFirst(list, isAlerting) {
   return list.sort((left, right) => (isAlerting(left) ? 0 : 1) - (isAlerting(right) ? 0 : 1));
+}
+
+/* Recency INSIDE the hot bucket, newest ask first. Runs after alertFirst, on
+   the same list, in place — so its jurisdiction is exactly the leading run of
+   rows the predicate marks hot, and calm rows keep the server's order whatever
+   stamp they happen to be carrying.
+
+   `sinceOf` is injected for the same reason `isAlerting` is: the KEY is the
+   decision worth pinning, and it belongs at the call site where app.js can be
+   held to `agent.alertSince` — first-seen of the current alertFingerprint, the
+   one clock on the record that means "this ask started". Every other one moves
+   for reasons that are not a new ask, and a queue keyed on those reshuffles
+   while nobody asked anything.
+
+   A missing or unparseable stamp is NOT a very old ask: it sorts last among
+   the hot rows and keeps its input order there, because "the server has not
+   said" and "the server said a long time ago" are different claims. */
+export function alertRecent(list, isAlerting, sinceOf) {
+  let end = 0;
+  while (end < list.length && isAlerting(list[end])) end += 1;
+  if (end < 2) return list;
+  const hot = list.slice(0, end).sort((left, right) => {
+    const a = Date.parse(sinceOf(left) || "");
+    const b = Date.parse(sinceOf(right) || "");
+    const aOk = Number.isFinite(a);
+    const bOk = Number.isFinite(b);
+    if (aOk && bOk) return b - a;
+    if (aOk !== bOk) return aOk ? -1 : 1;
+    return 0;
+  });
+  for (let i = 0; i < end; i += 1) list[i] = hot[i];
+  return list;
 }
 
 export function deriveRollup(agents, nowMs = Date.now(), thresholdMs = DEFAULT_STALL_THRESHOLD_MS) {

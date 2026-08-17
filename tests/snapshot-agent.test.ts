@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { roleFor2 } from "../src/server/snapshot-agent";
+import { outcomeFor, roleFor2 } from "../src/server/snapshot-agent";
 import type { CollectedAgent } from "../src/server/types";
 
 function agent(overrides: Partial<CollectedAgent> = {}): CollectedAgent {
@@ -17,6 +17,16 @@ function agent(overrides: Partial<CollectedAgent> = {}): CollectedAgent {
     ...overrides,
   };
 }
+
+describe("A6 outcomeFor toast separation", () => {
+  test("A6.1 status attention without a toast still yields needs-you", () => {
+    expect(outcomeFor(agent({ status: "attention" }), false)).toBe("needs-you");
+  });
+
+  test("A6.2 a healthy collected agent remains healthy", () => {
+    expect(outcomeFor(agent(), false)).toBe("healthy");
+  });
+});
 
 describe("role taxonomy v2", () => {
   test("a manifest-declared orchestrator needs no observed children", () => {

@@ -98,8 +98,28 @@ export function titleWithAlerts(base, count) {
    They were both labelled "Alerts" on adjacent surfaces with no shared meaning,
    so "Alerts off" sat inches from "Alerts 0" and an operator could reasonably
    read the first as an explanation of the second. */
-export function notifyToggleView(notify, supported = notificationsSupported(), count = 0, tone = "clear") {
+/* `waiting` / `watching` are the DISCLOSURE's two populations, and they are not
+   `count`. `count` is the blocking backlog — a person is the blocker — and it
+   owns the badge's digit and its ink. The spoken name has to say more than the
+   badge can: how many sessions are asking (stripAlerting, fleet-wide) and how
+   many the watcher is merely keeping an eye on (the watching list's length).
+
+   Reusing `count` for the noticed branch is the defect this closes. Production
+   never sends a nonzero count with tone `noticed`, so that branch always
+   rendered "0 being watched, nobody waiting on you" — a sentence that denies a
+   backlog the strip is showing at the same moment. They default off `count` and
+   `tone` so an older four-argument call still reads exactly as it did. */
+export function notifyToggleView(
+  notify,
+  supported = notificationsSupported(),
+  count = 0,
+  tone = "clear",
+  waiting = tone === "blocked" ? count : 0,
+  watching = tone === "noticed" ? count : 0,
+) {
   const n = Number.isFinite(count) && count > 0 ? count : 0;
+  const asking = Number.isFinite(waiting) && waiting > 0 ? waiting : 0;
+  const watched = Number.isFinite(watching) && watching > 0 ? watching : 0;
   const suffix = n ? ` · ${n} waiting on you` : "";
   /* `tone` is the verdict, not a restatement of the count.
      `blocked` means a PERSON is the blocker; `noticed` means the watcher has
@@ -132,10 +152,11 @@ export function notifyToggleView(notify, supported = notificationsSupported(), c
        The badge's digit never stands alone here: "1" beside a red dot is not a
        reading a screen reader can pass on. */
     disclosureLabel: "Notifications, " + (
-      badgeTone === "blocked"
-        ? `${n} agent${n === 1 ? "" : "s"} waiting on you`
-        : badgeTone === "noticed"
-          ? `${n} being watched, nobody waiting on you`
+      asking > 0
+        ? `${asking} agent${asking === 1 ? "" : "s"} waiting on you`
+          + (watched > 0 ? `, ${watched} being watched` : "")
+        : watched > 0
+          ? `${watched} being watched, nobody waiting on you`
           : "nothing waiting"
     ),
   };
@@ -206,10 +227,10 @@ export async function toggleNotifications() {
    snapshot lands. */
 const BADGE_TONE_CLASS = { blocked: "is-blocked", noticed: "is-noticed", clear: "is-clear" };
 
-export function renderNotifyToggle(count = 0, tone = "clear", open = false) {
+export function renderNotifyToggle(count = 0, tone = "clear", open = false, waiting, watching) {
   const btn = $("notify-toggle");
   if (!btn) return;
-  const view = notifyToggleView(state.notify, notificationsSupported(), count, tone);
+  const view = notifyToggleView(state.notify, notificationsSupported(), count, tone, waiting, watching);
   /* The accessible name stays "Notifications" in every state. The visible
      mark is the bell; the pip is the backlog reading. Delivery state still
      lives on the switch inside the panel, not on this disclosure. */
