@@ -243,12 +243,11 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
   const named = authoritativeSources.filter(
     (source): source is CollectedAgent & { identity: AgentIdentity } => Boolean(source.identity),
   );
-  /* An authored title, where one has been written down, outranks everything the
-     board could derive — that is the contract's own precedence, applied at the
-     one point the whole fleet is in hand. Overlaid HERE rather than in the
-     collectors because the title is produced out of band: a collector runs
-     synchronously while naming waits on a model, so the board publishes the
-     derived name immediately and picks the authored one up on a later pass. */
+  /* An authored title, where one has been written down, is overlaid HERE rather
+     than in the collectors because the title is produced out of band: a
+     collector runs synchronously while naming waits on a model. The overlay
+     still goes through resolveAgentName so launch-env cannot outrank a later
+     task on a resumed pane. */
   const titled = named.map((source) => {
     const remembered = input.sessionNames?.(source.id);
     const declared = declaredById.get(source.id);
@@ -274,12 +273,13 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
     if (!remembered) return source;
     return {
       ...source,
-      identity: {
-        name: remembered.name,
-        base: remembered.name,
-        source: "authored" as const,
-        authoredBy: remembered.by,
-      },
+      identity: resolveAgentName({
+        provider: source.provider,
+        sourceSessionId: source.sourceSessionId,
+        authored: { name: remembered.name, by: remembered.by },
+        originCwd: source.originCwd,
+        taskName: source.task,
+      }),
     };
   });
   const identitiesById = new Map(

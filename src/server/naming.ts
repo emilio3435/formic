@@ -205,14 +205,22 @@ export function resolveAgentName(
 
   // Tier 3 — whoever launched the agent named it. An orchestrator that assigns
   // "Identity Name Tracer" has stated a fact about the agent; a folder has not.
+  // launch-env is the exception: it is leftover from launch or the first
+  // naming pass, and a later task on a resumed pane is the work happening now.
   const authored = usableName(evidence.authored?.name);
-  if (authored && evidence.authored) {
+  const laterTask = evidence.authored?.by === "launch-env"
+    ? usableName(evidence.taskName)
+    : undefined;
+  if (authored && evidence.authored && !laterTask) {
     return {
       name: capped(authored),
       base: capped(authored),
       source: "authored",
       authoredBy: evidence.authored.by,
     };
+  }
+  if (laterTask) {
+    return { name: capped(laterTask), base: capped(laterTask), source: "task" };
   }
 
   // Tier 4 — nobody named it, so say what it is and where it began.

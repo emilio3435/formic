@@ -235,6 +235,23 @@
       }
     },
     {
+      "name": "a later task outranks a stale launch-env name",
+      "tier": 5,
+      "claim": "authoredBy launch-env is leftover from launch or the first naming pass. A resumed pane's current task is the work happening now, so that leftover must not keep the name.",
+      "evidence": {
+        "provider": "claude",
+        "sourceSessionId": "09958d2e-5c72-4111-a5c7-95a0fdb767c0",
+        "authored": { "name": "System Cleanup and Initialization", "by": "launch-env" },
+        "originCwd": "/Users/ant/Developer/cooper-scheduler",
+        "taskName": "Ship the current cooper-scheduler review"
+      },
+      "expect": {
+        "name": "Ship the current cooper-scheduler review",
+        "base": "Ship the current cooper-scheduler review",
+        "source": "task"
+      }
+    },
+    {
       "name": "Cursor's untitled-composer placeholder is not an authored name",
       "tier": 3,
       "claim": "'new agent' is Cursor's own boilerplate for a composer nobody has titled. Accepting it would give every untitled Cursor session the same authored name.",

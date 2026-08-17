@@ -57,7 +57,8 @@ export function impactSummaryFor(
       .map((agent) => ({ agent, program })),
   );
   if (affectedIds.length === 1 && matches[0]) {
-    return `Touches 1 session: ${matches[0].agent.displayName} (${matches[0].program.name})`;
+    const name = matches[0].agent.identity?.name?.trim() || matches[0].agent.displayName;
+    return `Touches 1 session: ${name} (${matches[0].program.name})`;
   }
 
   const programCounts = new Map<string, number>();
