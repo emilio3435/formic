@@ -19,6 +19,18 @@ export interface GrokSessionInput {
   updatesJsonl?: string;
 }
 
+interface GrokCollectedSession {
+  projectName: string;
+  sessionName: string;
+  sessionRoot: string;
+  agent: CollectedAgent;
+}
+
+interface GrokMetaParents {
+  byProject: Map<string, Map<string, Set<string>>>;
+  all: Map<string, Set<string>>;
+}
+
 function record(value: unknown): JsonRecord | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as JsonRecord
@@ -36,6 +48,11 @@ function parsedRecord(json: string | undefined): JsonRecord | undefined {
 
 function text(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function sessionUuid(value: unknown): string | undefined {
+  const valueText = text(value);
+  return valueText && UUID.test(valueText) ? valueText.toLowerCase() : undefined;
 }
 
 function finite(value: unknown): number | undefined {
@@ -141,8 +158,8 @@ export function parseGrokSession(
   const summaryUpdatedAt = timestamp(summary?.last_active_at ?? summary?.updated_at);
   const fallbackUpdatedAt = new Date(meta.mtimeMs ?? meta.nowMs ?? Date.now()).toISOString();
   const model = text(summary?.current_model_id) ?? text(signals?.primaryModelId);
-  const parentSourceSessionId = text(summary?.parent_session_id)
-    ?? text(info?.parent_session_id);
+  const parentSourceSessionId = sessionUuid(summary?.parent_session_id)
+    ?? sessionUuid(info?.parent_session_id);
 
   return makeAgent({
     provider: "grok",
@@ -201,6 +218,65 @@ async function resolvedPath(path: string): Promise<string> {
   }
 }
 
+function addMetaParent(
+  parents: GrokMetaParents,
+  projectName: string,
+  childSessionId: string,
+  parentSessionId: string,
+): void {
+  const byChild = parents.byProject.get(projectName) ?? new Map<string, Set<string>>();
+  const projectCandidates = byChild.get(childSessionId) ?? new Set<string>();
+  const allCandidates = parents.all.get(childSessionId) ?? new Set<string>();
+  projectCandidates.add(parentSessionId);
+  allCandidates.add(parentSessionId);
+  byChild.set(childSessionId, projectCandidates);
+  parents.byProject.set(projectName, byChild);
+  parents.all.set(childSessionId, allCandidates);
+}
+
+async function collectMetaParents(
+  sessions: readonly GrokCollectedSession[],
+  errors: string[],
+): Promise<GrokMetaParents> {
+  const parents: GrokMetaParents = { byProject: new Map(), all: new Map() };
+
+  await Promise.all(sessions.map(async ({ projectName, sessionName, sessionRoot }) => {
+    const subagentsRoot = join(sessionRoot, "subagents");
+    let children;
+    try {
+      children = await readdir(subagentsRoot, { withFileTypes: true });
+    } catch (error) {
+      if (!missing(error)) errors.push(`grok ${subagentsRoot}: ${describe(error)}`);
+      return;
+    }
+    await Promise.all(children.filter((entry) => entry.isDirectory() && UUID.test(entry.name)).map(async (child) => {
+      const childSessionId = child.name.toLowerCase();
+      const metadata = parsedRecord((await optionalFile(join(subagentsRoot, child.name, "meta.json"), errors)).text);
+      const recordedChildId = sessionUuid(metadata?.child_session_id);
+      const parentSessionId = sessionUuid(metadata?.parent_session_id);
+      if (recordedChildId !== childSessionId || parentSessionId !== sessionName) return;
+      addMetaParent(parents, projectName, childSessionId, parentSessionId);
+    }));
+  }));
+
+  return parents;
+}
+
+function onlyParent(candidates: ReadonlySet<string> | undefined): string | undefined {
+  return candidates?.size === 1 ? candidates.values().next().value : undefined;
+}
+
+function metaParentFor(
+  parents: GrokMetaParents,
+  projectName: string,
+  childSessionId: string,
+): string | undefined {
+  const sameProject = parents.byProject.get(projectName)?.get(childSessionId);
+  return sameProject
+    ? onlyParent(sameProject)
+    : onlyParent(parents.all.get(childSessionId));
+}
+
 async function collectGrokRoot(
   root: string,
   windowMs: number,
@@ -223,7 +299,7 @@ async function collectGrokRoot(
     return { value: [], errors: [`grok ${sessionsRoot}: ${describe(error)}`] };
   }
 
-  const agents: CollectedAgent[] = [];
+  const collectedSessions: GrokCollectedSession[] = [];
   await Promise.all(projects.filter((entry) => entry.isDirectory()).map(async (project) => {
     const projectRoot = join(sessionsRoot, project.name);
     let sessions;
@@ -234,6 +310,7 @@ async function collectGrokRoot(
       return;
     }
     await Promise.all(sessions.filter((entry) => entry.isDirectory() && UUID.test(entry.name)).map(async (session) => {
+      const sessionName = session.name.toLowerCase();
       const sessionRoot = join(projectRoot, session.name);
       const [summary, signals, updates, directory] = await Promise.all([
         optionalFile(join(sessionRoot, "summary.json"), errors),
@@ -253,17 +330,32 @@ async function collectGrokRoot(
         : summary.text !== undefined
           ? join(sessionRoot, "summary.json")
           : undefined;
-      agents.push(parseGrokSession({
-        sourceSessionId: session.name.toLowerCase(),
+      const agent = parseGrokSession({
+        sourceSessionId: sessionName,
         cwd: decodedCwd(project.name),
         summaryJson: summary.text,
         signalsJson: signals.text,
         updatesJsonl: updates.text,
-      }, { sourcePath, mtimeMs, thresholds }));
+      }, { sourcePath, mtimeMs, thresholds });
+      collectedSessions.push({
+        projectName: project.name,
+        sessionName,
+        sessionRoot,
+        agent,
+      });
     }));
   }));
 
-  return { value: agents, errors };
+  const metaParents = await collectMetaParents(collectedSessions, errors);
+  for (const session of collectedSessions) {
+    session.agent.parentSourceSessionId ??= metaParentFor(
+      metaParents,
+      session.projectName,
+      session.sessionName,
+    );
+  }
+
+  return { value: collectedSessions.map(({ agent }) => agent), errors };
 }
 
 export async function collectGrokSessions(

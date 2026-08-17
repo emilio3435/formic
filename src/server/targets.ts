@@ -7,7 +7,14 @@ import type {
   ProcessState,
   SessionIdentityClaim,
 } from "../shared/types";
+import { SHARED_HOST_REASON } from "../shared/identity-copy";
 import { hookRecordFor } from "./cmux-hook-sessions";
+import {
+  grokBotGatewayCopy,
+  isGrokBotAgent,
+  isGrokBotTarget,
+  resolveGrokBotControlTarget,
+} from "./grok-bot-gateway";
 import type { CmuxSurface, CollectedAgent } from "./types";
 
 function normalizeCwd(value?: string): string {
@@ -126,6 +133,14 @@ function quarantined(matches: readonly CmuxSurface[]): CmuxTarget | undefined {
   };
 }
 
+function surfaceNamesAgent(surface: CmuxSurface, agent: CollectedAgent): boolean {
+  return (surface.identityTrace?.openFileMatches ?? []).some(
+    (match) =>
+      match.provider === agent.provider
+      && match.sessionId.toLowerCase() === agent.sourceSessionId.toLowerCase(),
+  );
+}
+
 export interface ResolvedAgentTarget {
   target: CmuxTarget;
   trace: IdentityTrace;
@@ -161,7 +176,24 @@ function resolveAgentTargetInternal(
     } : undefined,
   });
 
+  if (isGrokBotAgent(agent)) {
+    const resolved = resolveGrokBotControlTarget(agent);
+    if (steps) steps.push(...resolved.trace.steps);
+    return finish(resolved.target, resolved.trace.matchedTier);
+  }
+
   const routableSurfaces = surfaces.filter((surface) => surface.runtimeSurfaceReady !== false);
+  const sharedHostSurface = routableSurfaces.find(
+    (surface) => surface.identityTrace?.outcome === "shared-host" && surfaceNamesAgent(surface, agent),
+  );
+  if (sharedHostSurface) {
+    steps?.push({
+      tier: "session",
+      outcome: "ambiguous",
+      detail: SHARED_HOST_REASON,
+    });
+    return finish(target(sharedHostSurface, "shared-host", SHARED_HOST_REASON, agent));
+  }
   const hookRecord = hookRecordFor(agent.provider, agent.sourceSessionId);
   if (hookRecord) {
     const matches = routableSurfaces.filter((surface) => surface.surfaceId === hookRecord.surfaceId);
@@ -301,7 +333,28 @@ function resolveAgentTargetInternal(
     });
   }
   const cwdMatches = routableSurfaces.filter((surface) => sameCwd(surface.cwd, agent.cwd));
-  const cwdQuarantine = quarantined(cwdMatches);
+  const implicatedCwdMatches = cwdMatches.filter((surface) => {
+    if (!surface.identityConflict) return false;
+    const namedSessions = [
+      ...(surface.identityTrace?.openFileMatches ?? []).map(({ sessionId }) => sessionId),
+      ...surface.sourceSessionIds,
+      ...(surface.sourceSessionClaims ?? []).map(({ sessionId }) => sessionId),
+    ];
+    /* A conflict that names nobody (probe timeout, truncated lsof) is
+       unexplained evidence. Unique-cwd must not claim that pane. */
+    if (namedSessions.length === 0) return true;
+    const recordedTargetNamesSurface = Boolean(
+      recorded && (recorded.surfaceId || recorded.workspaceId || recorded.paneId),
+    )
+      && (!recorded?.surfaceId || recorded.surfaceId === surface.surfaceId)
+      && (!recorded?.workspaceId || recorded.workspaceId === surface.workspaceId)
+      && (!recorded?.paneId || recorded.paneId === surface.paneId);
+    return surfaceClaimsSourceSession(surface, agent, providersBySession)
+      || surfaceNamesAgent(surface, agent)
+      || hookRecord?.surfaceId === surface.surfaceId
+      || recordedTargetNamesSurface;
+  });
+  const cwdQuarantine = quarantined(implicatedCwdMatches);
   if (cwdQuarantine) {
     steps?.push({ tier: "cwd", outcome: "quarantined", detail: cwdQuarantine.reason ?? "A cwd-matched surface has an identity conflict." });
     return finish(cwdQuarantine);
@@ -384,16 +437,25 @@ function resolveAgentTargetInternal(
    types nothing and going to look is how an operator resolves the ambiguity.
    Named rather than written inline so the two questions - may we ADDRESS this
    pane, may we ACT on it - stop sharing one unlabelled array literal. */
-export function canAddressTarget<T extends Pick<CmuxTarget, "surfaceId" | "resolution">>(
+export function canAddressTarget<T extends Pick<CmuxTarget, "surfaceId" | "resolution" | "kind" | "instanceId">>(
   target: T,
-): target is T & { surfaceId: string } {
+): boolean {
+  if (isGrokBotTarget(target)) return Boolean(target.instanceId);
   return Boolean(target.surfaceId)
     && (target.resolution === "exact" || target.resolution === "unique-cwd");
 }
 
-export function canWriteToTarget<T extends Pick<CmuxTarget, "surfaceId" | "resolution" | "attestation">>(
+export function canWriteToTarget<T extends Pick<
+  CmuxTarget,
+  "surfaceId" | "resolution" | "attestation" | "kind" | "agentId" | "instanceId" | "gatewayReady" | "gatewayMiss"
+>>(
   target: T,
-): target is T & { surfaceId: string } {
+): boolean {
+  if (isGrokBotTarget(target)) {
+    return Boolean(target.agentId)
+      && Boolean(target.instanceId)
+      && target.gatewayReady === true;
+  }
   return Boolean(target.surfaceId)
     && target.resolution === "exact"
     // EVER attested is not CURRENTLY attested. A persisted binding was true when
@@ -501,7 +563,10 @@ export function routingSurfaceObservations(
 }
 
 export function transmitRefusal(agent: {
-  target: Pick<CmuxTarget, "surfaceId" | "resolution" | "attestation" | "reason">;
+  target: Pick<
+    CmuxTarget,
+    "surfaceId" | "resolution" | "attestation" | "reason" | "kind" | "agentId" | "instanceId" | "gatewayReady" | "gatewayMiss"
+  >;
   processState?: ProcessState;
   archived?: boolean;
   identityTrace?: IdentityTrace;
@@ -533,6 +598,14 @@ export function transmitRefusal(agent: {
       "Read it in History, or start a new session if more work is needed.",
       ["The current snapshot marks this agent as archived."],
     );
+  }
+  if (isGrokBotTarget(agent.target)) {
+    if (!canWriteToTarget(agent.target)) {
+      const copy = grokBotGatewayCopy(agent.target.gatewayMiss ?? "unreachable-box");
+      return refuse("UNSAFE_TARGET", copy.cause, copy.remedy, routingEvidence);
+    }
+    /* Grok Bot has no process identity. "unknown" must not disable Send. */
+    return null;
   }
   if (!canAddressTarget(agent.target)) {
     const cursorRequiresExact = agent.identityTrace?.steps.some(

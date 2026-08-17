@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { SHARED_HOST_REASON, TWO_OWNER_REASON } from "../src/shared/identity-copy";
 import { PROVIDERS } from "../src/shared/types";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -273,11 +274,13 @@ describe("snapshot control safety and SSE deduplication", () => {
     ).toBe(true);
   });
 
-  test("an identity-conflicted surface stays quarantined instead of re-enabling unique-cwd controls", () => {
+  test("an identity-conflicted surface that names the session stays quarantined", () => {
+    const source = collected();
     const snapshot = buildSnapshot({
-      agents: [collected()],
+      agents: [source],
       surfaces: [{
         ...uniqueSurface,
+        sourceSessionIds: [source.sourceSessionId],
         identityConflict: "two allowlisted agent sessions are open on this tty",
       }],
       archiveStore,
@@ -1236,7 +1239,7 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(snapshot.totals.needsYou).toBe(1);
   });
 
-  test("cmux identity failures become one human-readable system issue", () => {
+  test("C-issue-two-owner: live conflicts describe two terminal owners, not a shared transcript", () => {
     const source = collected();
     const conflict = "conflicting open agent session files on ttys005";
     const snapshot = buildSnapshot({
@@ -1257,12 +1260,13 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(snapshot.issues).toEqual([
       expect.objectContaining({
         id: "system:cmux-identity-conflicts",
-        title: "Two live sessions share one cmux pane",
+        title: "Two sessions share one terminal",
         affectedAgentIds: [source.id],
         technicalDetails: expect.arrayContaining([expect.stringContaining("ttys003"), expect.stringContaining("ttys005")]),
       }),
     ]);
-    expect(snapshot.issues?.[0]?.summary).toContain("until one is closed");
+    expect(snapshot.issues?.[0]?.summary).toBe(TWO_OWNER_REASON);
+    expect(snapshot.issues?.[0]?.summary).not.toContain("writing the same transcript");
     /* A cmux identity conflict is a system finding, not an agent waiting on a
        human — different populations, different words. Folding them into one
        number is what made "needs you" unreadable. */
@@ -1273,6 +1277,52 @@ describe("snapshot control safety and SSE deduplication", () => {
        reported as one, above; it used to also dock a collector, which is the
        same finding wearing a second label. */
     expect(snapshot.totals.sourceHealth).toEqual({ healthy: PROVIDERS.length, degraded: 0, absent: 0, total: PROVIDERS.length });
+  });
+
+  test("C-issue-shared-host: Grok shared-host evidence produces a warning, not an identity-conflict error", () => {
+    const first = collected({
+      id: "grok:first-root",
+      provider: "grok",
+      sourceSessionId: "first-root",
+    });
+    const second = collected({
+      id: "grok:second-root",
+      provider: "grok",
+      sourceSessionId: "second-root",
+    });
+    const snapshot = buildSnapshot({
+      agents: [first, second],
+      surfaces: [{
+        ...uniqueSurface,
+        sourceSessionIds: [],
+        identityTrace: {
+          surfaceId: uniqueSurface.surfaceId,
+          processes: [{ pid: 303, command: "agent", recognizedAgentProcess: false }],
+          openFileMatches: [first, second].map((source) => ({
+            pid: 303,
+            path: `/Users/me/.grok/sessions/project/${source.sourceSessionId}/events.jsonl`,
+            provider: "grok" as const,
+            sessionId: source.sourceSessionId,
+          })),
+          commandHints: [],
+          outcome: "shared-host",
+          sourceSessionIds: [],
+        },
+      }],
+      cmuxErrors: [],
+      cmuxReachable: true,
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+    });
+
+    expect(snapshot.issues).toContainEqual(expect.objectContaining({
+      id: "system:grok-shared-host",
+      severity: "warning",
+      title: "Several Grok chats share one terminal",
+      summary: SHARED_HOST_REASON,
+      affectedAgentIds: [first.id, second.id],
+    }));
+    expect(snapshot.issues?.some(({ id }) => id === "system:cmux-identity-conflicts")).toBe(false);
   });
 
   /* An identity conflict costs one thing: controls stay quarantined for the

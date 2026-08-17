@@ -173,7 +173,53 @@ describe("TTY and open-session identity evidence", () => {
     expect(lsof, "lsof without -P looks every port up in /etc/services").toContain("-P");
   });
 
-  test("lsof targets only recognized agent processes while command hints still inspect the whole tty", () => {
+  test("B-lsof-includes-tty-pids: lsof targets ready-surface and recognized-agent pids, but not unrecognized off-surface pids", async () => {
+    const runner = new SequenceRunner([
+      {
+        exitCode: 0,
+        stdout: JSON.stringify([
+          {
+            kind: "process",
+            cmux_surface_id: "SURFACE-CMUX",
+            pid: 202,
+          },
+          {
+            kind: "process",
+            cmux_surface_id: "SURFACE-STALE",
+            pid: 303,
+          },
+        ]),
+        stderr: "",
+        timedOut: false,
+      },
+      {
+        exitCode: 0,
+        stdout: [
+          "101 ttys033 agent",
+          "202 ?? agent --use-system-ca /tmp/index.js",
+          "303 ?? agent",
+          "404 ?? codex resume 019f86c4-1558-7000-aeb8-26e2cfd0e8ec",
+        ].join("\n"),
+        stderr: "",
+        timedOut: false,
+      },
+      { exitCode: 0, stdout: "", stderr: "", timedOut: false },
+    ]);
+
+    await enrichCmuxIdentity(
+      [
+        surface,
+        { ...surface, surfaceId: "SURFACE-CMUX", tty: undefined },
+        { ...surface, surfaceId: "SURFACE-STALE", tty: undefined, runtimeSurfaceReady: false },
+      ],
+      [agent],
+      runner,
+    );
+
+    const lsof = runner.commands.find((command) => command[0] === "/usr/sbin/lsof");
+    expect(lsof).toBeDefined();
+    expect(lsof?.slice(0, 5)).toEqual(["/usr/sbin/lsof", "-n", "-P", "-a", "-p"]);
+    expect(lsof?.[5]?.split(",").sort()).toEqual(["101", "202", "404"]);
     expect(isRecognizedAgentProcess("-zsh")).toBeFalse();
     expect(isRecognizedAgentProcess("/usr/bin/login -pflq user /bin/zsh")).toBeFalse();
     expect(isRecognizedAgentProcess("/Users/me/.local/bin/omp -p --model anthropic/claude-fable-5")).toBeTrue();
@@ -323,7 +369,7 @@ describe("TTY and open-session identity evidence", () => {
     const enriched = await enrichCmuxIdentity([surface], [agent], runner);
 
     expect(enriched.errors).toEqual([]);
-    expect(runner.commands[1]).toEqual(["/usr/sbin/lsof", "-n", "-P", "-a", "-p", "202", "-Fn"]);
+    expect(runner.commands[1]).toEqual(["/usr/sbin/lsof", "-n", "-P", "-a", "-p", "202,101", "-Fn"]);
     expect(enriched.value[0]?.sourceSessionIds).toEqual([
       "019f86c4-1558-7000-aeb8-26e2cfd0e8ec",
     ]);
@@ -580,6 +626,192 @@ describe("TTY and open-session identity evidence", () => {
       resolution: "ambiguous",
       reason: expect.stringContaining("quarantined"),
     });
+  });
+
+  test("H-parent-children: one Grok parent and three children collapse to the parent", async () => {
+    const grokSession = (
+      sourceSessionId: string,
+      parentSourceSessionId?: string,
+    ): CollectedAgent => ({
+      ...agent,
+      provider: "grok",
+      id: `grok:${sourceSessionId}`,
+      sourceSessionId,
+      parentSourceSessionId,
+      processIds: undefined,
+      processAlive: undefined,
+      transcriptOpen: undefined,
+    });
+    const parent = grokSession("019f86c4-1558-7000-aeb8-26e2cfd0e8ec");
+    const children = [
+      grokSession("11111111-2222-3333-4444-555555555555", parent.sourceSessionId),
+      grokSession("22222222-3333-4444-5555-666666666666", parent.sourceSessionId),
+      grokSession("33333333-4444-5555-6666-777777777777", parent.sourceSessionId),
+    ];
+    const runner = new SequenceRunner([
+      {
+        exitCode: 0,
+        stdout: "202 ttys033 /Users/me/.local/bin/agent",
+        stderr: "",
+        timedOut: false,
+      },
+      {
+        exitCode: 0,
+        stdout: [parent, ...children]
+          .flatMap((session, index) => [
+            ...(index === 0 ? ["p202"] : []),
+            `n/Users/me/.grok/sessions/project/${session.sourceSessionId}/events.jsonl`,
+          ])
+          .join("\n"),
+        stderr: "",
+        timedOut: false,
+      },
+    ]);
+
+    const enriched = await enrichCmuxIdentity([surface], [parent, ...children], runner);
+
+    expect(enriched.errors).toEqual([]);
+    expect(enriched.value[0]).toMatchObject({
+      sourceSessionClaims: [{ provider: "grok", sessionId: parent.sourceSessionId }],
+      sourceSessionIds: [parent.sourceSessionId],
+      identityConflict: undefined,
+      identityTrace: {
+        outcome: "open-file-match",
+        sourceSessionIds: [parent.sourceSessionId],
+      },
+    });
+  });
+
+  test("H-two-grok-mains: unrelated Grok roots on one pid are a shared host", async () => {
+    const first: CollectedAgent = {
+      ...agent,
+      provider: "grok",
+      id: "grok:019f86c4-1558-7000-aeb8-26e2cfd0e8ec",
+      sourceSessionId: "019f86c4-1558-7000-aeb8-26e2cfd0e8ec",
+    };
+    const second: CollectedAgent = {
+      ...first,
+      id: "grok:11111111-2222-3333-4444-555555555555",
+      sourceSessionId: "11111111-2222-3333-4444-555555555555",
+    };
+    const runner = new SequenceRunner([
+      {
+        exitCode: 0,
+        stdout: "202 ttys033 /Users/me/.local/bin/agent",
+        stderr: "",
+        timedOut: false,
+      },
+      {
+        exitCode: 0,
+        stdout: [
+          "p202",
+          `n/Users/me/.grok/sessions/project/${first.sourceSessionId}/events.jsonl`,
+          `n/Users/me/.grok/sessions/project/${second.sourceSessionId}/events.jsonl`,
+        ].join("\n"),
+        stderr: "",
+        timedOut: false,
+      },
+    ]);
+
+    const enriched = await enrichCmuxIdentity([surface], [first, second], runner);
+
+    expect(enriched.errors).toEqual([]);
+    expect(enriched.value[0]).toMatchObject({
+      sourceSessionClaims: [],
+      sourceSessionIds: [],
+      identityConflict: undefined,
+      identityTrace: {
+        outcome: "shared-host",
+        sourceSessionIds: [],
+        openFileMatches: [
+          { pid: 202, provider: "grok", sessionId: first.sourceSessionId },
+          { pid: 202, provider: "grok", sessionId: second.sourceSessionId },
+        ],
+      },
+    });
+  });
+
+  test("H-two-grok-processes: Grok roots on different pids remain a conflict", async () => {
+    const first: CollectedAgent = {
+      ...agent,
+      provider: "grok",
+      id: "grok:019f86c4-1558-7000-aeb8-26e2cfd0e8ec",
+      sourceSessionId: "019f86c4-1558-7000-aeb8-26e2cfd0e8ec",
+    };
+    const second: CollectedAgent = {
+      ...first,
+      id: "grok:11111111-2222-3333-4444-555555555555",
+      sourceSessionId: "11111111-2222-3333-4444-555555555555",
+    };
+    const runner = new SequenceRunner([
+      {
+        exitCode: 0,
+        stdout: [
+          "202 ttys033 /Users/me/.local/bin/agent",
+          "303 ttys033 /Users/me/.local/bin/agent",
+        ].join("\n"),
+        stderr: "",
+        timedOut: false,
+      },
+      {
+        exitCode: 0,
+        stdout: [
+          "p202",
+          `n/Users/me/.grok/sessions/project/${first.sourceSessionId}/events.jsonl`,
+          "p303",
+          `n/Users/me/.grok/sessions/project/${second.sourceSessionId}/events.jsonl`,
+        ].join("\n"),
+        stderr: "",
+        timedOut: false,
+      },
+    ]);
+
+    const enriched = await enrichCmuxIdentity([surface], [first, second], runner);
+
+    expect(enriched.value[0]?.identityTrace?.outcome).toBe("open-file-conflict");
+    expect(enriched.value[0]?.identityConflict).toContain("conflicting open agent session files");
+    expect(enriched.errors).toHaveLength(1);
+  });
+
+  test("H-two-claude-mains: unrelated Claude roots on one tty remain a conflict", async () => {
+    const first: CollectedAgent = {
+      ...agent,
+      provider: "claude",
+      id: "claude:019f86c4-1558-7000-aeb8-26e2cfd0e8ec",
+      sourceSessionId: "019f86c4-1558-7000-aeb8-26e2cfd0e8ec",
+    };
+    const second: CollectedAgent = {
+      ...first,
+      id: "claude:11111111-2222-3333-4444-555555555555",
+      sourceSessionId: "11111111-2222-3333-4444-555555555555",
+    };
+    const runner = new SequenceRunner([
+      {
+        exitCode: 0,
+        stdout: "202 ttys033 /Users/me/.local/bin/claude",
+        stderr: "",
+        timedOut: false,
+      },
+      {
+        exitCode: 0,
+        stdout: [
+          "p202",
+          `n/Users/me/.claude/projects/project/${first.sourceSessionId}.jsonl`,
+          `n/Users/me/.claude/projects/project/${second.sourceSessionId}.jsonl`,
+        ].join("\n"),
+        stderr: "",
+        timedOut: false,
+      },
+    ]);
+
+    const enriched = await enrichCmuxIdentity([surface], [first, second], runner);
+
+    expect(enriched.value[0]?.sourceSessionIds).toEqual([]);
+    expect(enriched.value[0]?.identityConflict).toContain("conflicting open agent session files");
+    expect(enriched.value[0]?.identityTrace?.outcome).toBe("open-file-conflict");
+    expect(enriched.errors).toEqual([
+      "cmux SURFACE-HEALTH has conflicting open agent session files on ttys033",
+    ]);
   });
 
   test("a parent rollout and its open guardian child resolve to the root identity", async () => {

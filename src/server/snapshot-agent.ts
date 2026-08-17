@@ -30,7 +30,8 @@ import {
   type LifecycleThresholds,
   type LifecycleVerdict,
 } from "./lifecycle";
-import { transmitRefusal } from "./targets";
+import { GROK_BOT_INTERRUPT_REASON } from "./grok-bot-gateway";
+import { canAddressTarget, canWriteToTarget, transmitRefusal } from "./targets";
 import type { CollectedAgent } from "./types";
 
 /* Why Send and Interrupt are gated harder than Focus: `unique-cwd` matches a
@@ -54,7 +55,7 @@ export function controlsFor(
      shape this file exists to prevent. */
   canUnarchive = false,
 ): ControlCapability[] {
-  const routed = Boolean(target.surfaceId) && (target.resolution === "exact" || target.resolution === "unique-cwd");
+  const routed = canAddressTarget(target);
   const targetReason = target.reason ?? "No safe cmux target is available.";
   /* The SAME predicate executeControl consults, so the button and the endpoint
      cannot disagree. They did: 26a4585 gated the endpoint on liveness and left
@@ -63,11 +64,17 @@ export function controlsFor(
      refuse is a promise the board should never have made. Agreement by
      construction, not by remembering to edit both. */
   const refusal = transmitRefusal({ target, processState: processStateFor(agent), archived, identityTrace });
+  const grokBot = target.kind === "grok-bot"
+    || (typeof agent.id === "string" && agent.id.startsWith("grok:bot:"));
   const focusEnabled = routed && !archived;
   return [
     { action: "focus", enabled: focusEnabled, reason: focusEnabled ? undefined : refusal?.cause ?? targetReason },
     { action: "instruct", enabled: !refusal, reason: refusal?.cause },
-    { action: "interrupt", enabled: !refusal, reason: refusal?.cause },
+    {
+      action: "interrupt",
+      enabled: !refusal && !grokBot,
+      reason: grokBot ? GROK_BOT_INTERRUPT_REASON : refusal?.cause,
+    },
     { action: "archive", enabled: !archived, reason: archived ? "Agent is already archived." : undefined },
     /* The other direction, and it took until now to exist. The board has told
        operators "Un-archive it from History if you filed it early" since the
@@ -192,6 +199,10 @@ export function operatorControlState(
   archived: boolean,
 ): OperatorControlState {
   if (archived) return "observed-only";
+  if (target.kind === "grok-bot") {
+    return canWriteToTarget(target) ? "linked" : "observed-only";
+  }
+  if (target.resolution === "shared-host") return "observed-only";
   if (target.surfaceId && (target.resolution === "exact" || target.resolution === "unique-cwd")) {
     return "linked";
   }

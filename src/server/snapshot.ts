@@ -3,6 +3,7 @@ import type {
   AgentIdentity,
   AgentSnapshot,
   CmuxNotificationSummary,
+  CmuxTarget,
   CollectionScope,
   HubPulse,
   LifecycleState,
@@ -24,6 +25,7 @@ import {
   transmitRefusal,
   type TransmitRefusal,
 } from "./targets";
+import { isGrokBotAgent, lastKnownGrokBotTarget } from "./grok-bot-gateway";
 import { lifecycleIssues, withIssueDecoration } from "./snapshot-issues";
 import { emptyAttentionCoverage, recordAttention } from "./attention-signal";
 import {
@@ -83,6 +85,10 @@ import {
   type FormicHubSnapshot,
   type SpendSource,
 } from "./types";
+
+function lastKnownControlTarget(source: CollectedAgent, reason: string): CmuxTarget {
+  return isGrokBotAgent(source) ? lastKnownGrokBotTarget(source, reason) : { resolution: "missing", reason };
+}
 
 function pathIsWithin(path: string, root: string): boolean {
   const normalizedPath = path.replaceAll("\\", "/").replace(/\/+$/, "");
@@ -209,11 +215,11 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
   const targetsById = new Map(sources.map((source) => [
     source.id,
     lastKnownIds.has(source.id)
-      ? {
-          resolution: "missing" as const,
-          reason: input.lastKnownSourceReasons?.[source.provider]
+      ? lastKnownControlTarget(
+          source,
+          input.lastKnownSourceReasons?.[source.provider]
             ?? "This provider did not finish the current refresh; terminal controls are unavailable.",
-        }
+        )
       : resolveAgentTarget(source, input.surfaces, authoritativeSources),
   ]));
   const envByWorkspace = new Map(
@@ -325,9 +331,11 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
       identityTrace ??= lastKnown
         ? {
             steps: [{
-              tier: "session",
+              tier: isGrokBotAgent(source) ? "gateway" : "session",
               outcome: "skipped",
-              detail: "Provider evidence is last-known, so current routing was not evaluated.",
+              detail: isGrokBotAgent(source)
+                ? "Provider evidence is last-known, so the Grok Bot gateway was not re-checked."
+                : "Provider evidence is last-known, so current routing was not evaluated.",
             }],
             resolution: "missing",
             reason: target.reason,

@@ -45,3 +45,48 @@ describe("Formic plan verification contracts", () => {
     expect(new Set(cacheTokens).size).toBe(1);
   });
 });
+
+/* Swarm B / rows-0816 (#159). Five phase-offset copies of one artwork: same-URL
+   <img>s share an animation clock, so a board of working rows would otherwise
+   pulse in lockstep. The keyframes stay inside the SVG (D2) — styles.css gains
+   none — which is only true if every file actually carries them. */
+describe("forager relay assets (RL-5)", () => {
+  const PHASES = [0, 1, 2, 3, 4];
+
+  test("all five phase files exist, animate at 2s, and carry the reduced-motion stop", () => {
+    for (const phase of PHASES) {
+      const svg = read(`src/web/icons/forager-relay-${phase}.svg`);
+
+      expect(svg).toMatch(/@keyframes relay\b/);
+      expect(svg).toMatch(/@keyframes receipt\b/);
+      expect(svg).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)/);
+      expect(svg).toMatch(/role=["']img["']/);
+      // D5: both animations run on the shimmer's own 2s beat, not the 1.85s
+      // concept period that walked against it.
+      expect(svg).toMatch(/animation:\s*relay 2s cubic-bezier\(\.42,0,\.2,1\) infinite/);
+      expect(svg).toMatch(/animation:\s*receipt 2s steps\(1,end\) infinite/);
+      expect(svg).not.toContain("1.85s");
+      // D3 concept colours survive the copy.
+      expect(svg).toContain("#5b4fd1");
+      expect(svg).toContain("#c1632b");
+      expect(svg).toContain("#1f1f1f");
+    }
+  });
+
+  test("each file offsets both animations by its own fifth of the cycle", () => {
+    for (const phase of PHASES) {
+      const svg = read(`src/web/icons/forager-relay-${phase}.svg`);
+      const delays = [...svg.matchAll(/animation-delay:\s*(-?[\d.]+s)/g)].map((m) => m[1]);
+      // Phase 0 ships an explicit `-0s` rather than omitting the declaration, so
+      // all five files are structurally identical and the diff is two lines.
+      const expected = phase === 0 ? "-0s" : `-${(phase * 0.4).toFixed(1)}s`;
+      expect(delays).toEqual([expected, expected]);
+    }
+  });
+
+  test("the five files are the same artwork — only the delay differs", () => {
+    const stripped = PHASES.map((phase) =>
+      read(`src/web/icons/forager-relay-${phase}.svg`).replace(/\s*animation-delay:[^;]*;/g, ""));
+    for (const svg of stripped) expect(svg).toBe(stripped[0]);
+  });
+});

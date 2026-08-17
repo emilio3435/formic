@@ -1,7 +1,7 @@
-/* The Settings dialog.
+/* The Settings desk.
 
-   One modal. After the title: Collectors, Time, This browser, Advanced, then
-   Save. Collectors and colours apply immediately; Save posts Time + Advanced.
+   One modal. Span first, then homes / plates / horizon, then clay Save time.
+   Collectors and colours apply immediately; Save posts the six fleet scalars.
    app.js opens, closes, and re-exports the test seam. Functions that still
    live in app.js arrive through bindSettingsPanel so this file does not
    import the entry point. */
@@ -63,21 +63,45 @@ export function settingsPreviewText(counts) {
     + ` · ${counts.unverified} Unverified · ${counts.finished + counts.retained} History.`;
 }
 
-function settingsField(key, label, help, value, min, max, fkey = null) {
-  return el("label", { class: "settings-field" },
-    el("span", { class: "settings-field-label", text: label }),
-    el("input", {
-      type: "number", class: "settings-input", id: "setting-" + key,
-      dataset: fkey ? { setting: key, fkey } : { setting: key },
-      value: String(value), min: String(min), max: String(max),
-      oninput: () => renderSettingsPreview(),
-    }),
-    el("span", { class: "settings-help", text: help }));
+function meterGlyph(kind) {
+  if (kind === "keep") {
+    return el("img", { src: "/icons/history.svg", alt: "", width: "16", height: "16" });
+  }
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("aria-hidden", "true");
+  const draw = (tag, attrs) => {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, String(v));
+    svg.append(node);
+  };
+  if (kind === "scan") {
+    draw("circle", { cx: "12", cy: "12", r: "8", stroke: "currentColor", "stroke-width": "1.7" });
+    draw("path", { d: "M12 8v4.2l2.6 1.6", stroke: "currentColor", "stroke-width": "1.7", "stroke-linecap": "round" });
+  } else if (kind === "wait") {
+    draw("path", {
+      d: "M4 12h16M16 7l5 5-5 5",
+      stroke: "currentColor",
+      "stroke-width": "1.7",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+    });
+  } else {
+    draw("path", {
+      d: "M5 6h14M7 10v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-8",
+      stroke: "currentColor",
+      "stroke-width": "1.7",
+      "stroke-linecap": "round",
+      "stroke-linejoin": "round",
+    });
+    draw("path", { d: "M10 14h4", stroke: "currentColor", "stroke-width": "1.7", "stroke-linecap": "round" });
+  }
+  return svg;
 }
 
-function providerWaitField(value) {
+function providerWaitSelect(value) {
   const input = el("select", {
-    class: "settings-input",
     id: "setting-providerWaitMs",
     dataset: { setting: "providerWaitMs", fkey: "provider-wait" },
   }, ...[
@@ -88,10 +112,26 @@ function providerWaitField(value) {
     [15000, "15 seconds"],
   ].map(([waitMs, label]) => el("option", { value: String(waitMs), text: label })));
   input.value = String(value);
-  return el("label", { class: "settings-field" },
-    el("span", { class: "settings-field-label", text: "Provider wait" }),
-    input,
-    el("span", { class: "settings-help", text: "How long each refresh waits for provider scans before showing last-known data as degraded." }));
+  return input;
+}
+
+function horizonMeter(kind, key, label, control) {
+  return el("div", { class: "meter" },
+    el("div", { class: "ico" },
+      meterGlyph(kind),
+      el("label", { for: "setting-" + key, text: label })),
+    control);
+}
+
+function horizonNumber(key, value, min, max, fkey = null) {
+  return el("input", {
+    type: "number",
+    id: "setting-" + key,
+    dataset: fkey ? { setting: key, fkey } : { setting: key },
+    value: String(value),
+    min: String(min),
+    max: String(max),
+  });
 }
 
 function settingsValue(key, fallback) {
@@ -100,14 +140,172 @@ function settingsValue(key, fallback) {
   return Number.isFinite(raw) ? raw : fallback;
 }
 
-function renderSettingsPreview() {
-  const node = $("settings-preview");
-  if (!node || !state.snap) return;
+function railStyleAttr(fresh, quiet) {
+  const histVisual = 22;
+  const total = fresh + quiet + histVisual;
+  const w = total > 0 ? (fresh / total) * 100 : 0;
+  const q = total > 0 ? (quiet / total) * 100 : 0;
+  return `--w:${w}%;--q:${q}%`;
+}
+
+function renderSettingsCounts() {
+  const working = $("settings-count-work");
+  const waiting = $("settings-count-wait");
+  const history = $("settings-count-hist");
+  if (!working || !waiting || !history) return;
   const fresh = settingsValue("activityFreshMinutes", 3);
   const quiet = settingsValue("activityQuietMinutes", 45);
-  node.textContent = quiet <= fresh
-    ? "Quiet must be longer than the working window."
-    : settingsPreviewText(settingsPreview(state.snap, fresh, quiet));
+  const counts = state.snap
+    ? settingsPreview(state.snap, fresh, quiet)
+    : { working: 0, waiting: 0, finished: 0, retained: 0 };
+  working.textContent = String(counts.working);
+  waiting.textContent = String(counts.waiting);
+  history.textContent = String((counts.finished || 0) + (counts.retained || 0));
+}
+
+function syncSpanChrome() {
+  const fresh = settingsValue("activityFreshMinutes", 3);
+  const quiet = settingsValue("activityQuietMinutes", 45);
+  const rail = $("settings-span-rail");
+  if (rail) rail.setAttribute("style", railStyleAttr(fresh, quiet));
+  const postures = $("settings-postures");
+  for (const node of (postures && postures.children) || []) {
+    const on = Number(node.dataset && node.dataset.fresh) === fresh
+      && Number(node.dataset && node.dataset.quiet) === quiet;
+    if (node.classList) node.classList.toggle("is-on", on);
+  }
+  renderSettingsCounts();
+}
+
+function settingsDeskDirty() {
+  const saved = state.settings || {};
+  for (const key of [
+    "activityFreshMinutes",
+    "activityQuietMinutes",
+    "scanWindowHours",
+    "providerWaitMs",
+    "historyRetentionDays",
+    "historyRecordLimit",
+  ]) {
+    const node = $("setting-" + key);
+    if (!node) continue;
+    const raw = Number(node.value);
+    const expected = Number(saved[key]);
+    if (!Number.isFinite(raw) || !Number.isFinite(expected)) continue;
+    if (raw !== expected) return true;
+  }
+  return false;
+}
+
+function requestCloseSettingsPanel() {
+  if (!state.settingsPanelOpen) return;
+  if (settingsDeskDirty()) {
+    state.settingsSaveError = "The span has not been written.";
+    renderSettingsVerdict();
+    return;
+  }
+  closeSettingsPanel();
+}
+
+function spanWell(key, label, value, min, max) {
+  return el("div", { class: "well" },
+    el("label", { for: "setting-" + key, text: label }),
+    el("input", {
+      type: "number",
+      class: "settings-input",
+      id: "setting-" + key,
+      dataset: { setting: key },
+      value: String(value),
+      min: String(min),
+      max: String(max),
+      oninput: () => syncSpanChrome(),
+    }));
+}
+
+function postureButton(preset, fresh, quiet) {
+  const total = preset.fresh + preset.quiet;
+  const workShare = total > 0 ? (preset.fresh / total) * 100 : 0;
+  return el("button", {
+    type: "button",
+    class: "posture" + (preset.fresh === fresh && preset.quiet === quiet ? " is-on" : ""),
+    dataset: {
+      fkey: "preset-" + preset.id,
+      fresh: String(preset.fresh),
+      quiet: String(preset.quiet),
+    },
+    onclick: () => {
+      const freshNode = $("setting-activityFreshMinutes");
+      const quietNode = $("setting-activityQuietMinutes");
+      if (freshNode) freshNode.value = String(preset.fresh);
+      if (quietNode) quietNode.value = String(preset.quiet);
+      syncSpanChrome();
+    },
+  },
+    el("span", {
+      class: "mini",
+      style: "grid-template-columns:" + workShare + "% " + (100 - workShare) + "%",
+    }, el("i"), el("i")),
+    el("b", { text: preset.label }),
+    el("em", { text: `${preset.fresh} / ${preset.quiet}` }));
+}
+
+function modeGlyph(value) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("aria-hidden", "true");
+  const path = (d, extra) => {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    node.setAttribute("d", d);
+    node.setAttribute("stroke", "currentColor");
+    node.setAttribute("stroke-width", "1.7");
+    for (const [k, v] of Object.entries(extra || {})) node.setAttribute(k, v);
+    svg.append(node);
+  };
+  if (value === "pane") {
+    path("M6 4h8v16H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z");
+    path("M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4");
+    path("M8 8h4M8 12h3", { "stroke-linecap": "round" });
+  } else {
+    path("M5 7h14M5 12h14M5 17h10", { "stroke-linecap": "round" });
+    const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    dot.setAttribute("cx", "18.5");
+    dot.setAttribute("cy", "17");
+    dot.setAttribute("r", "2.2");
+    dot.setAttribute("fill", "currentColor");
+    svg.append(dot);
+  }
+  return svg;
+}
+
+function modePlate(value, label, help) {
+  const on = (state.needsYouDisplay || "pane") === value;
+  return el("button", {
+    type: "button",
+    class: "mode" + (on ? " is-on" : ""),
+    dataset: { fkey: "needs-you-display-" + value },
+    onclick: () => setNeedsYouDisplay(value),
+  },
+    modeGlyph(value),
+    el("b", { text: label }),
+    el("span", { text: help }));
+}
+
+function paintNeedsYouPlates() {
+  const host = $("settings-needs-you");
+  if (!host) return;
+  const sig = state.needsYouDisplay || "pane";
+  /* An empty host after a form rebuild must still fill, even when the pref
+     has not moved — otherwise Save-pending would leave the plates blank. */
+  if (paintUnchanged("needs-you", sig) && host.childElementCount) return;
+  host.textContent = "";
+  host.append(
+    el("h3", { text: "Needs-you" }),
+    el("div", { class: "modes" },
+      modePlate("pane", "Pinned", "Strip at the top"),
+      modePlate("inline", "Inline", "Marked in place"),
+    ),
+  );
 }
 
 /* Closing clears both verdicts. Reopening to a stale "Saved" from ten minutes
@@ -184,7 +382,7 @@ function renderSettingsPanel() {
   /* Clicking the dimmed area closes. Guarded on the target being the backdrop
      itself, or a click that merely started inside the dialog and drifted out
      would dismiss the form mid-edit. */
-  panel.onclick = (event) => { if (event.target === panel) closeSettingsPanel(); };
+  panel.onclick = (event) => { if (event.target === panel) requestCloseSettingsPanel(); };
 
   /* Rebuild only when something about the SETTINGS changed — deliberately not
      on every snapshot.
@@ -199,21 +397,13 @@ function renderSettingsPanel() {
     state.settingsPanelOpen ? "1" : "0",
     JSON.stringify(state.settings ?? null),
     state.settingsPending ? "1" : "0",
-    /* The local display pref rebuilds the panel too, or the radio the operator
-       just clicked would keep the stale checkmark until a server value moved. */
-    state.needsYouDisplay || "",
-    JSON.stringify(state.collectorInstances),
-    state.collectorInstancesPending ? "1" : "0",
-    state.collectorImportNote || "",
   ].join("\u001f");
   if (paintUnchanged("settings", sig)) {
-    /* The two things that must follow the board without disturbing the form:
-       the preview, which predicts what these numbers do, and the save verdict,
-       which is time-boxed and would otherwise expire by rebuilding the panel
-       out from under whatever is being typed. Colours arrive on their own
-       clock and paint into a host, so they refresh here too. */
-    renderSettingsPreview();
+    /* Counts follow the snapshot; the verdict is time-boxed. Neither should
+       remount the rail inputs. Plates and colours paint into their own hosts. */
+    renderSettingsCounts();
     renderSettingsVerdict();
+    paintNeedsYouPlates();
     paintRepoColorSettings();
     return;
   }
@@ -224,129 +414,106 @@ function renderSettingsPanel() {
   const s = state.settings || {};
   const fresh = s.activityFreshMinutes ?? 3;
   const quiet = s.activityQuietMinutes ?? 45;
-  panel.append(el("div", { class: "settings-inner" },
-    el("div", { class: "settings-head" },
-      el("h2", { id: "settings-panel-title", text: "Settings" }),
+  const counts = state.snap
+    ? settingsPreview(state.snap, fresh, quiet)
+    : { working: 0, waiting: 0, finished: 0, retained: 0 };
+  const historyCount = (counts.finished || 0) + (counts.retained || 0);
+  panel.append(el("div", { class: "desk settings-inner" },
+    el("div", { class: "desk-head settings-head" },
+      el("div", { class: "desk-brand" },
+        el("img", { src: "/icons/formic-mark.svg", alt: "", width: "20", height: "20" }),
+        el("div", {},
+          el("h2", { id: "settings-panel-title", text: "Settings" }),
+          el("small", { text: "operator desk" }))),
       el("button", {
         type: "button", class: "settings-close", "aria-label": "Close settings",
         dataset: { fkey: "settings-close" },
-        onclick: closeSettingsPanel,
+        onclick: requestCloseSettingsPanel,
       }, "×")),
-    el("section", { class: "settings-section" },
-      renderCollectorsBlock()),
-    el("section", { class: "settings-section" },
-      el("h3", { text: "Time" }),
-      el("p", { class: "settings-lede", text: "How long silence has to last before this board changes what it calls a session." }),
-      el("div", { class: "settings-presets" },
-        el("span", { class: "settings-help", text: "Presets fill the fields below:" }),
-        ...SETTINGS_PRESETS.map((preset) => el("button", {
-          type: "button", class: "btn", dataset: { fkey: "preset-" + preset.id },
+    el("div", { class: "desk-body" },
+      el("section", { class: "span", "aria-label": "Time" },
+        el("div", { class: "span-top" },
+          el("p", { class: "kicker", text: "How long a session stays live" }),
+          el("div", { class: "counts" },
+            el("div", { class: "c-work" },
+              el("b", { id: "settings-count-work", text: String(counts.working) }),
+              el("span", { text: "Working" })),
+            el("div", { class: "c-wait" },
+              el("b", { id: "settings-count-wait", text: String(counts.waiting) }),
+              el("span", { text: "Waiting" })),
+            el("div", { class: "c-hist" },
+              el("b", { id: "settings-count-hist", text: String(historyCount) }),
+              el("span", { text: "History" })))),
+        el("div", {
+          class: "rail",
+          id: "settings-span-rail",
+          style: railStyleAttr(fresh, quiet),
+        },
+          el("div", { class: "seg work" }, spanWell("activityFreshMinutes", "Working", fresh, 1, 30)),
+          el("div", { class: "seg quiet" }, spanWell("activityQuietMinutes", "Quiet", quiet, 5, 480)),
+          el("div", { class: "seg hist", title: "Everything older is History" })),
+        el("div", { class: "postures", id: "settings-postures" },
+          ...SETTINGS_PRESETS.map((preset) => postureButton(preset, fresh, quiet)))),
+      el("div", { id: "settings-homes", class: "homes" },
+        renderCollectorsBlock()),
+      el("div", { class: "split" },
+        el("div", { id: "settings-needs-you", class: "plate" }),
+        el("section", { class: "plate", "aria-label": "Repository colours" },
+          el("h3", { text: "Repo colours" }),
+          el("div", { id: "repo-colors-host", class: "repo-colors-host" }))),
+      el("section", { class: "horizon", "aria-label": "Horizon" },
+        el("h3", { text: "Horizon" }),
+        el("div", { class: "meters" },
+          horizonMeter("scan", "scanWindowHours", "Scan",
+            horizonNumber("scanWindowHours", s.scanWindowHours ?? state.scanWindowHours ?? 36, 1, 168, "scan-window")),
+          horizonMeter("wait", "providerWaitMs", "Wait",
+            providerWaitSelect(s.providerWaitMs ?? 7500)),
+          horizonMeter("keep", "historyRetentionDays", "Keep",
+            horizonNumber("historyRetentionDays", s.historyRetentionDays ?? 30, 7, 365)),
+          horizonMeter("cap", "historyRecordLimit", "Cap",
+            horizonNumber("historyRecordLimit", s.historyRecordLimit ?? 5000, 100, 50000))))),
+    el("div", { class: "desk-foot" },
+      el("p", { id: "settings-verdict", hidden: "" }),
+      el("div", { class: "acts" },
+        el("button", {
+          type: "button", class: "btn primary", dataset: { fkey: "settings-save" },
           onclick: () => {
-            const freshNode = $("setting-activityFreshMinutes");
-            const quietNode = $("setting-activityQuietMinutes");
-            if (freshNode) freshNode.value = String(preset.fresh);
-            if (quietNode) quietNode.value = String(preset.quiet);
-            renderSettingsPreview();
+            const freshNow = settingsValue("activityFreshMinutes", 3);
+            const quietNow = settingsValue("activityQuietMinutes", 45);
+            if (quietNow <= freshNow) {
+              state.settingsSaveError = "Quiet must be longer than Working.";
+              renderSettingsVerdict();
+              return;
+            }
+            void postSettings({
+              activityFreshMinutes: freshNow,
+              activityQuietMinutes: quietNow,
+              scanWindowHours: settingsValue("scanWindowHours", 36),
+              providerWaitMs: settingsValue("providerWaitMs", 7500),
+              historyRetentionDays: settingsValue("historyRetentionDays", 30),
+              historyRecordLimit: settingsValue("historyRecordLimit", 5000),
+            });
           },
-        }, preset.label))),
-      settingsField("activityFreshMinutes", "Working means activity in the last…",
-        "Sessions with activity newer than this read as Working. Minutes, 1–30.", fresh, 1, 30),
-      settingsField("activityQuietMinutes", "Quiet after…",
-        "After this much silence a session stops reading as recent: Waiting if its process is live, Unverified if unknown. Minutes, 5–480.",
-        quiet, 5, 480),
-      el("p", { class: "settings-preview", id: "settings-preview" })),
-    el("section", { class: "settings-section" },
-      el("h3", { text: "This browser" }),
-      /* Per-browser display preference, deliberately OUTSIDE the Save flow: every
-         Time field is a fleet-shared server setting, this one is where THIS
-         browser draws the board's alerting rows. It applies the moment it is
-         clicked, writes localStorage rather than POSTing, and Save and Reset
-         leave it alone. */
-      el("fieldset", { class: "settings-local" },
-        el("legend", { text: "Needs-you display" }),
-        el("p", { class: "settings-help", text: "Saved in this browser only. Applies immediately — Save below does not affect it." }),
-        ...[
-          ["pane", "Pinned pane", "Alerting sessions are collected in the strip at the top of the board."],
-          ["inline", "Inline", "Alerting sessions stay in their program groups, marked in place."],
-        ].map(([value, label, help]) => el("label", { class: "settings-radio" },
-          el("input", {
-            type: "radio",
-            name: "needs-you-display",
-            value,
-            checked: state.needsYouDisplay === value ? "" : null,
-            dataset: { fkey: "needs-you-display-" + value },
-            onchange: () => setNeedsYouDisplay(value),
-          }),
-          el("span", { text: label }),
-          el("span", { class: "settings-help", text: help })))),
-      /* TINT-F. Fleet-shared like Time, but written per repository through its
-         own endpoint the moment a swatch changes — so it sits outside the Save
-         flow, the way the display preference above does, and for the same
-         reason: Save posts a fixed set of scalars and would have nothing to
-         say about a colour. */
-      el("fieldset", { class: "settings-local" },
-        el("legend", { text: "Repository colours" }),
-        el("p", { class: "settings-help", text: "A colour you pick here follows the repository name on the board, including every clone of that GitHub repo, and travels to its cmux workspaces." }),
-        el("div", { id: "repo-colors-host", class: "repo-colors-host" }))),
-    el("details", { class: "settings-advanced" },
-      el("summary", { text: "Advanced" }),
-      /* Keeps the `scan-window` focus key the filter bar used to carry: the
-         control moved surfaces, and muscle memory should land on the editor
-         rather than on nothing. */
-      settingsField("scanWindowHours", "Scan window",
-        "How far back collectors read transcripts. Sessions older than this move to History as 'no longer watched'. Hours, 1–168.",
-        s.scanWindowHours ?? state.scanWindowHours ?? 36, 1, 168, "scan-window"),
-      providerWaitField(s.providerWaitMs ?? 7500),
-      settingsField("historyRetentionDays", "Keep history for",
-        "Finished sessions are kept this long. Lowering it permanently forgets older records. Days, 7–365.",
-        s.historyRetentionDays ?? 30, 7, 365),
-      settingsField("historyRecordLimit", "History record cap",
-        "At most this many History records are kept. 100–50000.",
-        s.historyRecordLimit ?? 5000, 100, 50000)),
-    /* The two answers a save can give, said where the save happened. A stable
-       node rather than a conditional child, so it can appear, change and expire
-       without rebuilding the form around it. */
-    el("p", { id: "settings-verdict", hidden: "" }),
-    el("div", { class: "settings-actions" },
-      el("button", {
-        type: "button", class: "btn btn-primary", dataset: { fkey: "settings-save" },
-        onclick: () => {
-          void postSettings({
-            activityFreshMinutes: settingsValue("activityFreshMinutes", fresh),
-            activityQuietMinutes: settingsValue("activityQuietMinutes", quiet),
-            scanWindowHours: settingsValue("scanWindowHours", s.scanWindowHours ?? 36),
-            providerWaitMs: settingsValue("providerWaitMs", s.providerWaitMs ?? 7500),
-            historyRetentionDays: settingsValue("historyRetentionDays", s.historyRetentionDays ?? 30),
-            historyRecordLimit: settingsValue("historyRecordLimit", s.historyRecordLimit ?? 5000),
-          });
-        },
-      }, state.settingsPending ? "Saving…" : "Save"),
-      el("button", {
-        type: "button", class: "btn", dataset: { fkey: "settings-reset" },
-        onclick: () => {
-          void postSettings({
-            activityFreshMinutes: 3, activityQuietMinutes: 45, scanWindowHours: 36,
-            providerWaitMs: 7500, historyRetentionDays: 30, historyRecordLimit: 5000,
-          });
-        },
-      }, "Reset all"),
-      el("span", { class: "settings-spacer" }),
-      el("button", {
-        type: "button", class: "btn", dataset: { fkey: "settings-done" },
-        onclick: closeSettingsPanel,
-      }, "Done")),
-    el("p", {
-      class: "settings-help",
-      text: "Save applies to Time and Advanced. Collectors and colours apply when you change them.",
-    })));
-  renderSettingsPreview();
+        }, state.settingsPending ? "Saving…" : "Save time"),
+        el("button", {
+          type: "button", class: "btn", dataset: { fkey: "settings-reset" },
+          onclick: () => {
+            void postSettings({
+              activityFreshMinutes: 3, activityQuietMinutes: 45, scanWindowHours: 36,
+              providerWaitMs: 7500, historyRetentionDays: 30, historyRecordLimit: 5000,
+            });
+          },
+        }, "Reset span")))));
+  renderSettingsCounts();
   renderSettingsVerdict();
+  paintNeedsYouPlates();
   paintRepoColorSettings();
 }
 
 export {
   openSettingsPanel,
   closeSettingsPanel,
+  requestCloseSettingsPanel,
   renderSettingsVerdict,
   paintSettingsToggle,
   renderSettingsPanel,

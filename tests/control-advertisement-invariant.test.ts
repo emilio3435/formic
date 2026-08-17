@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { executeControl } from "../src/server/control";
-import { controlsFor, processStateFor } from "../src/server/snapshot-agent";
+import { controlsFor, operatorControlState, processStateFor } from "../src/server/snapshot-agent";
 import type { AgentSnapshot, ControlAction, TargetResolution } from "../src/shared/types";
 import type { ArchiveStore, CollectedAgent, CommandResult, CommandRunner } from "../src/server/types";
 
@@ -62,7 +62,7 @@ const LIVENESS = {
 
 type Liveness = keyof typeof LIVENESS;
 
-const RESOLUTIONS: readonly TargetResolution[] = ["exact", "unique-cwd", "ambiguous", "missing"];
+const RESOLUTIONS: readonly TargetResolution[] = ["exact", "unique-cwd", "ambiguous", "missing", "shared-host"];
 const ATTESTATIONS: readonly (AgentSnapshot["target"]["attestation"])[] = ["hook-store", "live", "remembered", undefined];
 const LIVENESSES = Object.keys(LIVENESS) as Liveness[];
 const ARCHIVED = [false, true] as const;
@@ -219,7 +219,22 @@ describe("what the button advertises is what the endpoint accepts", () => {
     expect(withheld).toBeGreaterThan(0);
     expect(accepted).toBeGreaterThan(0);
     expect(refused).toBeGreaterThan(0);
-    expect(STATES.length).toBe(128);
+    expect(STATES.length).toBe(160);
+  });
+
+  test("H-shared-host-control: shared hosts stay observed-only with terminal controls off", async () => {
+    const hosted = agentFor({
+      resolution: "shared-host",
+      attestation: undefined,
+      liveness: "running",
+      archived: false,
+    });
+
+    expect(operatorControlState(hosted.target, false)).toBe("observed-only");
+    for (const action of ["focus", "instruct", "interrupt"] as const) {
+      expect(advertised(hosted, action)).toBe(false);
+      expect(await accepts(hosted, action)).toBe(false);
+    }
   });
 
   test("a live, attested, unarchived agent at the top tier is offered writes and takes them", async () => {

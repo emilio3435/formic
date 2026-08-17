@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createMountainFetch, type MountainAppState } from "../src/server/app";
+import { transcriptLines, transcriptResponse } from "../src/server/debug-identity";
 import type { AgentSnapshot, HubSnapshot } from "../src/shared/types";
 import type { ArchiveStore, CmuxSurface, CommandRunner } from "../src/server/types";
 
@@ -361,5 +365,268 @@ describe("read-only identity debug endpoint", () => {
 
     expect(response.status).toBe(404);
     fetch.dispose();
+  });
+});
+
+describe("Grok Build ACP transcript lines", () => {
+  const grok = { provider: "grok" } as AgentSnapshot;
+  const fixture = readFileSync(join(import.meta.dir, "fixtures/grok-session/updates.jsonl"), "utf8");
+
+  test("T-updates-speech: user and assistant ACP chunks become coalesced speech lines", () => {
+    expect(transcriptLines(grok, fixture)).toEqual([
+      {
+        at: "2026-08-15T20:00:30.000Z",
+        role: "user",
+        text: "Add Grok Build to the board.",
+      },
+      {
+        at: "2026-08-15T20:02:00.000Z",
+        role: "assistant",
+        text: "The Grok collector is wired and verified.",
+      },
+    ]);
+  });
+
+  test("T-thought: thought chunks become one Thought-prefixed system line", () => {
+    const raw = [
+      {
+        timestamp: 1_786_824_121,
+        method: "_x.ai/session/update",
+        params: {
+          update: {
+            sessionUpdate: "agent_thought_chunk",
+            content: { type: "text", text: "Check the collector" },
+          },
+        },
+      },
+      {
+        timestamp: 1_786_824_122,
+        method: "_x.ai/session/update",
+        params: {
+          update: {
+            sessionUpdate: "agent_thought_chunk",
+            content: { type: "text", text: " before changing it." },
+          },
+        },
+      },
+    ].map((row) => JSON.stringify(row)).join("\n");
+
+    expect(transcriptLines(grok, raw)).toEqual([{
+      at: "2026-08-15T20:02:01.000Z",
+      role: "system",
+      text: "Thought\nCheck the collector before changing it.",
+    }]);
+  });
+
+  test("T-tool: call updates coalesce to one tool line with title, status, duration, and output", () => {
+    const raw = [
+      {
+        timestamp: 1_786_824_123,
+        method: "session/update",
+        params: {
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "call-1",
+            title: "Inspect collector files",
+          },
+        },
+      },
+      {
+        timestamp: 1_786_824_124,
+        method: "session/update",
+        params: {
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "call-1",
+            status: "completed",
+            rawOutput: { type: "command", output: [102, 111, 117, 110, 100] },
+          },
+        },
+      },
+      {
+        timestamp: 1_786_824_125,
+        method: "session/update",
+        params: {
+          update: {
+            sessionUpdate: "tool_call_update",
+            toolCallId: "call-1",
+            status: "completed",
+          },
+        },
+      },
+    ].map((row) => JSON.stringify(row)).join("\n");
+
+    const lines = transcriptLines(grok, raw);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ role: "tool", at: "2026-08-15T20:02:03.000Z" });
+    expect(lines[0]?.text).toContain("Inspect collector files");
+    expect(lines[0]?.text).toContain("completed");
+    expect(lines[0]?.text).toContain("2s");
+    expect(lines[0]?.text).toContain("found");
+  });
+
+  test("T-skip-hooks: hook and other non-feed updates produce no lines", () => {
+    const skipped = [
+      "hook_execution",
+      "session_recap",
+      "auto_compact_started",
+      "compaction_completed",
+      "retry_state",
+      "image_dropped",
+      "plan",
+      "subagent_started",
+      "task_started",
+    ].map((sessionUpdate) => JSON.stringify({
+      timestamp: 1_786_824_126,
+      method: "session/update",
+      params: { update: { sessionUpdate, content: { type: "text", text: "not feed text" } } },
+    })).join("\n");
+
+    expect(transcriptLines(grok, skipped)).toEqual([]);
+  });
+
+  test("T-empty-is-not-success-for-populated-file: the populated speech fixture is non-empty", () => {
+    const lines = transcriptLines(grok, fixture);
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines.map((line) => line.role)).toEqual(["user", "assistant"]);
+  });
+
+  test("T-chat-history-enrichment: sibling history fills assistant speech and tool result bodies", async () => {
+    const root = mkdtempSync(join(tmpdir(), "formic-grok-transcript-"));
+    const source = join(root, "updates.jsonl");
+    writeFileSync(source, [
+      {
+        timestamp: 1_786_824_123,
+        method: "session/update",
+        params: {
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "" },
+          },
+        },
+      },
+      {
+        timestamp: 1_786_824_124,
+        method: "session/update",
+        params: {
+          update: {
+            sessionUpdate: "tool_call",
+            toolCallId: "call-history",
+            title: "Read the session",
+          },
+        },
+      },
+    ].map((row) => JSON.stringify(row)).join("\n"));
+    writeFileSync(join(root, "chat_history.jsonl"), [
+      { type: "assistant", content: "Recovered assistant turn.", tool_calls: [] },
+      { type: "reasoning", encrypted_content: "ciphertext" },
+      { type: "tool_result", tool_call_id: "call-history", content: "Recovered tool result." },
+    ].map((row) => JSON.stringify(row)).join("\n"));
+    const agent = {
+      ...linkedAgent(),
+      id: "grok:fixture",
+      provider: "grok",
+      sourceSessionId: "fixture",
+      artifacts: [{ label: "GROK transcript", path: source, kind: "transcript" }],
+    } as AgentSnapshot;
+    const current = snapshot();
+    current.programs[0]!.agents = [agent];
+
+    const response = await transcriptResponse(current, agent.id, 200, {});
+    const body = await response.json();
+
+    expect(body.lines.map((line: { role: string }) => line.role)).toEqual(["assistant", "tool"]);
+    expect(body.lines[0].text).toBe("Recovered assistant turn.");
+    expect(body.lines[1].text).toContain("Recovered tool result.");
+    expect(JSON.stringify(body)).not.toContain("ciphertext");
+  });
+});
+
+describe("Grok Bot replica transcript lines", () => {
+  const NOW = Date.parse("2026-08-16T12:00:00.000Z");
+  const grok = { provider: "grok" } as AgentSnapshot;
+
+  test("T-replica-untouched: a schemaVersion 1 replica still yields user and assistant lines", () => {
+    const raw = JSON.stringify({
+      schemaVersion: 1,
+      value: {
+        entries: [
+          {
+            kind: "message",
+            role: "user",
+            content: "Please parse the persisted conversation.",
+            timestampMs: NOW - 4_000,
+          },
+          {
+            kind: "send-message",
+            message: { type: "text", content: "Parsed the Grok Bot transcript." },
+            timestampMs: NOW - 3_000,
+          },
+          {
+            kind: "message",
+            role: "user",
+            content: "Ship the closer next.",
+            timestampMs: NOW - 2_000,
+          },
+          {
+            kind: "send-message",
+            message: "Shipped the closer from send-message.",
+            timestampMs: NOW - 1_000,
+          },
+        ],
+      },
+    });
+
+    const lines = transcriptLines(grok, raw);
+    expect(lines).toHaveLength(4);
+    expect(lines.map((line) => line.role)).toEqual(["user", "assistant", "user", "assistant"]);
+    expect(lines.map((line) => line.text)).toEqual([
+      "Please parse the persisted conversation.",
+      "Parsed the Grok Bot transcript.",
+      "Ship the closer next.",
+      "Shipped the closer from send-message.",
+    ]);
+    expect(lines.map((line) => line.at)).toEqual([
+      new Date(NOW - 4_000).toISOString(),
+      new Date(NOW - 3_000).toISOString(),
+      new Date(NOW - 2_000).toISOString(),
+      new Date(NOW - 1_000).toISOString(),
+    ]);
+  });
+
+  test("skips attachment, widget, cursor-agent, and inter-agent assistant copies", () => {
+    const raw = JSON.stringify({
+      schemaVersion: 1,
+      value: {
+        entries: [
+          { kind: "message", role: "user", content: "Look at this file.", timestampMs: NOW - 6_000 },
+          { kind: "user-attachment", timestampMs: NOW - 5_500 },
+          { kind: "send-message", message: { type: "attachment", name: "notes.md" }, timestampMs: NOW - 5_000 },
+          { kind: "send-message", message: { type: "widget", id: "card-1" }, timestampMs: NOW - 4_500 },
+          { kind: "send-message", message: { type: "cursor-agent", id: "agent-1" }, timestampMs: NOW - 4_000 },
+          { kind: "send-message", message: { type: "text", content: "Here is the close after the cards." }, timestampMs: NOW - 3_000 },
+          {
+            kind: "message",
+            role: "assistant",
+            toAgent: "other-bot",
+            content: "Inter-agent copy must not become inspector speech.",
+            timestampMs: NOW - 2_000,
+          },
+        ],
+      },
+    });
+
+    expect(transcriptLines(grok, raw)).toEqual([
+      {
+        at: new Date(NOW - 6_000).toISOString(),
+        role: "user",
+        text: "Look at this file.",
+      },
+      {
+        at: new Date(NOW - 3_000).toISOString(),
+        role: "assistant",
+        text: "Here is the close after the cards.",
+      },
+    ]);
   });
 });

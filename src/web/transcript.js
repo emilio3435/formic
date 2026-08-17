@@ -66,6 +66,44 @@ export function transcriptLineNode(line) {
     el("p", { class: "tr-text", text: line.text }));
 }
 
+/* Reasoning arrives as a `system` line the server prefixed with `Thought\n` —
+   the contract that let Grok Build's thought stream reach the drawer without a
+   sixth TranscriptLine role. The prefix is wire chrome: it labels the row here
+   and never reaches the operator's eye. A system line that merely opens with
+   the WORD (a warning about a thought experiment) is not a thought, so the
+   newline is part of the match. */
+const THOUGHT_PREFIX_RE = /^Thought\r?\n/;
+
+export function thoughtText(line) {
+  if (!line || line.role !== "system" || typeof line.text !== "string") return null;
+  return THOUGHT_PREFIX_RE.test(line.text) ? line.text.replace(THOUGHT_PREFIX_RE, "") : null;
+}
+
+/* One consecutive run of thoughts, closed. A Grok session carries thousands of
+   these against a few hundred turns of speech, so the run collapses to a single
+   row: the operator sees that the agent reasoned, reads the first line of it,
+   and opens the node only when the reasoning is the thing they came for. */
+export function thoughtGroupNode(lines) {
+  const bodies = lines.map((line) => thoughtText(line) ?? "");
+  const gist = bodies.find((text) => text.trim()) || "";
+  const first = gist.split(/\r?\n/).find((part) => part.trim()) || "";
+  const at = lines.find((line) => line.at)?.at || null;
+  return el("details", { class: "chat-thought", dataset: { count: String(lines.length) } },
+    el("summary", { class: "chat-thought-summary" },
+      el("span", { class: "chat-thought-disclosure", "aria-hidden": "true" }, icon("chevron")),
+      el("span", { class: "chat-thought-copy" },
+        el("span", {
+          class: "chat-thought-label",
+          text: lines.length === 1 ? "Thought" : lines.length + " thoughts",
+        }),
+        // UNTRUSTED. textContent via el({ text }) — never innerHTML.
+        el("span", { class: "chat-thought-gist", text: first.length > 72 ? first.slice(0, 71) + "…" : first })),
+      at ? el("time", { class: "chat-thought-at", datetime: at, title: at, text: agoText(at) }) : null),
+    el("div", { class: "chat-thought-body" },
+      // UNTRUSTED. textContent via el({ text }) — never innerHTML.
+      bodies.map((text) => el("p", { class: "chat-thought-text", text }))));
+}
+
 const TOOL_STATUS = {
   ok: { label: "Passed", tone: "good" },
   pass: { label: "Passed", tone: "good" },
@@ -223,23 +261,84 @@ export function renderTranscriptFeedLead(agent, ui = state, opts = {}) {
   return null;
 }
 
-export async function loadTranscript(agentId, limit = TRANSCRIPT_DEFAULT_LIMIT) {
+function agentFromSnap(agentId) {
+  const programs = state.snap && state.snap.programs;
+  if (!Array.isArray(programs)) return null;
+  for (const program of programs) {
+    const agents = program && program.agents;
+    if (!Array.isArray(agents)) continue;
+    const agent = agents.find((item) => item && item.id === agentId);
+    if (agent) return agent;
+  }
+  return null;
+}
+
+export function isGrokBotAgent(agent) {
+  return Boolean(agent && typeof agent.id === "string" && agent.id.startsWith("grok:bot:"));
+}
+
+/* Grok Bot inspector only. Roster lastActivityAt stays 0 / create-time, so
+   lastUserMessage is the field that used to "sync" the drawer — the operator
+   had to message the Bot. Replica speech moves lastThreadAt and lastAgent*.
+   lastUserMessage is deliberately not in this stamp. */
+export function transcriptThreadStamp(agent) {
+  if (!isGrokBotAgent(agent)) return "";
+  return [
+    agent.lastThreadAt || "",
+    agent.lastAgentMessage || "",
+    agent.lastAgentClosing || "",
+    agent.lastAgentChatBody || "",
+  ].join("\u001f");
+}
+
+/* shouldAutoLoadTranscript only runs when agentId changes, so an open Bot
+   inspector keeps the first lines:[] for the whole open. Reload that one
+   held /api/transcript when the replica clock moves. Not a second chat store.
+   Failed loads still retry only via Try again. */
+export function shouldRefreshHeldTranscript(agent, transcript) {
+  if (!isGrokBotAgent(agent) || !transcript || transcript.agentId !== agent.id) return false;
+  if (transcript.loading || transcript.error) return false;
+  const stamp = transcriptThreadStamp(agent);
+  if (!stamp) return false;
+  if (transcript.threadStamp == null || transcript.threadStamp === "") {
+    return Boolean(transcript.data && transcript.data.source && transcript.data.lines.length === 0);
+  }
+  return transcript.threadStamp !== stamp;
+}
+
+export async function loadTranscript(agentId, limit = TRANSCRIPT_DEFAULT_LIMIT, opts = {}) {
   const want = clampTranscriptLimit(limit);
-  state.transcript = { agentId, loading: true, error: "", data: null, limit: want };
-  repaint();
+  const held = state.transcript && state.transcript.agentId === agentId ? state.transcript : null;
+  const stamp = opts.threadStamp ?? transcriptThreadStamp(agentFromSnap(agentId));
+  const quiet = opts.quiet === true && held && held.data;
+  state.transcript = {
+    agentId,
+    loading: !quiet,
+    error: quiet ? (held.error || "") : "",
+    data: quiet ? held.data : null,
+    limit: want,
+    threadStamp: stamp,
+  };
+  if (!quiet) repaint();
   let next;
   try {
     const res = await apiFetch(transcriptUrl(agentId, want), { headers: { accept: "application/json" } }, API_TRANSCRIPT_TIMEOUT_MS);
     let body = null;
     try { body = await res.json(); } catch { /* a build without the route answers HTML */ }
     next = !res.ok || !body || body.ok !== true
-      ? { agentId, loading: false, error: transcriptFailureText(res.status, body), data: null, limit: want }
-      : { agentId, loading: false, error: "", data: normalizeTranscript(body), limit: want };
+      ? (quiet && held
+        ? { ...held, loading: false }
+        : { agentId, loading: false, error: transcriptFailureText(res.status, body), data: null, limit: want, threadStamp: stamp })
+      : { agentId, loading: false, error: "", data: normalizeTranscript(body), limit: want, threadStamp: stamp };
   } catch {
-    next = { agentId, loading: false, error: transcriptFailureText(0, null), data: null, limit: want };
+    next = quiet && held
+      ? { ...held, loading: false }
+      : { agentId, loading: false, error: transcriptFailureText(0, null), data: null, limit: want, threadStamp: stamp };
   }
   // The operator moved on — never paint one agent's transcript into another's drawer.
   if (state.transcript.agentId !== agentId) return;
+  /* A newer snapshot already started another refresh. Drop this older reply. */
+  if (stamp && state.transcript.threadStamp && state.transcript.threadStamp !== stamp) return;
   state.transcript = next;
   repaint();
 }

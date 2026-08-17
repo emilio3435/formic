@@ -1,0 +1,534 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Formic — Settings desk · visual redo · 2026-08-16</title>
+<style>
+  @font-face { font-family: Syne; font-weight: 800; src: url("../src/web/fonts/Syne-ExtraBold.woff2") format("woff2"); }
+  @font-face { font-family: Inter; font-weight: 400; src: url("../src/web/fonts/Inter-Regular.woff2") format("woff2"); }
+  @font-face { font-family: Inter; font-weight: 500; src: url("../src/web/fonts/Inter-Medium.woff2") format("woff2"); }
+  @font-face { font-family: Inter; font-weight: 600; src: url("../src/web/fonts/Inter-SemiBold.woff2") format("woff2"); }
+  @font-face { font-family: "JetBrains Mono"; font-weight: 400; src: url("../src/web/fonts/JetBrainsMono-Regular.woff2") format("woff2"); }
+  @font-face { font-family: "JetBrains Mono"; font-weight: 500; src: url("../src/web/fonts/JetBrainsMono-Medium.woff2") format("woff2"); }
+
+  :root {
+    --ink: #16181b;
+    --muted: #4b515c;
+    --faint: #9aa1ab;
+    --line: #e2e5e9;
+    --line-strong: #cbd0d6;
+    --surface: #fff;
+    --canvas: #f6f7f8;
+    --sunken: #fbfbfc;
+    --clay: #c1632b;
+    --clay-ctl: #a8531f;
+    --clay-deep: #833f18;
+    --clay-tint: #fdf1e7;
+    --indigo: #5b4fd1;
+    --indigo-tint: #efedfd;
+    --info: #3172c4;
+    --info-tint: #e8f1fb;
+    --ok: #1e9e5c;
+    --ok-tint: #e9f6ee;
+    --warn: #d9a22e;
+    --warn-tint: #fbf1dc;
+    --danger: #d1453d;
+    --danger-tint: #fbe9e9;
+    --ended: #6b7280;
+    --ui: Inter, system-ui, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, monospace;
+    --display: Syne, Inter, sans-serif;
+    --focus: 0 0 0 3px rgba(91,79,209,.28);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { background: var(--canvas); color: var(--ink); font: 14px/1.4 var(--ui); -webkit-font-smoothing: antialiased; }
+  button, input { font: inherit; }
+  button { cursor: pointer; }
+  img.mark { width: 100%; height: 100%; object-fit: contain; display: block; }
+
+  .intro { max-width: 56rem; margin: 1.1rem auto 0; padding: 0 1rem 1rem; }
+  .intro h1 { font: 800 1.25rem/1.15 var(--display); letter-spacing: -.02em; margin: 0 0 .35rem; }
+  .intro p { margin: 0 0 .4rem; color: var(--muted); font-size: .86rem; max-width: 70ch; }
+  .intro .wm-i { color: var(--clay); }
+  .tools { display: flex; gap: .4rem; margin-top: .65rem; }
+
+  .stage {
+    position: relative;
+    height: min(860px, calc(100vh - 9.5rem));
+    margin: 0 1rem 2rem;
+    border: 1px solid var(--line-strong);
+    border-radius: 14px;
+    overflow: hidden;
+    background:
+      radial-gradient(900px 280px at 8% -10%, color-mix(in srgb, var(--indigo) 8%, transparent), transparent 60%),
+      var(--canvas);
+  }
+  .stage.phone { width: 420px; height: 812px; margin-inline: auto; }
+
+  .board { padding: 1rem 1.15rem; pointer-events: none; }
+  .lockup { display: flex; align-items: center; gap: .5rem; }
+  .lockup img { width: 22px; height: 22px; }
+  .lockup b { font: 800 1.2rem/1 var(--display); letter-spacing: -.02em; }
+  .lockup b i { font-style: normal; color: var(--clay); }
+  .ghost-row { display: flex; justify-content: space-between; padding: .42rem 0; border-top: 1px solid var(--line); font-size: .8rem; color: var(--muted); }
+
+  .veil {
+    position: absolute; inset: 0;
+    background: color-mix(in srgb, var(--ink) 46%, transparent);
+    display: grid; place-items: start center;
+    padding: 3.5vh .75rem .85rem;
+  }
+
+  .desk {
+    width: min(40rem, 100%);
+    max-height: 100%;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: 0 18px 50px color-mix(in srgb, var(--ink) 24%, transparent);
+    display: flex; flex-direction: column; min-height: 0;
+  }
+  .desk-head, .desk-foot { flex: none; }
+  .desk-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: .7rem .95rem .65rem 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .desk-brand { display: flex; align-items: center; gap: .55rem; }
+  .desk-brand img { width: 20px; height: 20px; }
+  .desk-brand h2 { margin: 0; font: 600 .95rem/1 var(--ui); }
+  .desk-brand small { display: block; font: 500 .62rem/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--faint); margin-top: .18rem; }
+  .x {
+    width: 2rem; height: 2rem; border: 0; border-radius: 8px; background: none; color: var(--muted); font-size: 1.2rem;
+  }
+  .x:hover { background: var(--canvas); color: var(--ink); }
+  .x:focus-visible { outline: none; box-shadow: var(--focus); }
+
+  .desk-body { flex: 1; overflow: auto; padding: .85rem 1rem 1rem; display: grid; gap: 1.05rem; }
+
+  /* ——— TIME SPAN ——— */
+  .span {
+    display: grid; gap: .55rem;
+  }
+  .span-top { display: flex; justify-content: space-between; align-items: baseline; gap: .75rem; }
+  .kicker { margin: 0; font: 600 .62rem/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--faint); }
+  .counts { display: flex; gap: .85rem; font-variant-numeric: tabular-nums; }
+  .counts b { display: block; font: 600 1.05rem/1 var(--mono); }
+  .counts span { display: block; font: 500 .62rem/1.2 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--faint); margin-top: .18rem; }
+  .counts .c-work b { color: var(--info); }
+  .counts .c-wait b { color: var(--ended); }
+  .counts .c-hist b { color: var(--faint); }
+
+  .rail {
+    position: relative;
+    height: 2.35rem;
+    margin-top: 1.65rem;
+    border-radius: 10px;
+    overflow: visible;
+    background: var(--canvas);
+    border: 1px solid var(--line);
+    display: grid;
+    grid-template-columns: var(--w) var(--q) 1fr;
+  }
+  .seg { position: relative; min-width: 0; overflow: visible; }
+  .seg.work { border-radius: 9px 0 0 9px; }
+  .seg.hist { border-radius: 0 9px 9px 0; }
+  .seg.work { background: linear-gradient(180deg, #4e8fd4, var(--info)); min-width: 4.4rem; }
+  .seg.quiet { background: linear-gradient(180deg, #7a828c, var(--ended)); }
+  .seg.hist { background: repeating-linear-gradient(-55deg, #eef0f2, #eef0f2 6px, #e6e8ec 6px, #e6e8ec 12px); }
+  .well {
+    position: absolute; top: -1.45rem; left: .2rem;
+    background: #fff; border-radius: 8px; padding: .16rem .4rem .12rem;
+    box-shadow: 0 1px 2px rgba(16,18,20,.12);
+    border: 1px solid var(--line);
+    min-width: 3.4rem; text-align: center;
+  }
+  .seg.work .well { left: .15rem; }
+  .seg.quiet .well { left: 50%; transform: translateX(-50%); }
+  .seg.hist .well { display: none; }
+  .well label { display: block; font: 600 .52rem/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+  .well input {
+    width: 2.4rem; border: 0; background: none; text-align: center;
+    font: 600 .92rem/1.1 var(--mono); color: var(--ink); padding: 0;
+  }
+  .well input:focus { outline: none; }
+  .well input:focus-visible { box-shadow: inset 0 -2px 0 var(--indigo); }
+
+  .postures { display: grid; grid-template-columns: repeat(3, 1fr); gap: .4rem; }
+  .posture {
+    border: 1px solid var(--line); background: var(--surface); border-radius: 10px;
+    padding: .45rem .5rem .5rem; text-align: left; display: grid; gap: .35rem;
+  }
+  .posture:hover { border-color: var(--line-strong); }
+  .posture.is-on { border-color: var(--indigo); background: var(--indigo-tint); box-shadow: inset 0 0 0 1px var(--indigo); }
+  .posture:focus-visible { outline: none; box-shadow: var(--focus); }
+  .mini { height: 6px; border-radius: 99px; display: grid; overflow: hidden; background: #eceef1; }
+  .mini i:first-child { background: var(--info); }
+  .mini i:last-child { background: var(--ended); }
+  .posture b { font: 600 .78rem/1.1 var(--ui); }
+  .posture em { font: 500 .68rem/1 var(--mono); color: var(--muted); font-style: normal; }
+
+  /* ——— HOMES ——— */
+  .homes h3, .split h3, .horizon h3 {
+    margin: 0 0 .45rem; font: 600 .62rem/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--faint);
+  }
+  .home-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: .4rem; }
+  .home {
+    border: 1px solid var(--line); background: var(--surface); border-radius: 12px;
+    padding: .5rem .35rem .45rem; display: grid; justify-items: center; gap: .32rem; min-height: 5.4rem;
+  }
+  .home .badge {
+    width: 1.85rem; height: 1.85rem; border-radius: 50%;
+    border: 1px solid var(--line); background: var(--sunken);
+    padding: .28rem; display: grid; place-items: center;
+  }
+  .home b { font: 600 .68rem/1.15 var(--ui); text-align: center; }
+  .home s { font: 500 .58rem/1 var(--mono); color: var(--ok); text-decoration: none; letter-spacing: .02em; }
+  .home.is-wait { border-color: color-mix(in srgb, var(--warn) 55%, var(--line)); background: var(--warn-tint); }
+  .home.is-wait .badge { box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 28%, transparent); }
+  .home.is-wait s { color: var(--clay-ctl); }
+  .home.is-off { opacity: .45; }
+  .home .pick { display: none; }
+  .home.is-wait .pick { display: flex; align-items: center; gap: .2rem; font-size: .62rem; color: var(--muted); }
+  .home.is-wait .pick input { margin: 0; }
+  .home-note { display: none; margin: .45rem 0 0; padding: .4rem .55rem; border-left: 3px solid var(--ok); background: var(--ok-tint); font-size: .8rem; }
+  .home-note.show { display: block; }
+  .home-acts { display: flex; gap: .45rem; margin-top: .45rem; align-items: center; }
+
+  /* ——— SPLIT ——— */
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
+  .plate { border: 1px solid var(--line); border-radius: 12px; padding: .6rem .65rem .7rem; min-width: 0; }
+  .modes { display: grid; grid-template-columns: 1fr 1fr; gap: .35rem; }
+  .mode {
+    border: 1px solid var(--line); background: var(--sunken); border-radius: 10px;
+    padding: .5rem .4rem .45rem; display: grid; justify-items: center; gap: .3rem;
+  }
+  .mode.is-on { border-color: var(--indigo); background: var(--indigo-tint); box-shadow: inset 0 0 0 1px var(--indigo); }
+  .mode:focus-visible { outline: none; box-shadow: var(--focus); }
+  .mode svg { width: 22px; height: 22px; }
+  .mode b { font: 600 .72rem/1 var(--ui); }
+  .mode span { font: 500 .62rem/1.25 var(--ui); color: var(--muted); text-align: center; }
+
+  .repos { display: grid; grid-template-columns: repeat(4, 1fr); gap: .4rem; }
+  .repo { border: 0; background: none; padding: 0; display: grid; justify-items: center; gap: .28rem; }
+  .swatch {
+    width: 1.7rem; height: 1.7rem; border-radius: 50%;
+    border: 2px solid #fff; box-shadow: 0 0 0 1px var(--line);
+  }
+  .repo.is-yours .swatch { box-shadow: 0 0 0 2px var(--ink); }
+  .repo b { font: 500 .62rem/1.15 var(--ui); text-align: center; color: var(--muted); font-weight: 600; }
+  .repo:focus-visible { outline: none; }
+  .repo:focus-visible .swatch { box-shadow: var(--focus); }
+
+  /* ——— HORIZON ——— */
+  .meters { display: grid; grid-template-columns: repeat(3, 1fr); gap: .4rem; }
+  .meter {
+    border: 1px solid var(--line); border-radius: 10px; padding: .45rem .5rem .5rem;
+    display: grid; gap: .25rem;
+  }
+  .meter .ico { display: flex; align-items: center; gap: .35rem; color: var(--muted); }
+  .meter .ico svg { width: 16px; height: 16px; }
+  .meter label { font: 600 .62rem/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--faint); }
+  .meter input, .meter select {
+    width: 100%; border: 0; background: none; padding: 0;
+    font: 600 1rem/1.1 var(--mono); color: var(--ink);
+  }
+  .meter input:focus, .meter select:focus { outline: none; }
+  .meter input:focus-visible, .meter select:focus-visible { box-shadow: inset 0 -2px 0 var(--indigo); }
+
+  .desk-foot {
+    border-top: 1px solid var(--line);
+    padding: .65rem .95rem .75rem;
+    display: grid; gap: .4rem;
+  }
+  .verdict { display: none; margin: 0; padding: .35rem .5rem; font-size: .8rem; border-left: 3px solid var(--ok); background: var(--ok-tint); }
+  .verdict.show { display: block; }
+  .verdict.err { border-left-color: var(--danger); background: var(--danger-tint); }
+  .acts { display: flex; align-items: center; gap: .45rem; }
+
+  .btn {
+    appearance: none; border: 1px solid var(--line-strong); background: var(--surface);
+    color: var(--ink); border-radius: 8px; padding: .48rem .75rem; font: 600 .8rem/1 var(--ui);
+  }
+  .btn:hover:not(:disabled) { background: var(--canvas); }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn.primary { color: #fff; background: var(--clay-ctl); border-color: var(--clay-ctl); }
+  .btn.primary:hover:not(:disabled) { background: var(--clay-deep); border-color: var(--clay-deep); }
+  .btn:focus-visible { outline: none; box-shadow: var(--focus); }
+  .btn.tiny { padding: .32rem .55rem; font-size: .72rem; }
+
+  @media (max-width: 520px) {
+    .home-grid { grid-template-columns: repeat(3, 1fr); }
+    .split, .postures, .meters, .counts { grid-template-columns: 1fr 1fr; }
+    .split { grid-template-columns: 1fr; }
+    .counts { justify-content: space-between; }
+    .rail { height: 3.4rem; }
+  }
+</style>
+</head>
+<body>
+  <div class="intro">
+    <h1>Settings desk — visual redo</h1>
+    <p>Not a form rearrange. Time is a span you can see. Homes wear the same logos as the board. Save is the only clay fill. Spec stays in <code>docs/superpowers/specs/2026-08-16-settings-desk.md</code>.</p>
+    <p>Try presets, drag numbers on the rail, × after a Quiet change, Import Claude, 420 phone.</p>
+    <div class="tools">
+      <button class="btn" type="button" id="view-desk">1280</button>
+      <button class="btn" type="button" id="view-phone">420</button>
+    </div>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="board">
+      <div class="lockup">
+        <img src="../src/web/icons/formic-mark.svg" alt="">
+        <b>Form<span class="wm-i">i</span>c</b>
+      </div>
+      <div class="ghost-row" style="border:0;margin-top:.8rem"><span>Gumby</span><span>Working</span></div>
+      <div class="ghost-row"><span>Formic Agent</span><span>Working</span></div>
+      <div class="ghost-row"><span>RRB · engine</span><span>Waiting</span></div>
+      <div class="ghost-row"><span>Rules &amp; Pre-Fills</span><span>Waiting</span></div>
+    </div>
+
+    <div class="veil" id="veil">
+      <div class="desk" role="dialog" aria-modal="true" aria-labelledby="desk-title">
+        <div class="desk-head">
+          <div class="desk-brand">
+            <img src="../src/web/icons/formic-mark.svg" alt="">
+            <div>
+              <h2 id="desk-title">Settings</h2>
+              <small>Operator desk</small>
+            </div>
+          </div>
+          <button class="x" type="button" id="close" aria-label="Close settings">×</button>
+        </div>
+
+        <div class="desk-body">
+          <section class="span" aria-label="Time">
+            <div class="span-top">
+              <p class="kicker">How long a session stays live</p>
+              <div class="counts">
+                <div class="c-work"><b>5</b><span>Working</span></div>
+                <div class="c-wait"><b>5</b><span>Waiting</span></div>
+                <div class="c-hist"><b>2651</b><span>History</span></div>
+              </div>
+            </div>
+            <div class="rail" id="rail" style="--w:12%; --q:55%">
+              <div class="seg work">
+                <div class="well">
+                  <label for="fresh">Working</label>
+                  <input id="fresh" type="number" min="1" max="30" value="3">
+                </div>
+              </div>
+              <div class="seg quiet">
+                <div class="well">
+                  <label for="quiet">Quiet</label>
+                  <input id="quiet" type="number" min="5" max="480" value="45">
+                </div>
+              </div>
+              <div class="seg hist" title="Everything older is History"></div>
+            </div>
+            <div class="postures" id="postures">
+              <button type="button" class="posture" data-fresh="2" data-quiet="15">
+                <span class="mini" style="grid-template-columns:18% 82%"><i></i><i></i></span>
+                <b>Focused</b><em>2 / 15</em>
+              </button>
+              <button type="button" class="posture is-on" data-fresh="3" data-quiet="45">
+                <span class="mini" style="grid-template-columns:12% 88%"><i></i><i></i></span>
+                <b>Balanced</b><em>3 / 45</em>
+              </button>
+              <button type="button" class="posture" data-fresh="10" data-quiet="180">
+                <span class="mini" style="grid-template-columns:8% 92%"><i></i><i></i></span>
+                <b>Long-running</b><em>10 / 180</em>
+              </button>
+            </div>
+          </section>
+
+          <section class="homes" aria-label="Collectors">
+            <h3>Homes on this machine</h3>
+            <div class="home-grid">
+              <div class="home">
+                <span class="badge"><img class="mark" src="../src/web/icons/cursor.svg" alt=""></span>
+                <b>Cursor</b><s>on</s>
+              </div>
+              <div class="home">
+                <span class="badge"><img class="mark" src="../src/web/icons/xai.svg" alt=""></span>
+                <b>Grok Bot</b><s>on</s>
+              </div>
+              <div class="home">
+                <span class="badge"><img class="mark" src="../src/web/icons/grok.svg" alt=""></span>
+                <b>Grok Bot 2</b><s>on</s>
+              </div>
+              <div class="home">
+                <span class="badge"><img class="mark" src="../src/web/icons/cursor.svg" alt=""></span>
+                <b>Cursor-2</b><s>on</s>
+              </div>
+              <div class="home">
+                <span class="badge"><img class="mark" src="../src/web/icons/history.svg" alt=""></span>
+                <b>BurnBar</b><s>on</s>
+              </div>
+              <div class="home is-wait">
+                <span class="badge"><img class="mark" src="../src/web/icons/claude-code.svg" alt=""></span>
+                <b>Claude</b>
+                <label class="pick"><input type="checkbox" id="claude-box"> import</label>
+              </div>
+            </div>
+            <div class="home-acts">
+              <button class="btn tiny" type="button" id="import" disabled>Import selected</button>
+              <span class="kicker" style="letter-spacing:.08em">No parser · will not grow the board</span>
+            </div>
+            <p class="home-note" id="import-note"></p>
+          </section>
+
+          <div class="split">
+            <section class="plate" aria-label="Needs-you">
+              <h3>Needs-you</h3>
+              <div class="modes">
+                <button type="button" class="mode is-on" data-mode="pane">
+                  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 4h8v16H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z" stroke="#5b4fd1" stroke-width="1.7"/><path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4" stroke="#5b4fd1" stroke-width="1.7"/><path d="M8 8h4M8 12h3" stroke="#c1632b" stroke-width="1.6" stroke-linecap="round"/></svg>
+                  <b>Pinned</b><span>Strip at the top</span>
+                </button>
+                <button type="button" class="mode" data-mode="inline">
+                  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h10" stroke="#5b4fd1" stroke-width="1.7" stroke-linecap="round"/><circle cx="18.5" cy="17" r="2.2" fill="#c1632b"/></svg>
+                  <b>Inline</b><span>Marked in place</span>
+                </button>
+              </div>
+            </section>
+            <section class="plate" aria-label="Repository colours">
+              <h3>Repo colours</h3>
+              <div class="repos">
+                <button type="button" class="repo is-yours"><span class="swatch" style="background:#7a5aa6"></span><b>example-repo</b></button>
+                <button type="button" class="repo"><span class="swatch" style="background:#3d9b8f"></span><b>cooper</b></button>
+                <button type="button" class="repo"><span class="swatch" style="background:#8a6bb5"></span><b>elio</b></button>
+                <button type="button" class="repo is-yours"><span class="swatch" style="background:#d46a2c"></span><b>burnbar</b></button>
+              </div>
+            </section>
+          </div>
+
+          <section class="horizon" aria-label="Horizon">
+            <h3>Horizon</h3>
+            <div class="meters">
+              <div class="meter">
+                <div class="ico">
+                  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="1.7"/><path d="M12 8v4.2l2.6 1.6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+                  <label for="scan">Scan</label>
+                </div>
+                <input id="scan" type="number" min="1" max="168" value="36">
+              </div>
+              <div class="meter">
+                <div class="ico">
+                  <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 12h16M16 7l5 5-5 5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  <label for="wait">Wait</label>
+                </div>
+                <select id="wait">
+                  <option>3s</option><option>5s</option><option selected>7.5s</option><option>10s</option><option>15s</option>
+                </select>
+              </div>
+              <div class="meter">
+                <div class="ico">
+                  <img src="../src/web/icons/history.svg" alt="" width="16" height="16">
+                  <label for="keep">Keep</label>
+                </div>
+                <input id="keep" type="number" min="7" max="365" value="30">
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="desk-foot">
+          <p class="verdict" id="verdict"></p>
+          <div class="acts">
+            <button class="btn primary" type="button" id="save">Save time</button>
+            <button class="btn" type="button" id="reset">Reset span</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  const saved = { fresh: 3, quiet: 45, scan: 36, keep: 30 };
+  const fresh = document.getElementById("fresh");
+  const quiet = document.getElementById("quiet");
+  const scan = document.getElementById("scan");
+  const keep = document.getElementById("keep");
+  const rail = document.getElementById("rail");
+  const verdict = document.getElementById("verdict");
+  const stage = document.getElementById("stage");
+
+  function dirty() {
+    return +fresh.value !== saved.fresh || +quiet.value !== saved.quiet || +scan.value !== saved.scan || +keep.value !== saved.keep;
+  }
+  function showV(t, err) {
+    verdict.textContent = t;
+    verdict.classList.toggle("err", !!err);
+    verdict.classList.add("show");
+  }
+  function hideV() { verdict.classList.remove("show","err"); verdict.textContent = ""; }
+
+  function syncRail() {
+    const f = Math.max(1, +fresh.value || 1);
+    const q = Math.max(1, +quiet.value || 1);
+    const total = f + q;
+    const hist = 22;
+    const unit = 100 / (total + hist);
+    rail.style.setProperty("--w", (f * unit) + "%");
+    rail.style.setProperty("--q", (q * unit) + "%");
+    document.querySelectorAll(".posture").forEach((p) => {
+      p.classList.toggle("is-on", +p.dataset.fresh === f && +p.dataset.quiet === q);
+    });
+  }
+
+  function tryClose() {
+    if (dirty()) { showV("Not saved. The span has not been written.", true); return; }
+    hideV();
+  }
+
+  document.getElementById("close").onclick = tryClose;
+  document.getElementById("veil").addEventListener("click", (e) => { if (e.target.id === "veil") tryClose(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") tryClose(); });
+
+  document.getElementById("save").onclick = () => {
+    if (+quiet.value <= +fresh.value) { showV("Not saved. Quiet must be longer than Working.", true); return; }
+    saved.fresh = +fresh.value; saved.quiet = +quiet.value; saved.scan = +scan.value; saved.keep = +keep.value;
+    showV("Saved. The board is using this span now.");
+  };
+  document.getElementById("reset").onclick = () => {
+    fresh.value = 3; quiet.value = 45; scan.value = 36; keep.value = 30;
+    saved.fresh = 3; saved.quiet = 45; saved.scan = 36; saved.keep = 30;
+    syncRail();
+    showV("Saved. The board is using this span now.");
+  };
+
+  document.querySelectorAll(".posture").forEach((p) => {
+    p.onclick = () => { fresh.value = p.dataset.fresh; quiet.value = p.dataset.quiet; syncRail(); };
+  });
+  [fresh, quiet].forEach((el) => el.addEventListener("input", syncRail));
+
+  const box = document.getElementById("claude-box");
+  const imp = document.getElementById("import");
+  const note = document.getElementById("import-note");
+  box.onchange = () => { imp.disabled = !box.checked; };
+  imp.onclick = () => {
+    note.textContent = "Imported Claude. No new board rows — this home has no parser yet.";
+    note.classList.add("show");
+    box.checked = false; imp.disabled = true;
+  };
+
+  document.querySelectorAll(".mode").forEach((m) => {
+    m.onclick = () => {
+      document.querySelectorAll(".mode").forEach((x) => x.classList.remove("is-on"));
+      m.classList.add("is-on");
+    };
+  });
+  document.querySelectorAll(".repo").forEach((r) => {
+    r.onclick = () => r.classList.toggle("is-yours");
+  });
+
+  document.getElementById("view-desk").onclick = () => stage.classList.remove("phone");
+  document.getElementById("view-phone").onclick = () => stage.classList.add("phone");
+  syncRail();
+</script>
+</body>
+</html>

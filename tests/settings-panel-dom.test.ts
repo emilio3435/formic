@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 
 /* Same TheAntHill + fake-DOM harness as tests/settings-collectors-dom.test.ts.
-   This file only asserts section order and the Save footnote. */
+   This file asserts the desk chrome, dirty close, and the six setting ids. */
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let web: any;
@@ -182,32 +182,109 @@ function withDom<T>(fn: () => T): T {
   }
 }
 
-function sectionHeadings(root: FakeNode): string[] {
-  const out: string[] = [];
-  const walk = (node: FakeNode, skipHead: boolean) => {
-    if (!node || node.nodeType !== 1) return;
-    const cls = String(node.className || "");
-    if (skipHead && cls.split(/\s+/).includes("settings-head")) return;
-    const tag = String(node.tagName || "").toLowerCase();
-    if (tag === "h3" || tag === "summary") {
-      const text = String(node.textContent || "").trim();
-      if (text) out.push(text);
-    }
-    for (const kid of node.children || []) walk(kid, false);
-  };
-  walk(root, true);
-  return out;
-}
-
-describe("Settings section order", () => {
-  test("after the title, headings are Collectors, Time, This browser, Advanced", () => {
+describe("Settings desk chrome", () => {
+  test("span first, clay Save time, no Done, no This browser, no Advanced", () => {
     withDom(() => {
       web.state.settingsPanelOpen = true;
+      web.state.settings = {
+        activityFreshMinutes: 3,
+        activityQuietMinutes: 45,
+        scanWindowHours: 36,
+        providerWaitMs: 7500,
+        historyRetentionDays: 30,
+        historyRecordLimit: 5000,
+      };
       if (web.state.paintSig) web.state.paintSig.settings = "";
       web.renderSettingsPanel();
       const panel = document.getElementById("settings-panel") as unknown as FakeNode;
-      expect(sectionHeadings(panel)).toEqual(["Collectors", "Time", "This browser", "Advanced"]);
-      expect(panel.textContent).toMatch(/Save applies to Time and Advanced/);
+      expect(panel.textContent).toMatch(/operator desk/i);
+      expect(panel.textContent).not.toMatch(/This browser/);
+      expect(panel.textContent).not.toMatch(/Save applies to Time/);
+      expect(document.querySelector("[data-fkey='settings-done']")).toBeNull();
+      expect(document.querySelector("details.settings-advanced")).toBeNull();
+      const save = document.querySelector("[data-fkey='settings-save']") as { className: string; textContent: string } | null;
+      expect(save?.className.split(/\s+/)).toContain("primary");
+      expect(save?.textContent).toMatch(/Save time/);
+      expect(document.querySelector("[data-fkey='settings-reset']")?.textContent).toMatch(/Reset span/);
+      expect(document.getElementById("setting-activityFreshMinutes")).toBeTruthy();
+      expect(document.getElementById("setting-activityQuietMinutes")).toBeTruthy();
+      expect(document.getElementById("setting-scanWindowHours")).toBeTruthy();
+      expect(document.getElementById("setting-historyRecordLimit")).toBeTruthy();
+    });
+  });
+
+  test("needs-you is two plates, not a This browser radio list", () => {
+    withDom(() => {
+      web.state.settingsPanelOpen = true;
+      web.state.needsYouDisplay = "pane";
+      if (web.state.paintSig) web.state.paintSig.settings = "";
+      web.renderSettingsPanel();
+      expect(document.querySelector("[data-fkey='needs-you-display-pane']")?.className).toMatch(/is-on/);
+      expect(document.querySelector("input[name='needs-you-display']")).toBeNull();
+      expect(document.getElementById("settings-panel")?.textContent).not.toMatch(/This browser/);
+    });
+  });
+
+  test("a snapshot tick does not remount plates or the Working/Quiet inputs", () => {
+    withDom(() => {
+      web.state.settingsPanelOpen = true;
+      web.state.needsYouDisplay = "pane";
+      web.state.settings = {
+        activityFreshMinutes: 3,
+        activityQuietMinutes: 45,
+        scanWindowHours: 36,
+        providerWaitMs: 7500,
+        historyRetentionDays: 30,
+        historyRecordLimit: 5000,
+      };
+      if (web.state.paintSig) web.state.paintSig.settings = "";
+      web.renderSettingsPanel();
+      const fresh = document.getElementById("setting-activityFreshMinutes");
+      const quiet = document.getElementById("setting-activityQuietMinutes");
+      const pane = document.querySelector("[data-fkey='needs-you-display-pane']");
+      web.renderSettingsPanel();
+      expect(document.getElementById("setting-activityFreshMinutes")).toBe(fresh);
+      expect(document.getElementById("setting-activityQuietMinutes")).toBe(quiet);
+      expect(document.querySelector("[data-fkey='needs-you-display-pane']")).toBe(pane);
+    });
+  });
+
+  test("dirty Quiet refuses close and writes the span verdict", () => {
+    withDom(() => {
+      web.state.settingsPanelOpen = true;
+      web.state.settings = { activityFreshMinutes: 3, activityQuietMinutes: 45, scanWindowHours: 36, providerWaitMs: 7500, historyRetentionDays: 30, historyRecordLimit: 5000 };
+      if (web.state.paintSig) web.state.paintSig.settings = "";
+      web.renderSettingsPanel();
+      const quiet = document.getElementById("setting-activityQuietMinutes") as unknown as { value: string };
+      quiet.value = "12";
+      web.requestCloseSettingsPanel();
+      expect(web.state.settingsPanelOpen).toBe(true);
+      expect(document.getElementById("settings-verdict")?.textContent)
+        .toBe("Not saved. The span has not been written.");
+    });
+  });
+
+  test("collector fetch does not wipe a typed Quiet or a checked import box", () => {
+    withDom(() => {
+      web.state.settingsPanelOpen = true;
+      web.state.settings = { activityFreshMinutes: 3, activityQuietMinutes: 45, scanWindowHours: 36, providerWaitMs: 7500, historyRetentionDays: 30, historyRecordLimit: 5000 };
+      web.state.collectorInstances = [
+        { id: "cursor-gui:cursor", kind: "cursor-gui", label: "Cursor", default: true, onboarded: true, ignored: false, dataDir: "/c" },
+        { id: "claude:claude", kind: "claude", label: "Claude", default: false, onboarded: false, ignored: false, reason: "needs-parser", dataDir: "/x" },
+      ];
+      if (web.state.paintSig) web.state.paintSig.settings = "";
+      web.renderSettingsPanel();
+      const quiet = document.getElementById("setting-activityQuietMinutes") as unknown as { value: string };
+      quiet.value = "12";
+      const box = document.querySelector("[data-instance='claude:claude'] input[type='checkbox']") as unknown as { checked: boolean };
+      box.checked = true;
+      web.state.collectorInstances = [
+        ...web.state.collectorInstances,
+        { id: "muse:muse", kind: "muse", label: "Muse", default: false, onboarded: false, ignored: false, dataDir: "/m" },
+      ];
+      web.renderSettingsPanel();
+      expect((document.getElementById("setting-activityQuietMinutes") as unknown as { value: string }).value).toBe("12");
+      expect((document.querySelector("[data-instance='claude:claude'] input[type='checkbox']") as unknown as { checked: boolean }).checked).toBe(true);
     });
   });
 });

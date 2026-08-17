@@ -1,12 +1,14 @@
 /* TINT-G — the board's repo grouping, mirrored into the cmux sidebar.
 
    One named, colored group per repo, holding that repo's workspaces, in the
-   window those workspaces live in. Everything here is gated on `mirrorGroups`
+   window those workspaces live in — but only groups we already created.
+   A new window never gets a minted repo folder. Everything here is gated on `mirrorGroups`
    and must undo itself when the flag goes off, which is the only reason this
    module keeps a provenance record at all: a group is ours because we wrote its
    id down when we created it, never because its name looks like a repo. Name
    matching would silently annex a group the operator made by hand and then
-   dissolve it on the next flag flip.
+   dissolve it on the next flag flip. Filing a workspace that already lives
+   in someone else's group is the same annexation: create/add pull it out.
 
    Group state lives in cmux, not here. Every pass re-reads `workspace.group.list`
    and reconciles against that truth — the operator can drag a workspace out of a
@@ -401,57 +403,45 @@ export async function reconcileRepoGroups(
     const anchorIds = new Set(groups.flatMap((group) =>
       group.anchorWorkspaceId ? [group.anchorWorkspaceId] : []));
 
+    const ourGroups = provenance.list().filter((record) =>
+      record.windowId === windowId && liveGroups.has(record.groupId));
+    const ourGroupIds = new Set(ourGroups.map((record) => record.groupId));
+    const homeGroupId = (workspaceId: string): string | undefined => {
+      for (const group of groups) {
+        if (group.anchorWorkspaceId === workspaceId) return group.id;
+        if (group.memberWorkspaceIds.includes(workspaceId)) return group.id;
+      }
+      return undefined;
+    };
+
     const byRepo = new Map<string, { hex: string; workspaceIds: string[] }>();
     for (const workspaceId of workspaceIds) {
       if (anchorIds.has(workspaceId)) continue;
       const target = targetsByWorkspace.get(workspaceId);
       if (!target) continue;
+      /* An operator-made group is not ours even when its members share a
+         repoKey. Filing those members would annex the folder by theft —
+         create/add pulls them out — which is the same harm the header
+         already forbids for name-matching. Ungrouped workspaces and
+         members of groups we created still belong in the mirror. */
+      const home = homeGroupId(workspaceId);
+      if (home && !ourGroupIds.has(home)) continue;
       const bucket = byRepo.get(target.repoKey) ?? { hex: target.hex, workspaceIds: [] };
       bucket.workspaceIds.push(workspaceId);
       byRepo.set(target.repoKey, bucket);
     }
-
-    const ourGroups = provenance.list().filter((record) =>
-      record.windowId === windowId && liveGroups.has(record.groupId));
 
     for (const [repoKey, desired] of byRepo) {
       const existing = ourGroups.find((record) => record.repoKey === repoKey);
       let live = existing ? liveGroups.get(existing.groupId)?.group : undefined;
 
       if (!live) {
-        const outcome = await rpc(runner, executable, "workspace.group.create", {
-          window_id: windowId,
-          child_workspace_ids: desired.workspaceIds,
-        });
-        if (!outcome.ok) {
-          errors.push(outcome.error ?? `cmux workspace.group.create failed for ${repoKey}`);
-          continue;
-        }
-        let created: CmuxGroup | undefined;
-        try {
-          created = parseCreatedGroup(outcome.stdout ?? "");
-        } catch (error) {
-          errors.push(
-            `cmux workspace.group.create returned invalid JSON for ${repoKey}: ${error instanceof Error ? error.message : String(error)}`,
-          );
-          continue;
-        }
-        if (!created) {
-          errors.push(`cmux workspace.group.create answered without a group id for ${repoKey}`);
-          continue;
-        }
-        mutations += 1;
-        /* Recorded before anything else can fail. A group we made but did not
-           write down is a group teardown will leave behind. */
-        await provenance.record({ groupId: created.id, repoKey, windowId });
-        live = created;
-        liveGroups.set(created.id, { windowId, group: live });
-        const missing = desired.workspaceIds.filter((id) => !live!.memberWorkspaceIds.includes(id));
-        if (missing.length) {
-          errors.push(
-            `cmux workspace.group.create for ${repoKey} did not file ${missing.join(", ")}`,
-          );
-        }
+        /* Do not mint a new sidebar group. Create-then-rename is what
+           paints a fresh window magenta with the repo name the moment a
+           Formic pane lands there, and create() pulls members out of
+           ANT · probe. We only maintain groups this module already
+           recorded for this window. */
+        continue;
       }
 
       const currentMembers = new Set(live.memberWorkspaceIds);

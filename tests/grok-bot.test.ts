@@ -5,7 +5,10 @@ import { join } from "node:path";
 import {
   collectGrokBotSessions,
   decodeBlobKey,
+  isReplicaBlob,
   parseReplica,
+  parseReplicaBlob,
+  parseRoster,
 } from "../src/server/grok-bot";
 import { buildSnapshot } from "../src/server/snapshot";
 import type { ArchiveStore } from "../src/server/types";
@@ -77,20 +80,15 @@ describe("Grok Bot sand-client-persistence", () => {
     });
   });
 
-  test("uses replica messages for the transcript tail and human-message evidence", async () => {
-    const replica = parseReplica(JSON.parse(fixture(REPLICA_FILE)).value);
-    expect(replica.transcriptTail).toBe("Parsed the Grok Bot transcript.");
-    expect(replica.humanMessages).toHaveLength(1);
-    expect(replica.humanMessages[0]).toMatchObject({
-      role: "user",
-      content: "Please parse the persisted conversation.",
+  test("reads roster lastEntry.text as the agent-close fallback", () => {
+    const rows = parseRoster({
+      rows: [{
+        id: SESSION_ID,
+        lastEntry: { kind: "text", text: "Roster agent close from lastEntry.text." },
+      }],
     });
-
-    const result = await collectGrokBotSessions([FIXTURE_ROOT], NOW);
-    expect(result.value[0]).toMatchObject({
-      transcriptTail: "Parsed the Grok Bot transcript.",
-      lastUserMessage: "Please parse the persisted conversation.",
-    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.lastEntry).toBe("Roster agent close from lastEntry.text.");
   });
 
   test("publishes roster fallback evidence and a named error when the replica is missing", async () => {
@@ -122,6 +120,30 @@ describe("Grok Bot sand-client-persistence", () => {
 
   test("returns an exact empty additive result when no roots are onboarded", async () => {
     expect(await collectGrokBotSessions([], NOW)).toEqual({ value: [], errors: [] });
+  });
+
+  test("a shared roster UUID across two apps stays as two instance-qualified rows", async () => {
+    const parent = mkdtempSync(join(tmpdir(), "anthill-grok-bot-collision-"));
+    const bot1 = join(parent, "Grok Bot");
+    const bot2 = join(parent, "Grok Bot 2");
+    mkdirSync(join(bot1, PERSISTENCE), { recursive: true });
+    mkdirSync(join(bot2, PERSISTENCE), { recursive: true });
+    copyFixture(bot1, ROSTER_FILE);
+    copyFixture(bot1, REPLICA_FILE);
+    copyFixture(bot2, ROSTER_FILE);
+    copyFixture(bot2, REPLICA_FILE);
+
+    const result = await collectGrokBotSessions([bot1, bot2], NOW);
+    const ids = result.value.map((agent) => agent.id).sort();
+    expect(ids).toEqual([
+      `grok:bot:grok-bot-2:${SESSION_ID}`,
+      `grok:bot:grok-bot:${SESSION_ID}`,
+    ]);
+    expect(result.value.every((agent) => agent.sourceSessionId === `bot:${SESSION_ID}`)).toBe(true);
+    expect(new Set(result.value.map((agent) => agent.instanceId))).toEqual(new Set([
+      "grok-bot:grok-bot",
+      "grok-bot:grok-bot-2",
+    ]));
   });
 
   test("treats lastActivityAt 0 as missing and keeps the row via updatedAt", async () => {
@@ -170,6 +192,324 @@ describe("Grok Bot sand-client-persistence", () => {
 
     expect(result).toEqual({ value: [], errors: [] });
     expect(encodeBlobKey(REPLICA_KEY)).toBe(REPLICA_FILE);
+  });
+});
+
+describe("Grok Bot live schemaVersion 1 replica", () => {
+  test("maps send-message text to assistant and keeps role:user as user", () => {
+    const replica = parseReplica({
+      entries: [
+        {
+          kind: "message",
+          role: "user",
+          content: "Please parse the persisted conversation.",
+          timestampMs: NOW - 4_000,
+        },
+        {
+          kind: "send-message",
+          message: { type: "text", content: "Parsed the Grok Bot transcript." },
+          timestampMs: NOW - 3_000,
+        },
+      ],
+    });
+
+    expect(replica.humanMessages).toEqual([
+      {
+        role: "user",
+        content: "Please parse the persisted conversation.",
+        timestamp: new Date(NOW - 4_000).toISOString(),
+      },
+      {
+        role: "assistant",
+        content: "Parsed the Grok Bot transcript.",
+        timestamp: new Date(NOW - 3_000).toISOString(),
+      },
+    ]);
+    expect(replica.transcriptTail).toBe("Parsed the Grok Bot transcript.");
+  });
+
+  test("parseReplicaBlob unwraps the schemaVersion envelope before the same entry rules", () => {
+    const replica = parseReplicaBlob(JSON.stringify({
+      schemaVersion: 1,
+      value: {
+        entries: [
+          {
+            kind: "message",
+            role: "user",
+            content: "Please parse the persisted conversation.",
+            timestampMs: NOW - 4_000,
+          },
+          {
+            kind: "send-message",
+            message: { type: "text", content: "Parsed the Grok Bot transcript." },
+            timestampMs: NOW - 3_000,
+          },
+        ],
+      },
+    }));
+
+    expect(isReplicaBlob(JSON.stringify({ schemaVersion: 1, value: { entries: [] } }))).toBe(true);
+    expect(isReplicaBlob(JSON.stringify({ type: "event_msg", payload: { type: "user_message" } }))).toBe(false);
+    expect(replica.humanMessages.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(replica.transcriptTail).toBe("Parsed the Grok Bot transcript.");
+  });
+
+  test("does not label unwrapped send-message text as the user turn", () => {
+    const replica = parseReplica({
+      entries: [
+        {
+          kind: "send-message",
+          message: { type: "text", content: "I finished the close." },
+          timestampMs: NOW - 1_000,
+        },
+      ],
+    });
+
+    expect(replica.humanMessages).toEqual([
+      {
+        role: "assistant",
+        content: "I finished the close.",
+        timestamp: new Date(NOW - 1_000).toISOString(),
+      },
+    ]);
+    expect(replica.humanMessages.some((message) => message.role === "user")).toBe(false);
+  });
+
+  test("skips attachment, widget, cursor-agent, user-attachment, and inter-agent copies", () => {
+    const replica = parseReplica({
+      entries: [
+        {
+          kind: "message",
+          role: "user",
+          content: "Look at this file.",
+          timestampMs: NOW - 6_000,
+        },
+        { kind: "user-attachment", timestampMs: NOW - 5_500 },
+        {
+          kind: "send-message",
+          message: { type: "attachment", name: "notes.md" },
+          timestampMs: NOW - 5_000,
+        },
+        {
+          kind: "send-message",
+          message: { type: "widget", id: "card-1" },
+          timestampMs: NOW - 4_500,
+        },
+        {
+          kind: "send-message",
+          message: { type: "cursor-agent", id: "agent-1" },
+          timestampMs: NOW - 4_000,
+        },
+        {
+          kind: "send-message",
+          message: { type: "text", content: "Here is the close after the cards." },
+          timestampMs: NOW - 3_000,
+        },
+        {
+          kind: "message",
+          role: "assistant",
+          toAgent: "other-bot",
+          content: "Inter-agent copy must not become the row close.",
+          timestampMs: NOW - 2_000,
+        },
+      ],
+    });
+
+    expect(replica.humanMessages.map((message) => message.content)).toEqual([
+      "Look at this file.",
+      "Here is the close after the cards.",
+    ]);
+    expect(replica.humanMessages[1]).toMatchObject({
+      role: "assistant",
+      content: "Here is the close after the cards.",
+    });
+    expect(replica.transcriptTail).toBe("Here is the close after the cards.");
+  });
+
+  test("a later send-message replaces the row close after a new user turn", async () => {
+    const root = tempRoot();
+    writeBlob(root, ROSTER_KEY, {
+      schemaVersion: 1,
+      value: {
+        rows: [{
+          id: SESSION_ID,
+          name: "Formic Agent",
+          lastActivityAt: NOW - 1_000,
+          lastEntry: { kind: "text", text: "Roster close must lose to the replica." },
+        }],
+      },
+    });
+    writeBlob(root, REPLICA_KEY, {
+      schemaVersion: 1,
+      value: {
+        entries: [
+          {
+            kind: "message",
+            role: "user",
+            content: "Please parse the persisted conversation.",
+            timestampMs: NOW - 5_000,
+          },
+          {
+            kind: "send-message",
+            message: { type: "text", content: "Parsed the Grok Bot transcript." },
+            timestampMs: NOW - 4_000,
+          },
+          {
+            kind: "message",
+            role: "user",
+            content: "Ship the closer next.",
+            timestampMs: NOW - 3_000,
+          },
+          {
+            kind: "send-message",
+            content: { type: "text", content: "Shipped the closer from send-message." },
+            timestampMs: NOW - 2_000,
+          },
+        ],
+      },
+    });
+
+    const result = await collectGrokBotSessions([root], NOW);
+    expect(result.errors).toEqual([]);
+    expect(result.value[0]).toMatchObject({
+      lastUserMessage: "Ship the closer next.",
+      lastAgentMessage: "Shipped the closer from send-message.",
+      lastAgentClosing: "Shipped the closer from send-message.",
+      lastAgentChatBody: "Shipped the closer from send-message.",
+      transcriptTail: "Shipped the closer from send-message.",
+    });
+  });
+
+  test("user-only replicas stay user-only", async () => {
+    const root = tempRoot();
+    writeBlob(root, ROSTER_KEY, {
+      schemaVersion: 1,
+      value: {
+        rows: [{
+          id: SESSION_ID,
+          lastActivityAt: NOW - 1_000,
+          lastEntry: { kind: "text", text: "Stale roster close must not invent an agent turn." },
+        }],
+      },
+    });
+    writeBlob(root, REPLICA_KEY, {
+      schemaVersion: 1,
+      value: {
+        entries: [
+          {
+            kind: "message",
+            role: "user",
+            content: "Just a question while the bot is quiet.",
+            timestampMs: NOW - 2_000,
+          },
+        ],
+      },
+    });
+
+    const result = await collectGrokBotSessions([root], NOW);
+    expect(result.value[0]).toMatchObject({
+      lastUserMessage: "Just a question while the bot is quiet.",
+      lastAgentMessage: null,
+      lastAgentClosing: null,
+      lastAgentChatBody: null,
+    });
+  });
+
+  test("last event send-message publishes no workingSince", async () => {
+    const root = tempRoot();
+    writeBlob(root, ROSTER_KEY, {
+      schemaVersion: 1,
+      value: {
+        rows: [{
+          id: SESSION_ID,
+          name: "Mr. Clean",
+          lastActivityAt: NOW - 1_000,
+        }],
+      },
+    });
+    writeBlob(root, REPLICA_KEY, {
+      schemaVersion: 1,
+      value: {
+        entries: [
+          {
+            kind: "message",
+            role: "user",
+            content: "Please finish the turn.",
+            timestampMs: NOW - 5_000,
+          },
+          {
+            kind: "send-message",
+            message: { type: "text", content: "Finished the turn." },
+            timestampMs: NOW - 2_000,
+          },
+        ],
+      },
+    });
+
+    const result = await collectGrokBotSessions([root], NOW);
+    expect(result.value[0]?.lastThreadAt).toBe(new Date(NOW - 2_000).toISOString());
+    expect(result.value[0]?.workingSince).toBeUndefined();
+  });
+
+  test("last event user keeps the workingSince streak open", async () => {
+    const root = tempRoot();
+    writeBlob(root, ROSTER_KEY, {
+      schemaVersion: 1,
+      value: {
+        rows: [{
+          id: SESSION_ID,
+          name: "Formic Agent",
+          lastActivityAt: NOW - 1_000,
+        }],
+      },
+    });
+    writeBlob(root, REPLICA_KEY, {
+      schemaVersion: 1,
+      value: {
+        entries: [
+          {
+            kind: "message",
+            role: "user",
+            content: "Please finish the turn.",
+            timestampMs: NOW - 5_000,
+          },
+          {
+            kind: "send-message",
+            message: { type: "text", content: "Finished the turn." },
+            timestampMs: NOW - 3_000,
+          },
+          {
+            kind: "message",
+            role: "user",
+            content: "Start the next turn.",
+            timestampMs: NOW - 1_000,
+          },
+        ],
+      },
+    });
+
+    const result = await collectGrokBotSessions([root], NOW);
+    expect(result.value[0]?.workingSince).toBe(new Date(NOW - 1_000).toISOString());
+    expect(result.value[0]?.lastThreadAt).toBe(new Date(NOW - 1_000).toISOString());
+  });
+
+  test("missing replica falls back to lastEntry.text as the agent close", async () => {
+    const root = tempRoot();
+    writeBlob(root, ROSTER_KEY, {
+      schemaVersion: 1,
+      value: {
+        rows: [{
+          id: SESSION_ID,
+          lastActivityAt: NOW - 1_000,
+          lastEntry: { kind: "text", text: "Agent close from roster lastEntry." },
+        }],
+      },
+    });
+
+    const result = await collectGrokBotSessions([root], NOW);
+    expect(result.value[0]?.transcriptTail).toBe("Agent close from roster lastEntry.");
+    expect(result.errors.some((error) => error.includes(`replica ${SESSION_ID}`) && error.includes("missing")))
+      .toBe(true);
   });
 });
 

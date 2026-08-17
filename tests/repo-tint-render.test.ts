@@ -131,6 +131,12 @@ function walk(node: unknown, hit: (node: FakeNode) => boolean, out: FakeNode[] =
 const byClass = (root: unknown, name: string): FakeNode[] =>
   walk(root, (node) => node.classList.contains(name));
 
+const repoNameOf = (node: FakeNode): string =>
+  node.children.find((kid) => kid.tagName === "b")?.textContent ?? "";
+
+const repoColorInput = (root: unknown, key: string): FakeNode | undefined =>
+  walk(root, (node) => node.dataset.fkey === "repo-color:" + key)[0];
+
 const STORM = "#2e66a8";
 const SIENNA = "#b05f3a";
 const COLOUR_HELP = "A colour you pick here follows the repository name on the board, including every clone of that GitHub repo, and travels to its cmux workspaces.";
@@ -253,10 +259,8 @@ describe("the wire join: a real GET envelope reaches a rendered row", () => {
     M.state.repoColorSettings = envelope.settings;
     M.state.liveRepoKeys = envelope.liveKeys;
     const region = withDom(() => M.renderRepoColorSettings()) as unknown as FakeNode;
-    expect(byClass(region, "repo-colors-name").map((node) => node.textContent))
-      .toContain("the-ant-hill");
-    expect(byClass(region, "repo-colors-name").map((node) => node.textContent))
-      .not.toContain("the-mountain");
+    expect(byClass(region, "repo").map(repoNameOf)).toContain("the-ant-hill");
+    expect(byClass(region, "repo").map(repoNameOf)).not.toContain("the-mountain");
   });
 
   test("a no-origin folder still joins when the printed name and the colour key differ", () => {
@@ -626,21 +630,24 @@ describe("renderRepoColorSettings", () => {
   test("one row per repository, sorted, each swatch carrying its own hex", () => {
     M.state.liveRepoKeys = ["the-mountain", "formic"];
     const region = withDom(() => M.renderRepoColorSettings(settings)) as unknown as FakeNode;
-    const rows = byClass(region, "repo-colors-row");
-    expect(rows.map((row) => byClass(row, "repo-colors-name")[0]!.textContent))
-      .toEqual(["formic", "the-mountain"]);
-    expect(rows[0]!.props["--repo-tint"]).toBe("#123456");
-    expect(rows[1]!.props["--repo-tint"]).toBe(STORM);
+    const repos = byClass(region, "repo");
+    expect(repos.map(repoNameOf)).toEqual(["formic", "the-mountain"]);
+    expect(repos[0]!.props["--repo-tint"]).toBe("#123456");
+    expect(repos[1]!.props["--repo-tint"]).toBe(STORM);
+    expect(repoColorInput(region, "formic")?.dataset.fkey).toBe("repo-color:formic");
+    expect(repoColorInput(region, "the-mountain")?.dataset.fkey).toBe("repo-color:the-mountain");
+    const picker = repoColorInput(region, "formic")!;
+    expect(picker.attributes.tabindex).toBe("-1");
+    expect(walk(repos[0], (node) => node === picker)).toHaveLength(0);
   });
 
-  test("only an operator's own colour offers a reset", () => {
+  test("only an operator's own colour wears the yours ring", () => {
     M.state.liveRepoKeys = ["the-mountain", "formic"];
     const region = withDom(() => M.renderRepoColorSettings(settings)) as unknown as FakeNode;
-    const rows = byClass(region, "repo-colors-row");
-    expect(byClass(rows[0]!, "repo-colors-reset")).toHaveLength(1); // formic, user
-    expect(byClass(rows[1]!, "repo-colors-reset")).toHaveLength(0); // the-mountain, auto
-    expect(byClass(rows[0]!, "repo-colors-source")[0]!.textContent).toBe("your colour");
-    expect(byClass(rows[1]!, "repo-colors-source")[0]!.textContent).toBe("auto");
+    const repos = byClass(region, "repo");
+    expect(repos[0]!.classList.contains("is-yours")).toBe(true); // formic, user
+    expect(repos[1]!.classList.contains("is-yours")).toBe(false); // the-mountain, auto
+    expect(byClass(region, "repo-colors-reset")).toHaveLength(0);
   });
 
   test("with nothing assigned it says so rather than rendering an empty box", () => {
@@ -651,7 +658,7 @@ describe("renderRepoColorSettings", () => {
   test("the visible name is the band, the-ant-hill, not the-mountain", () => {
     M.state.liveRepoKeys = originEnvelope.liveKeys;
     const region = withDom(() => M.renderRepoColorSettings(originEnvelope.settings)) as unknown as FakeNode;
-    const names = byClass(region, "repo-colors-name").map((node) => node.textContent);
+    const names = byClass(region, "repo").map(repoNameOf);
     expect(names).toContain("the-ant-hill");
     expect(names).not.toContain("the-mountain");
   });
@@ -659,16 +666,15 @@ describe("renderRepoColorSettings", () => {
   test("a persisted repo missing from liveKeys is not on the board", () => {
     M.state.liveRepoKeys = originEnvelope.liveKeys;
     const region = withDom(() => M.renderRepoColorSettings(originEnvelope.settings)) as unknown as FakeNode;
-    const rows = byClass(region, "repo-colors-row");
-    expect(rows.map((row) => byClass(row, "repo-colors-name")[0]!.textContent))
-      .toEqual(["the-ant-hill", "cooper-scheduler"]);
-    expect(rows[0]!.classList.contains("is-absent")).toBe(false);
-    expect(rows[1]!.classList.contains("is-absent")).toBe(true);
-    expect(byClass(rows[0]!, "repo-colors-source")[0]!.textContent).toBe("auto");
-    expect(byClass(rows[1]!, "repo-colors-source")[0]!.textContent).toBe("your colour · not on the board");
-    expect(byClass(rows[0]!, "repo-colors-swatch")[0]!.attributes["aria-label"])
+    const repos = byClass(region, "repo");
+    expect(repos.map(repoNameOf)).toEqual(["the-ant-hill", "cooper-scheduler"]);
+    expect(repos[0]!.classList.contains("is-absent")).toBe(false);
+    expect(repos[1]!.classList.contains("is-absent")).toBe(true);
+    expect(repos[0]!.classList.contains("is-yours")).toBe(false);
+    expect(repos[1]!.classList.contains("is-yours")).toBe(true);
+    expect(repoColorInput(region, "the-ant-hill")!.attributes["aria-label"])
       .toBe("Colour for the-ant-hill");
-    expect(byClass(rows[1]!, "repo-colors-swatch")[0]!.attributes["aria-label"])
+    expect(repoColorInput(region, "cooper-scheduler")!.attributes["aria-label"])
       .toBe("Colour for cooper-scheduler, not on the board");
   });
 
@@ -676,20 +682,20 @@ describe("renderRepoColorSettings", () => {
     /* C < T, so alphabetical-only would put cooper-scheduler first. */
     M.state.liveRepoKeys = originEnvelope.liveKeys;
     const region = withDom(() => M.renderRepoColorSettings(originEnvelope.settings)) as unknown as FakeNode;
-    expect(byClass(region, "repo-colors-row").map((row) => byClass(row, "repo-colors-name")[0]!.textContent))
+    expect(byClass(region, "repo").map(repoNameOf))
       .toEqual(["the-ant-hill", "cooper-scheduler"]);
   });
 
-  test("an auto assignment off the board says Not on the board", () => {
+  test("an auto assignment off the board is absent, not yours", () => {
     M.state.liveRepoKeys = [];
     const region = withDom(() => M.renderRepoColorSettings({
       assignments: {
         "the-ant-hill": { repoKey: "the-ant-hill", hex: STORM, slot: 1, source: "auto" },
       },
     })) as unknown as FakeNode;
-    const row = byClass(region, "repo-colors-row")[0]!;
-    expect(row.classList.contains("is-absent")).toBe(true);
-    expect(byClass(row, "repo-colors-source")[0]!.textContent).toBe("Not on the board");
+    const repo = byClass(region, "repo")[0]!;
+    expect(repo.classList.contains("is-absent")).toBe(true);
+    expect(repo.classList.contains("is-yours")).toBe(false);
   });
 
   test("a colour GET does not wipe a number the operator is typing", () => {
@@ -712,18 +718,41 @@ describe("renderRepoColorSettings", () => {
     });
   });
 
-  test("legend help follows the repository name, including clones", () => {
+  test("the colour plate drops the help paragraph; swatches stay the writer", () => {
     withDom(() => {
       M.state.settingsPanelOpen = true;
       M.renderSettingsPanel();
       const helps = walk(byId.get("settings-panel"), (node) => node.classList.contains("settings-help"));
-      expect(helps.map((node) => node.textContent)).toContain(COLOUR_HELP);
+      expect(helps.map((node) => node.textContent)).not.toContain(COLOUR_HELP);
+      expect(document.getElementById("settings-panel")?.textContent).not.toMatch(/This browser/);
     });
   });
 
-  test("absent rows are sand, not faded — the swatch stays a real colour", () => {
-    expect(styles).toMatch(/\.repo-colors-row\.is-absent\s*\{[^}]*background:\s*var\(--sand\)/);
-    expect(styles).not.toMatch(/\.repo-colors-row\.is-absent\s*\{[^}]*\bopacity\s*:/);
+  test("second click on a yours swatch clears the override", async () => {
+    const calls: { url: string; method: string }[] = [];
+    const realFetch = (globalThis as { fetch?: unknown }).fetch;
+    (globalThis as unknown as { fetch: unknown }).fetch = async (url: string, init?: { method?: string }) => {
+      calls.push({ url: String(url), method: init?.method ?? "GET" });
+      return new Response(JSON.stringify({ ok: true, settings: { assignments: {} }, repoNames: {}, liveKeys: [] }), {
+        status: 200, headers: { "content-type": "application/json" },
+      });
+    };
+    try {
+      M.state.liveRepoKeys = ["formic"];
+      await withDom(() => {
+        const region = M.renderRepoColorSettings(settings) as unknown as FakeNode;
+        const yours = byClass(region, "repo").find((node) => node.classList.contains("is-yours"));
+        return yours?.listeners.click?.[0]?.();
+      }).catch(() => {});
+    } finally {
+      (globalThis as unknown as { fetch: unknown }).fetch = realFetch;
+    }
+    expect(calls[0]).toEqual({ url: "/api/repo-colors/formic", method: "DELETE" });
+  });
+
+  test("absent swatches stay a real colour — the name dims, the fill does not fade", () => {
+    expect(styles).toMatch(/\.repo\.is-absent b\s*\{[^}]*color:\s*var\(--faint\)/);
+    expect(styles).not.toMatch(/\.repo\.is-absent\s*\{[^}]*\bopacity\s*:/);
   });
 });
 

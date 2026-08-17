@@ -174,7 +174,7 @@ describe("Muse and Antigravity specifics", () => {
 });
 
 describe("Grok Build specifics", () => {
-  test("summary and updates paths both identify the nested session", () => {
+  test("B-events-path: summary, updates, and events paths identify only the nested session", () => {
     const root = `/Users/me/.grok/sessions/%2FUsers%2Fme%2Fproject/${ID}`;
     expect(identityFromSessionPath(`${root}/summary.json`)).toEqual({
       provider: "grok", value: ID, full: true,
@@ -182,6 +182,20 @@ describe("Grok Build specifics", () => {
     expect(identityFromSessionPath(`${root}/updates.jsonl`)).toEqual({
       provider: "grok", value: ID, full: true,
     });
+    expect(identityFromSessionPath(`${root}/events.jsonl`)).toEqual({
+      provider: "grok", value: ID, full: true,
+    });
+    expect(identityFromSessionPath(`/private/tmp/${ID}/events.jsonl`)).toBeNull();
+  });
+
+  test("B-agent-still-refused: bare agent commands stay unrecognized while the Cursor versioned wrapper stays recognized", () => {
+    expect(isRecognizedAgentProcess("agent")).toBeFalse();
+    expect(isRecognizedAgentProcess("agent --use-system-ca /tmp/index.js")).toBeFalse();
+    expect(isRecognizedAgentProcess([
+      "/Users/me/.local/bin/agent",
+      "--use-system-ca",
+      "/Users/me/.local/share/cursor-agent/versions/2026.08.04-aaa8809/index.js",
+    ].join(" "))).toBeTrue();
   });
 
   test("-r and --resume name a Grok session; -c remains a recognized process", () => {

@@ -16,7 +16,7 @@
    requests: it decides WHAT to say, never where it lands on screen.  */
 
 import { fmtElapsed, providerLabel, PROVIDER_LABELS } from "./text-formatters.js";
-import { alerting, deriveActivity, deriveControlState, deriveOutcome, isTerminal, livenessState, provenanceOf } from "./agent-model.js";
+import { alerting, deriveActivity, deriveControlState, deriveOutcome, isGrokBotAgent, isTerminal, livenessState, provenanceOf } from "./agent-model.js";
 import { state } from "./client-state.js";
 import { ROLE_ALIASES, ROLE_LABELS } from "./client-catalogs.js";
 
@@ -29,6 +29,7 @@ export const IDENTITY_TIER_LABELS = {
   recorded: "Recorded target",
   session: "Session ID on a terminal",
   cwd: "Working folder",
+  gateway: "Grok Bot gateway",
 };
 
 export const IDENTITY_OUTCOME_LABELS = {
@@ -59,7 +60,73 @@ export const IDENTITY_CAUSES = {
     why: "No cmux terminal reports this session, so there is nothing to route Focus or Send to.",
     next: "Open it in a cmux pane (or start the agent from one) and the next scan binds it.",
   },
+  "gateway-no-token": {
+    why: "No gateway token is on this Grok Bot instance's box, so Formic cannot send into this chat.",
+    next: "The box is reachable, but its gateway record has no token Formic can use.",
+  },
+  "unreachable-box": {
+    why: "This Grok Bot instance's box is unreachable from this Mac, so Formic cannot send into this chat.",
+    next: "Formic has no attested local forward to that box's gateway.",
+  },
+  "gateway-probe-rejected": {
+    why: "This Grok Bot instance's gateway rejected the probe, so Formic cannot send into this chat.",
+    next: "The attach is up, but listAgents did not succeed. Send stays off until a later probe succeeds.",
+  },
+  /* Not a conflict. The Grok TUI hosts several top-level chats in one process,
+     so there is no per-chat terminal to attest — nobody is fighting, and the
+     "end one of the sessions" instruction the contested-terminal entry gives
+     would send an operator to close work for no reason. */
+  "shared-host": {
+    why: "One terminal is hosting several chats at once, so there is no single session on that pane to type into.",
+    next: "Give this chat its own pane if you need Send here; Focus still works, and nothing is broken.",
+  },
+  /* A quarantine whose step-by-step trace is not on this snapshot — which, on
+     the live board, is EVERY quarantined row: `identityTrace` is a
+     non-enumerable getter and SSE strips it, so the tier walk below sees no
+     steps at all. It used to conclude `missing` from that silence and print
+     "No cmux terminal reports this session" directly beneath a reason sentence
+     naming the terminal the session is on. A banner whose two halves contradict
+     each other teaches an operator to believe neither.
+
+     Says less instead of guessing which piece of evidence collided. The next
+     step is the server's own wording for this refusal (targets.ts, the
+     `resolution === "ambiguous"` remedy), so the banner and a refused Send
+     cannot give different instructions. */
+  "contested-unknown": {
+    why: "The resolver's own account of the collision is above. The step-by-step trace is not carried on this snapshot, so the board will not guess at which piece of evidence collided.",
+    next: "Inspect the routing evidence, then remove the conflicting claim so one exact session identity remains.",
+  },
 };
+
+/* D5. `target.reason` is the server's operator sentence and the only one the
+   client prints — but a live reason carries the cmux surface UUID it was built
+   from ("cmux 8B1F… has conflicting open agent session files on ttys011"), and
+   an ID in a hover is noise the reader cannot act on. Established rule, and the
+   reason the banner was ID-free before: raw identifiers belong in Evidence.
+
+   Strips the ID and nothing else. Rewriting the sentence here is what the
+   ground rules forbid — two wordings for one reason is how the board came to
+   say "Conflicting identity evidence" about a folder that was merely shared. */
+const SURFACE_UUID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
+/* "cmux <id>" is the SUBJECT of the server's sentence ("cmux <id> has
+   conflicting open agent session files on ttys011"), so deleting the id alone
+   leaves "cmux has conflicting open agent session files" — which blames cmux
+   for a collision between two sessions. The id is replaced by the thing it
+   named rather than removed. */
+const NAMED_SURFACE = new RegExp("\\bcmux\\s+" + SURFACE_UUID + "\\b", "g");
+const BARE_SURFACE = new RegExp("\\b" + SURFACE_UUID + "\\b", "g");
+
+export function operatorReason(agent) {
+  const raw = agent && agent.target && agent.target.reason;
+  if (typeof raw !== "string" || !raw.trim()) return "";
+  return raw
+    .replace(NAMED_SURFACE, "this pane")
+    .replace(BARE_SURFACE, "")
+    /* What a stripped id leaves behind mid-sentence. */
+    .replace(/\s+([:;,.])/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
 
 // Progress 0–100 per work state (normative). blocked keeps a mid value but
 // its ember tone (not the %) carries the alarm.
@@ -247,9 +314,37 @@ export function controlUnavailableText(controlState, agent = null) {
        the mechanism, and `nextStep` owns the action. */
     return "Send and Interrupt are off: cmux cannot confirm which session is on this pane.";
   }
+  if (isGrokBotAgent(agent) && controlState !== "unproven" && controlState !== "quarantined") {
+    const miss = agent && agent.target && agent.target.gatewayMiss;
+    if (miss === "no-token") {
+      return "Controls are unavailable — no gateway token is on this instance's box.";
+    }
+    if (miss === "probe-rejected") {
+      return "Controls are unavailable — this instance's gateway rejected the probe.";
+    }
+    return "Controls are unavailable — this instance's box is unreachable from this Mac.";
+  }
+  /* D5. The server knows WHY routing refused and says so in one sentence; the
+     client used to throw that away and print a single generic line for every
+     refusal. On the live board that line read "Conflicting identity evidence"
+     over sessions that were merely sharing a folder, and over Grok chats that
+     were sharing a host — an accusation the evidence did not support.
+
+     Only for the two states whose reason is about routing. `unproven` is
+     handled above with its own three-part sentence, and an ended session's
+     controls are off for a reason that has nothing to do with the pane. */
+  const reason = operatorReason(agent);
+  if (reason && (controlState === "quarantined" || sharedHost(agent))) return reason;
   return controlState === "quarantined"
     ? "Controls are unavailable — this session's identity is ambiguous, so control routing is quarantined."
     : "Controls are unavailable — no safe cmux target is linked to this session.";
+}
+
+/* One process hosting several chats. `shared-host` is `observed-only`, not
+   quarantined — no red mark, no accusation — so it needs its own predicate
+   rather than riding the quarantine branches. */
+export function sharedHost(agent) {
+  return !!(agent && agent.target && agent.target.resolution === "shared-host");
 }
 
 /* Short folder/Home identity for when cmux titles are unavailable. */
@@ -305,11 +400,29 @@ export function focusDestinationHint(agent) {
 
 /* Rename target: workspace first (shared terminal identity), else the agent. */
 
-export function identityCause(view) {
+export function identityCause(view, agent) {
+  if (isGrokBotAgent(agent)
+    || (view && view.matchedTier === "gateway")
+    || (view && Array.isArray(view.steps) && view.steps.some((step) => step.tier === "gateway"))) {
+    const miss = agent && agent.target && agent.target.gatewayMiss;
+    if (miss === "no-token") return "gateway-no-token";
+    if (miss === "probe-rejected") return "gateway-probe-rejected";
+    return "unreachable-box";
+  }
+  /* Checked before the tier walk. A shared host refuses at the session tier the
+     same way a contested terminal does, and reading the tier alone would give
+     it the contested-terminal instruction — "end one of the sessions sharing
+     that terminal" — for a pane where nobody is contesting anything. */
+  if (sharedHost(agent) || view.resolution === "shared-host") return "shared-host";
   const refused = (tier) => view.steps.some((step) =>
     step.tier === tier && (step.outcome === "quarantined" || step.outcome === "ambiguous"));
   if (refused("session")) return "contested-terminal";
   if (refused("cwd")) return "shared-folder";
+  /* Only reachable with no refusing step to read. An `ambiguous` resolution is
+     positive evidence that a surface DID match and collided, so `missing` — "no
+     cmux terminal reports this session" — is the one answer the board knows to
+     be false here. */
+  if (view.resolution === "ambiguous") return "contested-unknown";
   return "missing";
 }
 
@@ -614,7 +727,7 @@ export function quarantineBrief(agent, control = deriveControlState(agent)) {
   }
   if (control === "linked") return null;
   const view = identityTraceView(agent);
-  const cause = identityCause(view);
+  const cause = identityCause(view, agent);
   /* Without this branch the banner throws. It renders whenever a write control
      is disabled, and the fail-closed gate disables Send on a routable pane —
      a state that previously could not exist, so this returned null and the
@@ -647,7 +760,10 @@ export function quarantineBrief(agent, control = deriveControlState(agent)) {
   }
   return {
     title: control === "quarantined" ? "Control routing locked." : "Controls unavailable.",
-    summary: controlUnavailableText(control),
+    // The agent, so the summary can be the server's own reason (D5). Without it
+    // this branch printed the generic line for every refusal that reaches it,
+    // including a shared host that is not a refusal about identity at all.
+    summary: controlUnavailableText(control, agent),
     why: IDENTITY_CAUSES[cause].why,
     nextStep: IDENTITY_CAUSES[cause].next,
     cause,

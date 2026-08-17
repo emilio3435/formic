@@ -29,8 +29,13 @@ import {
   loadTranscript,
   normalizeTranscript,
   renderTranscriptFeedLead,
+  isGrokBotAgent,
+  shouldRefreshHeldTranscript,
+  thoughtGroupNode,
+  thoughtText,
   toolActivityNode,
   transcriptLineNode,
+  transcriptThreadStamp,
   transcriptWindow,
   TRANSCRIPT_RENDER_CAP,
 } from "./transcript.js";
@@ -82,6 +87,7 @@ import {
   lastActionFor,
   liveElapsedMs,
   liveElapsedText,
+  operatorReason,
   preferredRenameTarget,
   presentationLabelKey,
   provenanceLabel,
@@ -218,6 +224,7 @@ import {
   renderSettingsPanel as paintSettingsForm,
   openSettingsPanel,
   closeSettingsPanel,
+  requestCloseSettingsPanel,
   paintSettingsToggle,
   bindSettingsPanel,
 } from "./settings-panel.js";
@@ -246,9 +253,17 @@ bindSettingsPanel({
    case (Grok Build, no cmux surface) and Send already stays disabled —
    painting a hollow ring restates the drawer. Quarantine is the remaining
    mark: a real, fixable identity conflict. */
-function watchOnlyMark(control) {
+/* D5. The hint is the SERVER's sentence when there is one. The generic line
+   below is a guess about which of three different situations this is, and on the
+   live board it guessed wrong on nearly every row: "Conflicting identity
+   evidence" was shown over Grok chats sharing a host and over sessions sharing a
+   folder, neither of which is conflicting evidence about anything. It stays as
+   the fallback for a quarantine the server did not explain, because a row with a
+   red mark and no words is worse than an imprecise sentence. */
+function watchOnlyMark(control, agent) {
   if (control === "quarantined") {
-    return { key: "quarantined", label: "Controls quarantined", hint: CONTROL_HINTS.quarantined };
+    const reason = operatorReason(agent);
+    return { key: "quarantined", label: "Controls quarantined", hint: reason || CONTROL_HINTS.quarantined };
   }
   return null;
 }
@@ -765,12 +780,37 @@ function reorderWidgetIds(ids, id, direction) {
   return ordered;
 }
 
+/* D4. Readings is a verdict about INSTRUMENTS — collectors, the control plane,
+   the snapshot feed — and identity routing is none of those.
+
+   An identity conflict means Send is off for some rows. It does not mean a
+   single number on the board is untrustworthy, which is the only thing this
+   chip claims. Folding it in is what made the chip permanently red on Emilio's
+   board (collectors 9/9 healthy, /api/health `healthy`, chip "Readings
+   degraded") and trained him to stop reading it. Those strings stay findings in
+   the notification center, where they have a route and a remedy.
+
+   The three sentences are the server's, verbatim from identity.ts, and this
+   list mirrors IDENTITY_CONFLICT_PATTERN in snapshot-operator-issues.ts — the
+   client cannot import a server module, so the duplication is the seam. The two
+   shared-host/two-owner reasons are matched defensively: the shared-host lane
+   does not push them into `errors`, and if a later change did, this chip must
+   not be how we find out. Match on the SENTENCE, not on a substring like
+   "conflict" — a collector fault that happens to use the word is a real
+   instrument failure and must still degrade. */
+const IDENTITY_ROUTING_ERROR = /conflicting open agent session files|refused command identity:|conflicting recognized agent commands|share this terminal; Send stays off/i;
+
+function instrumentErrors(control) {
+  const errors = (control && control.errors) || [];
+  return errors.filter((error) => !IDENTITY_ROUTING_ERROR.test(String(error)));
+}
+
 function systemStatus(snap, conn = "live", fetchFailed = state.fetchFailed) {
   if (!snap || conn === "offline") return { key: "offline", label: "Offline", tone: "offline" };
   const control = snap.controlHealth;
   const source = snap.totals && snap.totals.sourceHealth;
   const sourceDegraded = source && source.total > 0 && (source.degraded > 0 || source.healthy < source.total);
-  const controlDegraded = !control || control.cmuxReachable !== true || control.errors?.length > 0 || control.staleSources?.length > 0;
+  const controlDegraded = !control || control.cmuxReachable !== true || instrumentErrors(control).length > 0 || control.staleSources?.length > 0;
   const feedDegraded = conn !== "live";
   // A snapshot poll that failed while a snapshot is already on screen used to be
   // swallowed into a console.warn and a flag nobody read, leaving stale numbers
@@ -1032,7 +1072,12 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
     const control = snap && snap.controlHealth;
     const source = snap && snap.totals && snap.totals.sourceHealth;
     const stale = (control && control.staleSources && control.staleSources.length) || 0;
-    const errors = (control && control.errors && control.errors.length) || 0;
+    /* The same subset systemStatus judges on. Reading the raw list here would
+       let the card blame an identity conflict for a degradation it did not
+       cause — the chip would go amber for a stale collector and then quote
+       "cmux … has conflicting open agent session files" as the reason. */
+    const instrumentFaults = instrumentErrors(control);
+    const errors = instrumentFaults.length;
     /* The card used to headline the bare word "Degraded" for all three
        severities, then contradict itself one line down with an ADVISORY badge
        and the sentence "the board is usable" — an advisory shouting in the same
@@ -1120,8 +1165,8 @@ function summaryWidgetData(id, snap, conn = "live", display = "percent", queueIt
                  as withholding it. */
               : errors > 0
                 ? (errors === 1
-                  ? control.errors[0]
-                  : `${control.errors[0]} (+${errors - 1} more)`)
+                  ? instrumentFaults[0]
+                  : `${instrumentFaults[0]} (+${errors - 1} more)`)
               /* NAMES the source and says where the fault sentence is.
                  This branch used to read "1 degraded source · 0 stale · 0
                  errors" — three counts and no cause. It is the line Emilio was
@@ -1553,7 +1598,7 @@ globalThis.TheAntHill = {
   parseHeartbeatStructured, programForTldrRepo, deterministicRepoStats, tldrAttentionCount, fleetFallbackLine,
   heartbeatTldrAgent,
   renderHealthRail, renderHealthTldrLane, repoScopedReadings, tldrRepoOrder,
-  identityTraceView, quarantineBrief, surfaceCollisions, collisionLine,
+  identityTraceView, quarantineBrief, surfaceCollisions, collisionLine, operatorReason,
   renderControlBanner, renderIdentityBlock,
   el,
   // CONN_LABELS and the freshness thresholds stay out of this block on purpose:
@@ -1570,7 +1615,9 @@ globalThis.TheAntHill = {
   // they are `const`s declared below this block. Assert the behavior instead.
   transcriptUrl, clampTranscriptLimit, nextTranscriptLimit, normalizeTranscript,
   transcriptFailureText, transcriptWindow, renderTranscriptFeedLead,
-  chatBubbleNode, renderChatFeedBody, shouldAutoLoadTranscript, chatScrollPlan, saveChatScrollFrom,
+  // The wire contract for Grok Build reasoning: `Thought\n` on a system line.
+  thoughtText,
+  chatBubbleNode, renderChatFeedBody, shouldAutoLoadTranscript, shouldRefreshHeldTranscript, isGrokBotAgent, transcriptThreadStamp, maybeRefreshHeldTranscript, chatScrollPlan, saveChatScrollFrom,
   chatSpeechNeedsCollapse, isCollectorWindowText, previewChatTurns, rowClosingText,
   captureDrawerScroll, restoreDrawerScroll,
   actionsUrl, clampActionsLimit, normalizeActions, actionsFailureText,
@@ -2022,6 +2069,7 @@ function applySnapshot(snap, sequence = null) {
   // Escalate before painting: the tab title and any notification are about the
   // snapshot being adopted, and this is the only place a snapshot is adopted.
   applyNotifications(snap);
+  maybeRefreshHeldTranscript(snap);
   render();
 }
 
@@ -3219,7 +3267,7 @@ function notifyWaitText(item) {
 
    This row shows "<program> · <impact>" and named itself "<impact> <evidence>",
    dropping the program the operator can see — WCAG 2.5.3 Label in Name. A voice
-   operator reading "the-ant-hill · …" off the screen and saying it got no match,
+   operator reading "example-repo · …" off the screen and saying it got no match,
    and a screen-reader operator heard an agent with no program on a board where
    the same lane name recurs across several. The blocking row above already puts
    the program in its name ("… In <program>. Opens the session."); this is the
@@ -3725,10 +3773,10 @@ function renderSettingsPanel() {
 
    A repository the operator picks a colour for stops being "auto" and frees its
    palette slot server-side, so the next repository to appear takes a real hue
-   instead of overflow clay — which is why Reset is offered beside the swatch
-   rather than only as a global wipe.
+   instead of overflow clay — which is why a second click on a yours-swatch
+   clears the override rather than only offering a global wipe.
 
-   Assignment keys are origin/band names (`the-ant-hill`). Rows with no live
+   Assignment keys are origin/band names (`example-repo`). Rows with no live
    session stay pickable and are marked not on the board. The list paints into
    `#repo-colors-host` so a colour GET cannot rebuild the Settings form. */
 function paintRepoColorSettings() {
@@ -3752,47 +3800,37 @@ function renderRepoColorSettings(settings = state.repoColorSettings) {
     return leftLive - rightLive || left.localeCompare(right);
   });
   if (!ranked.length) {
-    return el("div", { class: "repo-colors" },
+    return el("div", { class: "repos" },
       el("p", {
         class: "repo-colors-empty",
-        text: "No repository has been given a colour yet — one is assigned the first time the board sees a session in it.",
+        text: "No repository has a colour assigned yet.",
       }));
   }
-  return el("div", { class: "repo-colors" }, ...ranked.map((key) => {
+  return el("div", { class: "repos" }, ...ranked.map((key) => {
     const assignment = assignments[key] || {};
     const hex = normalizeRepoHex(assignment.hex) || "";
     const onBoard = live.has(key.toLowerCase());
     const user = assignment.source === "user";
-    const sourceText = onBoard
-      ? (user ? "your colour" : "auto")
-      : (user ? "your colour · not on the board" : "Not on the board");
-    const row = el("div", { class: "repo-colors-row" + (onBoard ? "" : " is-absent") },
-      el("span", { class: "repo-colors-name", text: key }),
-      el("span", {
-        class: "repo-colors-source",
-        text: sourceText,
-      }),
-      /* A native colour input, so the picker is the operating system's and this
-         board ships no swatch grid of its own. Its own value is the current
-         hex, which is also what the swatch shows through --repo-tint. */
-      el("input", {
-        type: "color",
-        class: "repo-colors-swatch",
-        value: hex,
-        "aria-label": "Colour for " + key + (onBoard ? "" : ", not on the board"),
-        dataset: { fkey: "repo-color:" + key },
-        onchange: (event) => { void putRepoColor(key, event.currentTarget.value); },
-      }),
-      user
-        ? el("button", {
-          type: "button",
-          class: "repo-colors-reset",
-          "aria-label": "Reset " + key + " to its assigned colour",
-          dataset: { fkey: "repo-color-reset:" + key },
-          onclick: () => { void putRepoColor(key, null); },
-        }, "Reset")
-        : null);
-    return paintRepoTint(row, hex, "has-repo-tint");
+    const picker = el("input", {
+      type: "color",
+      class: "visually-hidden",
+      tabindex: "-1",
+      value: hex || "#888888",
+      "aria-label": "Colour for " + key + (onBoard ? "" : ", not on the board"),
+      dataset: { fkey: "repo-color:" + key },
+      onchange: (event) => { void putRepoColor(key, event.currentTarget.value); },
+    });
+    const repo = el("button", {
+      type: "button",
+      class: "repo" + (user ? " is-yours" : "") + (onBoard ? "" : " is-absent"),
+      onclick: () => {
+        if (user) return putRepoColor(key, null);
+        if (typeof picker.click === "function") picker.click();
+      },
+    },
+      el("span", { class: "swatch" }),
+      el("b", { text: key }));
+    return el("div", {}, paintRepoTint(repo, hex, "has-repo-tint"), picker);
   }));
 }
 
@@ -5527,12 +5565,25 @@ function watchClauses(snap) {
   return clauses;
 }
 
-/* Live sessions whose identity cannot be proven, so the board may watch them but
-   not type into them. One derivation, read by the health card and the calm
-   murmur alike, so the two can never disagree about how many there are. */
+/* Live sessions the board may watch but not type into. One derivation, read by
+   the health card and the calm murmur alike, so the two can never disagree about
+   how many there are.
+
+   D6: `quarantined` counts too. It used to count `unproven` only, which made the
+   sentence "N can't take commands" undercount by exactly the rows an operator is
+   most likely to try — a quarantined row is the one with a red mark on it, and
+   Send is off there for the same reason and with the same consequence. On the
+   live board that was 9–11 quarantined Grok sessions the count could not see.
+   `observed-only` is deliberately still excluded: it is the resting state of
+   every session with no cmux surface at all (all of Grok Build), so counting it
+   would report most of a healthy board as a shortfall. */
 function unaddressableCount(snap) {
   return snapshotAgents(snap)
-    .filter(({ agent }) => deriveActivity(agent) !== "ended" && deriveControlState(agent) === "unproven")
+    .filter(({ agent }) => {
+      if (deriveActivity(agent) === "ended") return false;
+      const control = deriveControlState(agent);
+      return control === "unproven" || control === "quarantined";
+    })
     .length;
 }
 
@@ -6988,11 +7039,11 @@ let repoColorsVersion = 0;      // bumped on every load; paint signatures read i
    entry failing normalizeRepoHex, so the map stayed empty and the board never
    tinted while every test stayed green.
 
-   The two names genuinely differ on this very checkout: the repository's origin
-   is `…/the-ant-hill.git`, so RepoIdentity.repoName — what the band prints — is
-   `the-ant-hill`, while repoKeyForCwd reads the git common dir and answers
-   `the-mountain`. The table exists precisely for that split, which is why
-   `name === key` is never a safe shortcut. */
+   The two names genuinely differ when origin and folder disagree: the
+   repository's origin is `…/example-repo.git`, so RepoIdentity.repoName — what
+   the band prints — is `example-repo`, while repoKeyForCwd reads the git common
+   dir and answers the checkout folder name. The table exists precisely for that
+   split, which is why `name === key` is never a safe shortcut. */
 function setRepoColors(repoNames, settings) {
   repoColors.clear();
   const assignments = (settings && settings.assignments) || {};
@@ -7169,7 +7220,7 @@ function repoGroups(visible) {
     /* A band's only checkout needs no disambiguator: `@directory` earns its
        place by separating siblings, and there are none — while on the live
        board the directory half actively contradicted the band name above it
-       (`…@the-mountain-main` under "the-ant-hill"). Multi-worktree bands keep
+       (`…@checkout-folder` under "example-repo"). Multi-worktree bands keep
        both halves; uniqueness within the band is what the suffix is FOR. */
     if (group.worktrees.length === 1) {
       const branch = (repo && repo.branch) || "";
@@ -9019,7 +9070,21 @@ function renderAgentColumnHeader() {
         class: "agent-column-label ri-col-label",
         title: "First activity to last activity, dormancy included — not time spent working",
         text: "Span",
-      }));
+      }),
+    /* The docked roster's label (#158). With the inspector open the row's
+       instruments collapse into a two-line stack in one 12.5rem track, so seven
+       column labels no longer sit above seven columns — this one prints the two
+       lines the rows actually draw. Always in the DOM, hidden by CSS until the
+       inspector docks: `hidden` would be wrong here, because this file's
+       [hidden] rule is deliberately !important so nothing can un-hide what the
+       client hid. It carries the SAME Quiet/Span word the seventh column chose,
+       because a label that disagrees with its own column is worse than none. */
+    el("span", {
+      class: "agent-column-label ri-col-label ri-col-stack",
+      title: "Status and " + (state.view === "board" ? "quiet time" : "span") + " over model, context and tokens",
+    },
+      el("span", { text: "Status · " + (state.view === "board" ? "Quiet" : "Span") }),
+      el("span", { text: "Model · Ctx · Tokens" })));
 }
 
 function renderSwarmAnchor(agent, depth, activeChildren, pinned = false, board = {}) {
@@ -9404,6 +9469,16 @@ function renderRowTimeBand(agent, nowMs, thresholdMs, alertMuted) {
   if (!band) return null;
   if (band.kind === "doing") {
     return el("span", { class: "row-time-band is-working" },
+      // Phase-offset copy of one artwork: same-URL <img>s share an animation
+      // clock, so the phase in the URL is what keeps rows out of lockstep.
+      el("img", {
+        class: "row-time-relay",
+        src: "/icons/forager-relay-" + band.phase + ".svg",
+        alt: "",
+        "aria-hidden": "true",
+        width: "14",
+        height: "14",
+      }),
       el("span", { class: "row-time-band-verb", text: band.verb }),
       agent.workingSince
         ? el("span", {
@@ -9431,7 +9506,7 @@ function renderAgentRow(agent, program, opts = {}) {
   const opState = operatorState(agent, Number.isFinite(nowMs) ? nowMs : Date.now(), thresholdMs, alertMuted);
   const opLabel = opState ? OPERATOR_STATE_LABELS[opState] : null;
   const control = deriveControlState(agent);
-  const watchOnly = watchOnlyMark(control);
+  const watchOnly = watchOnlyMark(control, agent);
   const role = roleView(agent.role);
   const selected = state.selectedId === agent.id;
   const clusterNote = swarmNote(agent, opts);
@@ -9555,7 +9630,19 @@ function renderAgentRow(agent, program, opts = {}) {
       // every working row is noise that would bury it. Every other state (and
       // absence) leaves the row byte-identical to today; the drawer carries the
       // full four-state fact, so `unknown` still reads as unknown somewhere.
-      liveness && liveness.key === "died"
+      /* D7. Gated on the LIFECYCLE, not on processState alone. `grok-build-plan`
+         was the case: pid 18871 gone, a sibling had taken pane AAA12BA5, the
+         transcript was still fresh — so lifecycle Row 4 held the session
+         `working` for its 3-minute window while processStateFor said "died", and
+         the row painted Working and Died at once. One row cannot report a
+         session as both alive and dead; an operator reading that has to pick
+         which half to believe, which is the same as reading neither.
+         Row 4 is the more conservative claim (a fresh transcript is direct
+         evidence of work) and it is the one the rest of the row is already
+         built on, so the chip yields to it. Nothing is hidden: `processState`
+         stays on the wire, the drawer states all four verdicts, and the row's
+         aria-label still carries the process fact. */
+      liveness && liveness.key === "died" && activity === "ended"
         ? el("span", { class: "row-died", title: liveness.detail }, icon("warning"), liveness.label)
         : null,
       /* Lineage the kernel contradicts. T1 walks pid→ppid from each hook-store
@@ -9749,7 +9836,10 @@ function renderAgentRow(agent, program, opts = {}) {
     (state.momentumMagnify && state.view === "board"
       ? (momentumPopulation(agent) ? " is-momentum-hot" : " is-momentum-recede")
       : "") +
-    (liveness && liveness.key === "died" ? " is-died" : "") +
+    // Same gate as the row-died pill above: this class is that pill's scannable
+    // echo (a red border on the row), so painting it while the pill is withheld
+    // would make the row assert in colour exactly what it declined to say in words.
+    (liveness && liveness.key === "died" && activity === "ended" ? " is-died" : "") +
     (lineageContradicted ? " is-lineage-disputed" : "") +
     (activity === "ended" ? " is-ended" : "") +
     /* Context pressure, from the same thresholds the summary dial paints with,
@@ -9968,6 +10058,20 @@ function shouldAutoLoadTranscript(sel, transcript) {
   return Boolean(sel && sel.kind === "agent" && (!transcript || transcript.agentId !== sel.id));
 }
 
+function maybeRefreshHeldTranscript(snap) {
+  const sel = state.selected;
+  const transcript = state.transcript;
+  if (!sel || sel.kind !== "agent" || !transcript || transcript.agentId !== sel.id) return;
+  const agent = (snap && Array.isArray(snap.programs) ? snap.programs : [])
+    .flatMap((program) => program && Array.isArray(program.agents) ? program.agents : [])
+    .find((item) => item && item.id === sel.id);
+  if (!isGrokBotAgent(agent) || !shouldRefreshHeldTranscript(agent, transcript)) return;
+  void loadTranscript(sel.id, transcript.limit, {
+    quiet: true,
+    threadStamp: transcriptThreadStamp(agent),
+  });
+}
+
 // Unified entry point for every drawer kind. Agents keep populating the legacy
 // state.selectedId so the row is-selected highlight, findSelected, and
 // closeInspector focus-return all keep working untouched.
@@ -10176,10 +10280,21 @@ function inspectorPaintSig(sel, view, ui) {
         transcript.error || "",
         String(transcript.limit || ""),
         transcript.data
-          ? transcript.data.lines.length + ":" + (transcript.data.source || "") + ":" + (transcript.data.truncated ? "1" : "0")
+          ? [
+            transcript.data.lines.length,
+            transcript.data.source || "",
+            transcript.data.truncated ? "1" : "0",
+            (transcript.data.lines.at(-1) && transcript.data.lines.at(-1).at) || "",
+            String((transcript.data.lines.at(-1) && transcript.data.lines.at(-1).text) || "").slice(-48),
+          ].join(":")
           : "",
+        transcript.threadStamp || "",
       ].join(":")
       : "",
+    /* Bot inspector only. lastThreadAt is in AGENT_SIG_TICKED, so an agent
+       send-message would not rebuild this drawer; a user send would, because
+       lastUserMessage is signed. Do not put this on the row signature. */
+    agent && isGrokBotAgent(agent) ? (agent.lastThreadAt || "") : "",
     lastAction ? lastAction.id + ":" + lastAction.outcome : "",
     // Attention lives only on the client until the next snapshot lands, so
     // without it the acknowledge/dismiss/snooze block would never repaint —
@@ -12673,6 +12788,18 @@ function renderChatFeedBody(agent, ui = state, opts = {}) {
       i += group.length;
       continue;
     }
+    /* Reasoning before tools: a thought is a `system` line by wire contract,
+       so it must be claimed here or it falls through to the quiet row below
+       and a thousand of them bury the answer. */
+    if (thoughtText(line) !== null) {
+      const group = [line];
+      while (i + group.length < lines.length && thoughtText(lines[i + group.length]) !== null) {
+        group.push(lines[i + group.length]);
+      }
+      body.append(thoughtGroupNode(group));
+      i += group.length;
+      continue;
+    }
     if (line.role === "tool") {
       const group = [line];
       while (i + group.length < lines.length && lines[i + group.length].role === "tool") {
@@ -13255,15 +13382,29 @@ async function sendControl(agent, action, instruction) {
 
   let result;
   try {
+    const payload = { action, agentId: agent.id, instruction };
+    if (action === "instruct") {
+      let nonce = state.instructNonces.get(agent.id);
+      if (!nonce) {
+        nonce = (globalThis.crypto && crypto.randomUUID)
+          ? crypto.randomUUID()
+          : `formic-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+        state.instructNonces.set(agent.id, nonce);
+      }
+      payload.clientNonce = nonce;
+    }
     const res = await apiFetch("/api/control", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ action, agentId: agent.id, instruction }),
+      body: JSON.stringify(payload),
     }, API_WRITE_TIMEOUT_MS);
     let body = null;
     try { body = await res.json(); } catch { /* non-JSON body */ }
     result = controlOutcome(action, agentName(agent), { status: res.status, body });
-    if (result.ok && action === "instruct") state.drafts.delete(agent.id);
+    if (result.ok && action === "instruct") {
+      state.drafts.delete(agent.id);
+      state.instructNonces.delete(agent.id);
+    }
   } catch (err) {
     result = controlOutcome(action, agentName(agent), { error: err });
   }
@@ -13635,7 +13776,7 @@ function emptyBoardVerdict(snap) {
       : "Watching. No sessions running yet.",
     hint: degraded
       ? "A degraded collector reports no sessions whether or not any are running, so this board is incomplete rather than empty."
-      : "Start Claude, Codex, or Cursor in any folder. A row appears here in a few seconds.",
+      : "Claude Code, Codex, Cursor and Grok Build sessions appear here on their own, within seconds of starting.",
     /* The denominator stays. I first replaced it with an absolute count, on the
        theory that "3 of 4" reads as a shortfall to a newcomer — then read the
        docs lane's QUICKSTART, which pins "4 of 4 collectors healthy" and
@@ -14317,7 +14458,7 @@ function boot() {
     /* Ahead of the rest: it is a modal, and a modal that ignores Escape is the
        one dismissal every operator tries first. */
     if (state.settingsPanelOpen) {
-      closeSettingsPanel();
+      requestCloseSettingsPanel();
       return;
     }
     /* Same rule for the attention panel, and it returns focus to the control
@@ -14394,6 +14535,7 @@ Object.assign(globalThis.TheAntHill, {
   // Declared below the first export block, so they would be a TDZ error there —
   // same reason CONN_LABELS and the transcript limits live down here.
   settingsPreview, settingsPreviewText, SETTINGS_PRESETS, renderSettingsPanel,
+  requestCloseSettingsPanel,
   // TINT-F: the repo-colour region and its one write.
   renderRepoColorSettings, paintRepoColorSettings, putRepoColor,
   passesLookback, isUnverified,

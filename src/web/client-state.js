@@ -201,6 +201,7 @@ export const state = {
   // which is what makes opening the page to a backlog silent.
   notify: { enabled: false, permission: "default", seen: null, baseTitle: "" },
   drafts: new Map(),      // agentId -> instruct draft text
+  instructNonces: new Map(), // agentId -> clientNonce reused until that Send succeeds
   confirming: null,       // instance fkey: `[head:]act:${agentId}:${action}`
   /* SYNC-CF: the open close-escalation dialog, or null. Set only from a route
      refusal the client could fully read — { agentId, code, workspaceId,

@@ -108,7 +108,12 @@ export async function handleBroadcastRequest(request: Request, dependencies: Bro
       results.push({ agentId, ok: false, error: { code: "AGENT_NOT_FOUND", message: "The agent is not present in the current snapshot." } });
       continue;
     }
-    const execution = await executeControl({ action: "instruct", agentId, instruction: parsed.instruction }, agent, dependencies);
+    const execution = await executeControl({
+      action: "instruct",
+      agentId,
+      instruction: parsed.instruction,
+      clientNonce: crypto.randomUUID(),
+    }, agent, dependencies);
     results.push({ agentId, ok: execution.response.ok, error: execution.response.error });
   }
   const sent = results.filter((result) => result.ok).length;

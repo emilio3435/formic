@@ -1,6 +1,8 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+// @ts-expect-error browser client has no declaration
+import { RELAY_PHASES, relayPhase } from "../src/web/row-time-band.js";
 
 let M: any;
 
@@ -396,5 +398,100 @@ describe("verb shimmer CSS", () => {
     expect(styles).toMatch(/prefers-reduced-motion:\s*reduce[\s\S]*\.row-time-band-verb\s*\{[\s\S]*?animation:\s*none/);
     expect(styles).toMatch(/prefers-reduced-motion:\s*reduce[\s\S]*\.row-time-band-verb\s*\{[\s\S]*?filter:\s*none/);
     expect(styles).toMatch(/prefers-reduced-motion:\s*reduce[\s\S]*\.row-time-band-verb\s*\{[\s\S]*?color:\s*var\(--color-status-info\)/);
+  });
+});
+
+/* Swarm B / rows-0816 (#159). The Forager relay rides the working verb: a 14px
+   external <img> as the band's first child. Five phase-offset copies of the
+   same artwork exist because same-URL <img>s share one animation clock in both
+   Chromium and WebKit — without them every working row pulses in lockstep. */
+describe("relay indicator (RL)", () => {
+  test("RL-1 a working band leads with the 14px relay img", () => {
+    const row = renderRow(agent({
+      id: "codex:relay-working",
+      workingSince: ago(72_000),
+      lastThreadAt: ago(5_000),
+    }));
+    const band = byClass(row, "row-time-band");
+    expect(band.classList.contains("is-working")).toBe(true);
+
+    const relay = byClass(row, "row-time-relay");
+    expect(relay).not.toBeNull();
+    expect(band.children[0]).toBe(relay);
+    expect(String(relay.tagName).toLowerCase()).toBe("img");
+    expect(relay.attributes.src).toMatch(/^\/icons\/forager-relay-[0-4]\.svg$/);
+    expect(relay.attributes.alt).toBe("");
+    expect(relay.attributes["aria-hidden"]).toBe("true");
+    expect(relay.attributes.width).toBe("14");
+    expect(relay.attributes.height).toBe("14");
+
+    // The relay leads the verb, and the verb/clock pair is otherwise untouched.
+    expect(band.children[1]).toBe(byClass(row, "row-time-band-verb"));
+    expect(band.children[2]).toBe(byClass(row, "row-time-band-clock"));
+    // The phase on the band is the phase in the URL — one source, not two.
+    const band0 = M.rowTimeBand(agent({ id: "codex:relay-working", workingSince: ago(72_000) }), nowMs);
+    expect(relay.attributes.src).toBe("/icons/forager-relay-" + band0.phase + ".svg");
+  });
+
+  test("RL-2 quiet bands get no relay — one indicator, and only for work", () => {
+    for (const quiet of [
+      { id: "codex:relay-waiting", lifecycle: "waiting", outcome: "healthy", lastThreadAt: ago(2 * 60_000), updatedAt: ago(2 * 60_000) },
+      { id: "codex:relay-needs", lifecycle: "waiting", outcome: "needs-you", lastThreadAt: ago(4 * 60_000), updatedAt: ago(4 * 60_000) },
+      { id: "codex:relay-stalled", lifecycle: "waiting", outcome: "healthy", lastThreadAt: ago(3 * 3600_000), updatedAt: ago(18 * 60_000) },
+    ]) {
+      const row = renderRow(agent(quiet));
+      expect(byClass(row, "row-time-band")).not.toBeNull();
+      expect(byClass(row, "row-time-relay")).toBeNull();
+    }
+    const done = renderRow(agent({ id: "codex:relay-done", lifecycle: "finished", lastThreadAt: ago(2 * 60_000) }));
+    expect(byClass(done, "row-time-relay")).toBeNull();
+  });
+
+  test("RL-3 relayPhase is stable, spreads over all five, and is not the verb hash", () => {
+    expect(RELAY_PHASES).toBe(5);
+    const first = relayPhase("x");
+    expect(relayPhase("x")).toBe(first);
+    expect(Number.isInteger(first)).toBe(true);
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(first).toBeLessThan(RELAY_PHASES);
+
+    const ids = Array.from({ length: 200 }, (_, i) => "codex:relay-spread-" + i);
+    const phases = new Set(ids.map((id) => relayPhase(id)));
+    expect([...phases].sort()).toEqual([0, 1, 2, 3, 4]);
+
+    // The point of a second hash: rows that share a verb must still differ in
+    // phase, or every "foraging" row on the board marches in step.
+    const sameVerb = new Map<string, string[]>();
+    for (const id of ids) {
+      const verb = M.rowTimeVerb(id);
+      if (!sameVerb.has(verb)) sameVerb.set(verb, []);
+      sameVerb.get(verb)!.push(id);
+    }
+    const split = [...sameVerb.values()].filter((group) =>
+      new Set(group.map((id) => relayPhase(id))).size > 1);
+    expect(split.length).toBe(sameVerb.size);
+  });
+
+  test("RL-4 CSS sizes the relay and the reduced-motion verb is no longer invisible", () => {
+    const relayRule = styles.match(/\.row-time-relay\s*\{([\s\S]*?)\n\}/)?.[1] ?? "";
+    expect(relayRule).toMatch(/width:\s*14px/);
+    expect(relayRule).toMatch(/height:\s*14px/);
+    expect(relayRule).toMatch(/align-self:\s*center/);
+    expect(relayRule).toMatch(/margin-inline-end:\s*0\.25em/);
+    expect(relayRule).toMatch(/flex:\s*0 0 auto/);
+
+    // D2: the relay's keyframes live in the SVG. styles.css gains none, and the
+    // relay rule animates nothing — the registry lock at web-client.test.ts
+    // stays byte-true.
+    expect(relayRule).not.toMatch(/animation/);
+    expect(styles).not.toMatch(/@keyframes\s+(relay|receipt)\b/);
+
+    // Pre-existing defect (#159): the reduce fallback stopped the shimmer and
+    // dropped the gradient but never unset -webkit-text-fill-color: transparent,
+    // so the verb painted invisible and only the clock survived.
+    const reduce = styles.slice(styles.indexOf("@media (prefers-reduced-motion: reduce)"));
+    const reducedVerb = reduce.match(/\.row-time-band-verb\s*\{([\s\S]*?)\n  \}/)?.[1] ?? "";
+    expect(reducedVerb).toMatch(/color:\s*var\(--color-status-info\)/);
+    expect(reducedVerb).toMatch(/-webkit-text-fill-color:\s*currentColor/);
   });
 });

@@ -255,6 +255,102 @@ describe("GET /api/transcript", () => {
     expect(await oversized.json()).toMatchObject({ error: { code: "INVALID_LIMIT" } });
     fetch.dispose();
   });
+
+  test("parses a schemaVersion 1 Grok Bot replica envelope into user and send-message lines", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "anthill-grok-bot-transcript-"));
+    const path = join(directory, "replica.blob");
+    const t1 = Date.parse("2026-08-16T12:00:01.000Z");
+    const t2 = Date.parse("2026-08-16T12:00:02.000Z");
+    const t3 = Date.parse("2026-08-16T12:00:03.000Z");
+    const t4 = Date.parse("2026-08-16T12:00:04.000Z");
+    await writeFile(path, JSON.stringify({
+      schemaVersion: 1,
+      value: {
+        entries: [
+          {
+            kind: "message",
+            role: "user",
+            content: "Please parse the persisted conversation.",
+            timestampMs: t1,
+          },
+          {
+            kind: "send-message",
+            message: { type: "text", content: "Parsed the Grok Bot transcript." },
+            timestampMs: t2,
+          },
+          {
+            kind: "message",
+            role: "user",
+            content: "Ship the closer next.",
+            timestampMs: t3,
+          },
+          {
+            kind: "send-message",
+            content: { type: "text", content: "Shipped the closer from send-message." },
+            timestampMs: t4,
+          },
+          { kind: "user-attachment", timestampMs: t4 + 100 },
+          {
+            kind: "send-message",
+            message: { type: "widget", id: "card-1" },
+            timestampMs: t4 + 200,
+          },
+          {
+            kind: "message",
+            role: "assistant",
+            toAgent: "other-bot",
+            content: "Inter-agent copy must not become inspector speech.",
+            timestampMs: t4 + 300,
+          },
+        ],
+      },
+    }, null, 2));
+    const current = snapshot(path);
+    const agent = current.programs[0]!.agents[0]!;
+    agent.id = "grok:bot:14ee8878-7022-43d7-a6b3-b6c36d56915c";
+    agent.provider = "grok";
+    agent.sourceSessionId = "bot:14ee8878-7022-43d7-a6b3-b6c36d56915c";
+    agent.displayName = "Formic Agent";
+    agent.controls = [];
+    const fetch = app(current);
+    try {
+      const response = await fetch(get("/api/transcript?agent=" + encodeURIComponent(agent.id)));
+      expect(response.status).toBe(200);
+      const body = await response.json() as {
+        ok: boolean;
+        source: string;
+        lines: Array<{ at: string | null; role: string; text: string }>;
+      };
+      expect(body.ok).toBe(true);
+      expect(body.source).toBe(path);
+      expect(body.lines.length).toBeGreaterThan(2);
+      expect(body.lines).toEqual([
+        {
+          at: "2026-08-16T12:00:01.000Z",
+          role: "user",
+          text: "Please parse the persisted conversation.",
+        },
+        {
+          at: "2026-08-16T12:00:02.000Z",
+          role: "assistant",
+          text: "Parsed the Grok Bot transcript.",
+        },
+        {
+          at: "2026-08-16T12:00:03.000Z",
+          role: "user",
+          text: "Ship the closer next.",
+        },
+        {
+          at: "2026-08-16T12:00:04.000Z",
+          role: "assistant",
+          text: "Shipped the closer from send-message.",
+        },
+      ]);
+    } finally {
+      fetch.dispose();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("GET /api/publish", () => {
