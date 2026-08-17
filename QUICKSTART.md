@@ -9,9 +9,32 @@ The public product name is Formic. Startup banners, scripts, and launchd labels 
 still say `The Ant Hill` / `anthill` — those are ops compatibility surfaces.
 
 **You need:** a Mac, and at least one of Claude Code / Codex CLI / Cursor already
-in use. Setup is about 10 minutes.
+in use.
 
-## 1. Install Bun
+## Install
+
+```bash
+git clone https://github.com/emilio3435/formic.git
+cd formic
+bash scripts/install-formic.sh
+```
+
+That uses this checkout (or clones the public snapshot to `~/formic` if you are
+not already in one), writes a LaunchAgent on <http://127.0.0.1:4701>, and
+installs `~/.local/bin/formic` when `src/cli/formic.ts` exists. Re-run is safe.
+
+Already have the checkout?
+
+```bash
+bun start
+```
+
+`bun start` defaults to <http://127.0.0.1:4701> and reuses an instance that is
+already up. Open that address. Start Claude, Codex, or Cursor in any folder. A
+row appears within about five seconds — no refresh needed.
+
+If `bun` is missing, the installer prints this two-liner (the first line pipes
+curl to bash — review https://bun.sh/docs/installation if you prefer not to):
 
 ```bash
 curl -fsSL https://bun.sh/install | bash
@@ -23,33 +46,8 @@ bun --version
 The middle two lines matter: Bun's installer only edits `~/.zshrc` when that file
 already exists, so on a fresh account `bun` can stay unfindable without them.
 
-## 2. Get the code
-
-```bash
-gh repo clone emilio3435/the-ant-hill ~/anthill
-```
-
-The `~/anthill` path is the historical checkout name — it is fine to keep; it is
-an ops compatibility surface.
-
-The repo is private, so `gh` must be authenticated first (`gh auth login` →
-GitHub.com → HTTPS → yes to "Authenticate Git"). A plain `git clone` over HTTPS
-will either prompt for a password GitHub no longer accepts, or fail with
-`Repository not found` — GitHub hides private repos rather than saying "no
-access".
-
-There is no install step. The app has **no runtime dependencies**; `bun install`
-only fetches the TypeScript types needed for `bun run check`.
-
-## 3. Start it
-
-```bash
-cd ~/anthill && bun start
-```
-
-It prints the address it bound (`bun start` defaults to
-<http://127.0.0.1:4701>) and opens your browser there. Leave that terminal
-running — closing it stops the server.
+There is no further install step. The app has **no runtime dependencies**;
+`bun install` only fetches the TypeScript types needed for `bun run check`.
 
 4701 is also the port the production instance uses. If one is already
 running, `bun start` detects it and just opens the browser instead of
@@ -70,11 +68,6 @@ dashboard reporting that it looked for cmux and did not find one, which is
 exactly right on a machine without it. The board comes up regardless. Focus and
 Send are the only things you lose, and [§ Optional](#optional-enable-focus-and-send)
 turns them on later if you want them.
-
-## 4. See something
-
-In another terminal, `cd` into any project and run `claude` (or Codex, or open
-Cursor). A row appears within about five seconds — no refresh needed.
 
 **Working correctly when:** the badge top-right reads **Live**, and a new session
 shows up on its own.
@@ -234,10 +227,14 @@ your machine. Without it, sessions are listed ungrouped.
 ## Updating
 
 ```bash
-cd ~/anthill && git pull && bun start
+git pull && bun start
 ```
+
+Or re-run `bash scripts/install-formic.sh` from the same checkout.
 
 ## Turning it off
 
-`Ctrl-C` in the terminal running it. To remove it entirely: `rm -rf ~/anthill` —
-nothing else was installed.
+`Ctrl-C` if you started it in a terminal. To remove the LaunchAgent and CLI
+wrapper: delete `~/Library/LaunchAgents/ai.imaginethat.anthill.plist` and
+`~/.local/bin/formic` if present, then `launchctl bootout gui/$UID/ai.imaginethat.anthill`.
+The checkout folder can be deleted separately.

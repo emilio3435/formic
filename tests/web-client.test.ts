@@ -1205,6 +1205,9 @@ describe("summary status and widgets", () => {
     });
     expect(healthy.degraded).toBe(false);
     expect(healthy.message).toBe("Watching. No sessions running yet.");
+    expect(healthy.hint).toBe(
+      "Start Claude, Codex, or Cursor in any folder. A row appears here in a few seconds.",
+    );
     /* The proof is the point: a count of collectors and a timestamp are evidence
        a stalled client cannot manufacture, which is what distinguishes this from
        a board that simply never loaded. */
