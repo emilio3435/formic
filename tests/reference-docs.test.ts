@@ -195,7 +195,6 @@ describe("README.md stays true to the product", () => {
     expect(burn.sublabel, "a null cost is being rendered as a zero").not.toContain("$0");
     expect(burn.sublabel, "a blind cost must not print a placeholder").not.toContain("cost unavailable");
     expect(burn.sublabel, "a blind cost must not print a dash").not.toMatch(/—/);
-    expect(readme).toContain("no process evidence");
     /* Driven through the PRODUCER: a collected agent that never yielded process
        evidence — no processAlive, no pids — must come out of buildSnapshot as
        the row README points a stranger at. Describing the agent and asserting
@@ -238,17 +237,47 @@ describe("README.md stays true to the product", () => {
   test("the ports and failure mode it sends a stranger to are real", () => {
     expect(readme).toContain("4701");
     expect(read("scripts/anthill-start.sh")).toContain('PORT="${MOUNTAIN_PORT:-4701}"');
-    expect(readme).toContain("4710");
+    /* Preview ports and EADDRINUSE belong in operator docs, not the one-screen
+       stranger README. The scripts still own those numbers. */
+    expect(deploy).toContain("4710");
     expect(read("scripts/anthill-preview.sh")).toContain("PREVIEW_LO=4710");
-    /* Verified by running it against the live service: dev and start:server
-       exit rather than double-binding. If the server ever learns to retry, the
-       README sentence telling a reader they will exit becomes wrong. */
-    expect(readme).toContain("EADDRINUSE");
+    expect(deploy).toContain("EADDRINUSE");
     const indexTs = read("src/server/index.ts");
     expect(indexTs).toContain("port: configuredPort");
-    expect(indexTs, "a retry/fallback would make README's 'they exit' wrong").not.toContain("EADDRINUSE");
-    expect(readme.toLowerCase()).toContain("no runtime dependencies");
+    expect(indexTs, "a retry/fallback would make the 'it exits' claim wrong").not.toContain("EADDRINUSE");
     expect(JSON.parse(pkg).dependencies, "the app grew a runtime dependency").toBeUndefined();
+  });
+});
+
+describe("greenfield onboarding sends a stranger to the public snapshot", () => {
+  test("README is one screen: public clone, install or bun start, 4701, MIT", () => {
+    expect(readme.split("\n").length, "README grew past one screen")
+      .toBeLessThanOrEqual(40);
+    expect(readme).toContain("emilio3435/formic");
+    expect(readme).toContain("scripts/install-formic.sh");
+    expect(readme).toContain("bun start");
+    expect(readme).toContain("127.0.0.1:4701");
+    expect(readme).toMatch(/Claude/);
+    expect(readme).toMatch(/Codex/);
+    expect(readme).toMatch(/Cursor/);
+    expect(readme.toLowerCase()).toContain("cmux");
+    expect(readme).toMatch(/MIT/);
+    expect(readme).not.toContain("TODAY.md");
+    expect(readme).not.toContain("DEPLOY.md");
+    expect(readme).not.toMatch(/clone[^\n]*the-ant-hill/);
+    expect(readme).not.toContain("~/anthill");
+    expect(readme).not.toContain("the-mountain-production");
+    if (existsSync(join(ROOT, "src/cli/formic.ts"))) {
+      expect(readme).toContain("bun run formic");
+    }
+  });
+
+  test("QUICKSTART's new-user path is the install script or bun start", () => {
+    expect(quickstart).toContain("scripts/install-formic.sh");
+    expect(quickstart).toContain("emilio3435/formic");
+    expect(quickstart).toContain("bun start");
+    expect(quickstart).not.toContain("gh repo clone emilio3435/the-ant-hill");
+    expect(quickstart).not.toContain("~/anthill");
   });
 });
 
@@ -284,18 +313,19 @@ describe("ARCHITECTURE.md carries the contract detail README no longer does", ()
   });
 
   test("the commands and ports it sends a reader to are real", () => {
+    const hasCli = existsSync(join(ROOT, "src/cli/formic.ts"));
     for (const command of [...readme.matchAll(/`bun run ([a-z:]+)`/g)].map((m) => m[1])) {
+      if (command === "formic" && !hasCli) continue;
       expect(pkg, `README.md tells a reader to run missing script "${command}"`).toContain(`"${command}"`);
     }
     for (const script of [...readme.matchAll(/scripts\/([a-z-]+\.sh)/g)].map((m) => m[1])) {
       expect(() => read(join("scripts", script)), `README.md references missing scripts/${script}`).not.toThrow();
     }
-    /* 4701 for both bun start and the launchd service. The doc claimed 4702 for
-       a week after the script changed, which sent readers at the production
-       port believing it was a throwaway. */
+    /* 4701 for both bun start and the launchd service. Preview ports stay in
+       operator docs so the stranger README can stay one screen. */
     expect(readme).toContain("4701");
     expect(read("scripts/anthill-start.sh")).toContain('PORT="${MOUNTAIN_PORT:-4701}"');
-    expect(readme).toContain("4710");
+    expect(deploy).toContain("4710");
     expect(read("scripts/anthill-preview.sh")).toContain("4710");
   });
 
@@ -828,15 +858,16 @@ describe("package.json scripts and config/ are documented as they execute", () =
 
 describe("README's closing gate line stays true", () => {
   test("the gate it describes is the gate that runs", () => {
-    /* README dropped its suite inventory when it became a front door — a
-       stranger does not need one. The gate is the part that must stay true,
-       because it is the sentence that says broken code cannot ship. */
+    /* The stranger README is the install path. The gate that says broken code
+       cannot ship lives in operator docs and package.json. */
     expect(JSON.parse(pkg).scripts.check).toBe("bun run typecheck && bun test");
     const deployScript = read("scripts/anthill-deploy.sh");
     expect(deployScript).toContain("bunx tsc --noEmit");
     expect(deployScript).toContain("bun test");
-    expect(readme).toContain("scripts/anthill-deploy.sh");
-    expect(readme).toContain("bun run check");
+    expect(deploy).toContain("scripts/anthill-deploy.sh");
+    expect(deploy).toContain("bun run check");
+    expect(readme).not.toContain("scripts/anthill-deploy.sh");
+    expect(readme).not.toContain("TODAY.md");
   });
 });
 
@@ -1272,7 +1303,7 @@ describe("README, QUICKSTART and ANT-GUIDE cohere as one set", () => {
        case once; it used to also carry a general restatement of both examples. */
     const mentions = (flat(quickstart).match(/reads? `?unavailable`?|never invents a number/gi) ?? []).length;
     expect(mentions, "QUICKSTART states the cost-honesty rule twice again").toBeLessThanOrEqual(1);
-    expect(readme, "README stopped owning the honesty rule").toContain("It refuses to invent numbers");
+    expect(readme, "README stopped owning the honesty rule").toContain("`unavailable`, never `$0`");
   });
 
   test("every cross-document link resolves to a file that exists", () => {

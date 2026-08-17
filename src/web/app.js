@@ -13635,7 +13635,7 @@ function emptyBoardVerdict(snap) {
       : "Watching. No sessions running yet.",
     hint: degraded
       ? "A degraded collector reports no sessions whether or not any are running, so this board is incomplete rather than empty."
-      : "Claude Code, Codex, Cursor and Grok Build sessions appear here on their own, within seconds of starting.",
+      : "Start Claude, Codex, or Cursor in any folder. A row appears here in a few seconds.",
     /* The denominator stays. I first replaced it with an absolute count, on the
        theory that "3 of 4" reads as a shortfall to a newcomer — then read the
        docs lane's QUICKSTART, which pins "4 of 4 collectors healthy" and

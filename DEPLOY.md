@@ -149,6 +149,12 @@ bash scripts/anthill-hygiene.sh # repairs the service; read the warning below
 bash scripts/ci-tests.sh        # what CI runs; no ports, no service
 ```
 
+`scripts/install-formic.sh` is the greenfield Mac installer: it uses the
+checkout it is run from (or clones the public `emilio3435/formic` snapshot),
+writes the LaunchAgent for that tree, and installs `~/.local/bin/formic` only
+when `src/cli/formic.ts` exists. It is not a deploy and must not be used to
+move production.
+
 `anthill-start.sh` binds **4701** — the production port — and reuses a running
 instance rather than starting a second one. It is the ordinary onboarding
 command, so the "never launch anything on 4701 by hand" rule is reachable
