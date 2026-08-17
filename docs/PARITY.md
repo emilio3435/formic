@@ -2,7 +2,15 @@
 
 A harness is not covered because a row appears. Covered means the same fields Claude Code and Codex already fill, or an honest unknown (never a guessed percent or a fake $0).
 
-Bar, from `makeAgent` / `CollectedAgent` on `main`:
+## For future agents
+
+Update this file in the **same commit** as the collector or `config/models.json` change. Not a follow-up PR. Not a later cleanup. If the code and this table disagree, the table is wrong.
+
+Rewrite only the rows you actually changed. Do not claim coverage you did not ship. Keep the "watch is not coverage" rule.
+
+## Bar
+
+From `makeAgent` / `CollectedAgent` on `main`:
 
 - first user / task
 - last-close / transcript tail
@@ -17,7 +25,7 @@ Bar, from `makeAgent` / `CollectedAgent` on `main`:
 
 Cost is fleet BurnBar, not per-row USD. `CollectedAgent.cost` is almost never set. Missing source reads `unavailable`, never `$0`.
 
-Audited on public `emilio3435/formic` `6307167` (Copilot CLI). Update this file when a collector or `config/models.json` changes.
+Audited on public `emilio3435/formic` `6307167` (Copilot CLI).
 
 ## Harness fields
 
@@ -58,11 +66,13 @@ Not modelled (discover / `needs-parser` or absent): Cline, OpenCode, Amp, Kiro, 
 
 ## Work order (field parity, then new harnesses)
 
-1. Muse: attach Spark window from the catalog when a model needle matches.
-2. Copilot: attach a window when the model is known; keep live-session tokens unknown until shutdown (honest).
-3. Antigravity: parse usage if the sqlite actually has it; if not, keep unknown and add Gemini 3.7/3.6 to `models.json` so a model string can still get a window.
-4. Catalog: Opus 5 label + price, Terra window, drop Prime's 131k grok fallback.
-5. Hermes / Factory / Prime: end-evidence only when the file has a real close. Do not invent one.
-6. New watchers (Cline, OpenCode, Amp) must ship at this bar, not watch-only.
+In flight on a local CLI (not a cloud agent): Muse window, Copilot window, Antigravity usage-if-real + Gemini catalog, Opus 5 / Terra / Prime grok catalog honesty. That agent must update this file in the same commit.
+
+Once that lands:
+
+1. Hermes / Factory / Prime: end-evidence only when the file has a real close. Do not invent one. Same-commit PARITY.md.
+2. New watchers at this bar, not watch-only: Cline, then OpenCode, then Amp. Same-commit PARITY.md each time.
+3. Then Kiro, then Devin Desktop / Windsurf. Same rule.
+4. After public formic is the real board: point production :4701 at formic, or keep the-ant-hill as history only. Do not develop in both.
 
 Do not add a Llama provider. Do not treat Composer 2.5 or SWE-1.7 as US-origin weights.
