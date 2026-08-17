@@ -22,3 +22,5 @@ Cost only when Formic has a real source. No source reads `unavailable`, never `$
 ## License
 
 MIT. See [LICENSE](./LICENSE).
+
+Field-level source coverage: [docs/PARITY.md](docs/PARITY.md).
