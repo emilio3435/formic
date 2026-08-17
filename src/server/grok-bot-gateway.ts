@@ -84,7 +84,11 @@ let attachOverride: GrokBotGatewayOps["attach"];
 export function controlSurfaceKind(
   target?: { kind?: string } | null,
 ): ControlSurfaceKind {
-  return target?.kind === "grok-bot" ? "grok-bot" : "cmux";
+  if (target?.kind === "grok-bot") return "grok-bot";
+  if (target?.kind === "codex-app") return "codex-app";
+  if (target?.kind === "claude-desktop") return "claude-desktop";
+  if (target?.kind === "chatgpt") return "chatgpt";
+  return "cmux";
 }
 
 export function isGrokBotTarget(target: Pick<CmuxTarget, "kind"> | undefined): boolean {

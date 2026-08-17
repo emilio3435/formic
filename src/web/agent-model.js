@@ -215,6 +215,12 @@ export function deriveControlState(agent) {
   if (t.kind === "grok-bot") {
     return t.gatewayReady && t.resolution === "gateway" ? "linked" : "observed-only";
   }
+  if (t.kind === "codex-app") {
+    return t.appServerReady && t.resolution === "app-server" ? "linked" : "observed-only";
+  }
+  if (t.kind === "claude-desktop" || t.kind === "chatgpt") {
+    return "observed-only";
+  }
   if (t.surfaceId && t.resolution === "exact") return "linked";
   if (t.surfaceId && t.resolution === "unique-cwd") return "unproven";
   return t.resolution === "ambiguous" ? "quarantined" : "observed-only";
@@ -224,6 +230,18 @@ export function isGrokBotAgent(agent) {
   if (!agent) return false;
   if (agent.target && agent.target.kind === "grok-bot") return true;
   return typeof agent.id === "string" && agent.id.indexOf("grok:bot:") === 0;
+}
+
+export function isCodexAppAgent(agent) {
+  return !!(agent && agent.target && agent.target.kind === "codex-app");
+}
+
+export function isClaudeDesktopAgent(agent) {
+  return !!(agent && agent.target && agent.target.kind === "claude-desktop");
+}
+
+export function isConsumerChatGptAgent(agent) {
+  return !!(agent && agent.target && agent.target.kind === "chatgpt");
 }
 
 /* ---------- process liveness (additive, absent-first) ----------

@@ -49,8 +49,8 @@ Hermes still uses `formic-mark.svg` — that is a pre-existing gap, not this pas
 
 | Source | Watch | Task | Close | Model | cwd | Tokens | Window | End | Send | Gap vs bar |
 |---|---|---|---|---|---|---|---|---|---|---|
-| claude | yes | yes | yes | yes | yes | observed when usage present | only with usage | turn-complete (`end_turn`) | cmux-exact | Window missing when usage missing. `end_turn` is a yield. |
-| codex | yes | yes | yes | yes | yes | observed session-cumulative | observed from payload | turn-complete | cmux-exact | No per-call series. |
+| claude | yes | yes | yes | yes | yes | observed when usage present | only with usage | turn-complete (`end_turn`) | cmux-exact for CLI; Claude Desktop (`entrypoint: claude-desktop`) has no attested write | Window missing when usage missing. `end_turn` is a yield. Desktop GUI rows refuse Send without mentioning cmux. Prefill is not Send. |
+| codex | yes | yes | yes | yes | yes | observed session-cumulative | observed from payload | turn-complete | cmux-exact for CLI; Codex Desktop / `codex_work_desktop` use app-server `thread/resume` + `turn/start` or `turn/steer` | No per-call series. Open app-server FDs still do not prove a thread is live. Consumer ChatGPT is not this surface. |
 | cursor | yes | yes | yes | yes | yes | latest-turn occupancy | needle table | archive / turn-complete | cmux-exact; no hook attach | Cost forced `null`. Child rows have no `startedAt`. |
 | factory | yes | title or first user | yes | settings.json | yes | session totals if settings exist | needle table | **none** | cmux-exact | Silent unknown if settings missing. No clean-end. |
 | prime | yes | yes | yes | yes, **defaults `"prime"`** | yes | observed when usage present | needle table (grok = catalog 500k) | **none** | cmux-exact | Invented model label when the transcript omits one. |

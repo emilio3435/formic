@@ -30,6 +30,8 @@ import {
   type LifecycleThresholds,
   type LifecycleVerdict,
 } from "./lifecycle";
+import { CLAUDE_DESKTOP_INTERRUPT_REASON } from "./claude-desktop";
+import { CODEX_APP_INTERRUPT_REASON } from "./codex-app";
 import { GROK_BOT_INTERRUPT_REASON } from "./grok-bot-gateway";
 import { canAddressTarget, canWriteToTarget, transmitRefusal } from "./targets";
 import type { CollectedAgent } from "./types";
@@ -66,14 +68,21 @@ export function controlsFor(
   const refusal = transmitRefusal({ target, processState: processStateFor(agent), archived, identityTrace });
   const grokBot = target.kind === "grok-bot"
     || (typeof agent.id === "string" && agent.id.startsWith("grok:bot:"));
+  const interruptReason = grokBot
+    ? GROK_BOT_INTERRUPT_REASON
+    : target.kind === "codex-app"
+      ? CODEX_APP_INTERRUPT_REASON
+      : target.kind === "claude-desktop" || target.kind === "chatgpt"
+        ? CLAUDE_DESKTOP_INTERRUPT_REASON
+        : undefined;
   const focusEnabled = routed && !archived;
   return [
     { action: "focus", enabled: focusEnabled, reason: focusEnabled ? undefined : refusal?.cause ?? targetReason },
     { action: "instruct", enabled: !refusal, reason: refusal?.cause },
     {
       action: "interrupt",
-      enabled: !refusal && !grokBot,
-      reason: grokBot ? GROK_BOT_INTERRUPT_REASON : refusal?.cause,
+      enabled: !refusal && !interruptReason,
+      reason: interruptReason ?? refusal?.cause,
     },
     { action: "archive", enabled: !archived, reason: archived ? "Agent is already archived." : undefined },
     /* The other direction, and it took until now to exist. The board has told
@@ -199,8 +208,11 @@ export function operatorControlState(
   archived: boolean,
 ): OperatorControlState {
   if (archived) return "observed-only";
-  if (target.kind === "grok-bot") {
+  if (target.kind === "grok-bot" || target.kind === "codex-app") {
     return canWriteToTarget(target) ? "linked" : "observed-only";
+  }
+  if (target.kind === "claude-desktop" || target.kind === "chatgpt") {
+    return "observed-only";
   }
   if (target.resolution === "shared-host") return "observed-only";
   if (target.surfaceId && (target.resolution === "exact" || target.resolution === "unique-cwd")) {

@@ -25,6 +25,13 @@ import {
   transmitRefusal,
   type TransmitRefusal,
 } from "./targets";
+import {
+  isCodexAppAgent,
+  isConsumerChatGptAgent,
+  lastKnownChatGptTarget,
+  lastKnownCodexAppTarget,
+} from "./codex-app";
+import { isClaudeDesktopAgent, lastKnownClaudeDesktopTarget } from "./claude-desktop";
 import { isGrokBotAgent, lastKnownGrokBotTarget } from "./grok-bot-gateway";
 import { lifecycleIssues, withIssueDecoration } from "./snapshot-issues";
 import { emptyAttentionCoverage, recordAttention } from "./attention-signal";
@@ -88,7 +95,11 @@ import {
 } from "./types";
 
 function lastKnownControlTarget(source: CollectedAgent, reason: string): CmuxTarget {
-  return isGrokBotAgent(source) ? lastKnownGrokBotTarget(source, reason) : { resolution: "missing", reason };
+  if (isGrokBotAgent(source)) return lastKnownGrokBotTarget(source, reason);
+  if (isConsumerChatGptAgent(source)) return lastKnownChatGptTarget(reason);
+  if (isClaudeDesktopAgent(source)) return lastKnownClaudeDesktopTarget(reason);
+  if (isCodexAppAgent(source)) return lastKnownCodexAppTarget(source, reason);
+  return { resolution: "missing", reason };
 }
 
 function pathIsWithin(path: string, root: string): boolean {
