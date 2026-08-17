@@ -7,6 +7,7 @@ import { createWorkerCleanupProposer } from "./cleanup-propose";
 import { createNativeCleanupLauncher } from "./cleanup-launch";
 import { BunCommandRunner } from "./command";
 import { loadCmuxSocketEnv, runningInsideCmux } from "./cmux-auth";
+import { ensureFormicOrchToken } from "./orch";
 import { runtimeCmuxExecutable } from "./cmux";
 import { JsonIdentityBindingStore } from "./identity-bindings";
 import { HubState, loadProgramHints } from "./state";
@@ -19,6 +20,7 @@ import { JsonTriageQueueStore, NativeLunaInvestigationRunner } from "./triage";
 
 const PROJECT_ROOT = join(import.meta.dir, "../..");
 loadCmuxSocketEnv(PROJECT_ROOT);
+ensureFormicOrchToken(PROJECT_ROOT);
 const HOSTNAME = "127.0.0.1";
 const PRODUCTION_PORT = 4_701;
 const configuredPort = Number(process.env.MOUNTAIN_PORT ?? PRODUCTION_PORT);
@@ -97,6 +99,7 @@ const mountainFetch = createMountainFetch({
      mirror feature on. The OS also refuses a second sustained 4701 server. */
   repoGroupMirrorWriter: configuredPort === PRODUCTION_PORT,
   webRoot: join(PROJECT_ROOT, "src/web"),
+  repoRoot: PROJECT_ROOT,
 });
 const fetchWithAgentLinks = createAgentLinkFetch(mountainFetch, {
   getSnapshot: () => state.get(),

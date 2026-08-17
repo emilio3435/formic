@@ -212,9 +212,18 @@ export function deriveControlState(agent) {
      The server now refuses the write. If the chip still read "Linked" beside a
      dead Send button, the operator would read a bug and retry it, which is the
      precise failure this state exists to prevent. */
+  if (t.kind === "grok-bot") {
+    return t.gatewayReady && t.resolution === "gateway" ? "linked" : "observed-only";
+  }
   if (t.surfaceId && t.resolution === "exact") return "linked";
   if (t.surfaceId && t.resolution === "unique-cwd") return "unproven";
   return t.resolution === "ambiguous" ? "quarantined" : "observed-only";
+}
+
+export function isGrokBotAgent(agent) {
+  if (!agent) return false;
+  if (agent.target && agent.target.kind === "grok-bot") return true;
+  return typeof agent.id === "string" && agent.id.indexOf("grok:bot:") === 0;
 }
 
 /* ---------- process liveness (additive, absent-first) ----------
@@ -317,6 +326,14 @@ export function livenessView(agent) {
   // is untouched, so the chip's styling and every existing selector still match.
   if (key === "unknown" && isTerminal(agent)) {
     return { key, ...LIVENESS_ENDED_UNKNOWN };
+  }
+  if (key === "unknown" && isGrokBotAgent(agent)) {
+    return {
+      key,
+      label: "Grok Bot has no process identity.",
+      tone: "quiet",
+      detail: "Grok Bot chats are not OS processes Formic can match. Roster time is not liveness.",
+    };
   }
   return { key, ...LIVENESS_VIEW[key] };
 }

@@ -291,6 +291,8 @@ function archiveCopy(
     cwd: agent.cwd,
     launchCwd: agent.launchCwd,
     originCwd: agent.originCwd,
+    instanceId: agent.instanceId,
+    instanceLabel: agent.instanceLabel,
     model: agent.model,
     effort: agent.effort,
     task: agent.task,

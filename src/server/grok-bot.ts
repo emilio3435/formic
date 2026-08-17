@@ -3,7 +3,10 @@ import { basename, join } from "node:path";
 import type { LifecycleThresholds } from "./lifecycle";
 import { DEFAULT_SESSION_WINDOW_MS, makeAgent } from "./collectors";
 import { instanceIdFor } from "./collector-instances";
+import { rememberGrokBotInstanceHome } from "./grok-bot-attach";
+import { refreshGrokBotGatewayProbe } from "./grok-bot-gateway";
 import type { HumanMessageCandidate } from "./human-message";
+import { ThreadClock } from "./thread-clock";
 import type { CollectedAgent, CollectionResult } from "./types";
 
 type JsonRecord = Record<string, unknown>;
@@ -24,6 +27,7 @@ interface RosterRow {
 export interface ParsedGrokBotReplica {
   transcriptTail?: string;
   humanMessages: HumanMessageCandidate[];
+  thread: { lastThreadAt?: string; workingSince?: string };
 }
 
 export type GrokBotAgent = CollectedAgent & {
@@ -58,7 +62,22 @@ function timestamp(value: number | undefined): string | undefined {
 
 function lastEntryText(value: unknown): string | undefined {
   const entry = record(value);
-  return text(value) ?? text(entry?.content) ?? text(entry?.message);
+  /* Live roster lastEntry is `{ kind: "text", text }`, the agent close. */
+  return text(value) ?? text(entry?.text) ?? text(entry?.content) ?? text(entry?.message);
+}
+
+function payloadText(value: unknown): string | undefined {
+  const direct = text(value);
+  if (direct) return direct;
+  const payload = record(value);
+  if (!payload) return undefined;
+  /* One-line row: text cards only. Skip attachment / widget / cursor-agent. */
+  if (text(payload.type) !== "text") return undefined;
+  return text(payload.content);
+}
+
+function entryText(entry: JsonRecord): string | undefined {
+  return payloadText(entry.content) ?? payloadText(entry.message);
 }
 
 function filesystemPath(value: string | undefined): string | undefined {
@@ -135,30 +154,67 @@ export function parseRoster(value: unknown): RosterRow[] {
   });
 }
 
+export function isReplicaBlob(raw: string): boolean {
+  try {
+    const envelope = record(JSON.parse(raw));
+    const value = record(envelope?.value);
+    return Boolean(envelope && typeof envelope.schemaVersion === "number" && value && Array.isArray(value.entries));
+  } catch {
+    return false;
+  }
+}
+
+export function parseReplicaBlob(raw: string): ParsedGrokBotReplica {
+  return parseReplica(envelopeValue(raw));
+}
+
 export function parseReplica(value: unknown): ParsedGrokBotReplica {
   const entries = record(value)?.entries;
   const humanMessages: HumanMessageCandidate[] = [];
+  const clock = new ThreadClock();
   let transcriptTail: string | undefined;
-  if (!Array.isArray(entries)) return { humanMessages };
+  if (!Array.isArray(entries)) return { humanMessages, thread: clock.snapshot() };
 
   for (const candidate of entries) {
     const entry = record(candidate);
     if (!entry) continue;
-    const content = text(entry.content) ?? text(entry.message);
-    if (content) transcriptTail = content;
 
     const kind = text(entry.kind);
     const role = text(entry.role);
-    if (content && (kind === "send-message" || role === "user")) {
+    /* Live schemaVersion 1: send-message is agent → user. kind:message
+       role:assistant is an inter-agent copy (toAgent), not the row close.
+       The inverted test fixture treated string send-message as the operator
+       — do not implement that. */
+    if (kind === "user-attachment") continue;
+    if (kind === "message" && role === "assistant") continue;
+
+    const content = entryText(entry);
+    if (!content) continue;
+
+    const at = timestamp(millis(entry.timestampMs));
+    if (kind === "send-message") {
+      clock.observe(at, "assistant", { endsTurn: true });
+      transcriptTail = content;
+      humanMessages.push({
+        role: "assistant",
+        content,
+        timestamp: at,
+      });
+      continue;
+    }
+
+    if (role === "user") {
+      clock.observe(at, "user");
+      transcriptTail = content;
       humanMessages.push({
         role: "user",
         content,
-        timestamp: timestamp(millis(entry.timestampMs)),
+        timestamp: at,
       });
     }
   }
 
-  return { transcriptTail, humanMessages };
+  return { transcriptTail, humanMessages, thread: clock.snapshot() };
 }
 
 async function readCapped(path: string, maxBytes: number): Promise<string> {
@@ -206,7 +262,14 @@ export async function collectGrokBotSessions(
 
   const agents: GrokBotAgent[] = [];
   const errors: string[] = [];
-  const seen = new Set<string>();
+  const pending: Array<{
+    root: string;
+    row: RosterRow;
+    transcriptTail?: string;
+    humanMessages: HumanMessageCandidate[];
+    thread?: { lastThreadAt?: string; workingSince?: string };
+    sourcePath: string;
+  }> = [];
 
   for (const root of roots) {
     const persistenceRoot = join(root, "sand-client-persistence");
@@ -250,11 +313,9 @@ export async function collectGrokBotSessions(
         const activityAt = row.lastActivityAt ?? row.updatedAt;
         if (activityAt !== undefined && nowMs - activityAt > windowMs) continue;
 
-        const agentId = `grok:bot:${row.id}`;
-        if (seen.has(agentId)) continue;
-
         let transcriptTail = row.lastEntry;
         let humanMessages: HumanMessageCandidate[] = [];
+        let thread: { lastThreadAt?: string; workingSince?: string } | undefined;
         let sourcePath = roster.path;
         const replica = replicas.get(row.id);
         if (!replica) {
@@ -264,38 +325,69 @@ export async function collectGrokBotSessions(
             const parsed = parseReplica(await readBlob(replica.path, MAX_REPLICA_BYTES));
             transcriptTail = parsed.transcriptTail ?? transcriptTail;
             humanMessages = parsed.humanMessages;
+            thread = parsed.thread;
             sourcePath = replica.path;
           } catch (error) {
             errors.push(`grok-bot replica ${row.id} ${replica.path}: ${describe(error)}`);
           }
         }
 
-        const updatedAt = timestamp(row.lastActivityAt ?? row.updatedAt ?? row.createdAt)
-          ?? new Date(nowMs).toISOString();
-        const made = makeAgent({
-          provider: "grok",
-          sourceSessionId: `bot:${row.id}`,
-          displayName: row.name ?? row.title ?? row.description,
-          /* Sandbox store.db is not a project. Fall back to the Mac instance
-             home so the board groups "Grok Bot" / "Grok Bot 2", not "store.db". */
-          cwd: filesystemPath(row.path) ?? root,
-          originCwd: root,
-          startedAt: timestamp(row.createdAt),
-          updatedAt,
-          tokens: { scope: "unknown", provenance: "unknown" },
-          transcriptTail,
-          humanMessages,
-          meta: { sourcePath, nowMs, thresholds },
-        });
-        const agent: GrokBotAgent = {
-          ...made,
-          instanceId: instanceIdFor("grok-bot", root),
-          instanceLabel: basename(root),
-        };
-        seen.add(agent.id);
-        agents.push(agent);
+        pending.push({ root, row, transcriptTail, humanMessages, thread, sourcePath });
       }
     }
+  }
+
+  const rootsByRosterId = new Map<string, Set<string>>();
+  const probed = new Set<string>();
+  for (const item of pending) {
+    const rootsForId = rootsByRosterId.get(item.row.id) ?? new Set<string>();
+    rootsForId.add(item.root);
+    rootsByRosterId.set(item.row.id, rootsForId);
+    const instanceId = instanceIdFor("grok-bot", item.root);
+    rememberGrokBotInstanceHome(instanceId, item.root);
+    if (probed.has(instanceId)) continue;
+    probed.add(instanceId);
+    await refreshGrokBotGatewayProbe(instanceId, item.root);
+  }
+
+  const seen = new Set<string>();
+  for (const item of pending) {
+    const colliding = (rootsByRosterId.get(item.row.id)?.size ?? 0) > 1;
+    const instanceId = instanceIdFor("grok-bot", item.root);
+    const instanceSlug = instanceId.slice("grok-bot:".length);
+    const agentId = colliding ? `grok:bot:${instanceSlug}:${item.row.id}` : `grok:bot:${item.row.id}`;
+    if (seen.has(agentId)) continue;
+
+    const updatedAt = timestamp(item.row.lastActivityAt ?? item.row.updatedAt ?? item.row.createdAt)
+      ?? new Date(nowMs).toISOString();
+    const made = makeAgent({
+      provider: "grok",
+      sourceSessionId: `bot:${item.row.id}`,
+      displayName: item.row.name ?? item.row.title ?? item.row.description,
+      /* Sandbox store.db is not a project. Fall back to the Mac instance
+         home so the board groups "Grok Bot" / "Grok Bot 2", not "store.db". */
+      cwd: filesystemPath(item.row.path) ?? item.root,
+      originCwd: item.root,
+      startedAt: timestamp(item.row.createdAt),
+      updatedAt,
+      tokens: { scope: "unknown", provenance: "unknown" },
+      transcriptTail: item.transcriptTail,
+      humanMessages: item.humanMessages,
+      thread: item.thread,
+      meta: { sourcePath: item.sourcePath, nowMs, thresholds },
+    });
+    const agent: GrokBotAgent = {
+      ...made,
+      id: agentId,
+      instanceId,
+      instanceLabel: basename(item.root),
+      /* N Bot rows share one Application Support folder. cwd fallback would
+         mint unique-cwd against that folder; the early grok-bot resolve is
+         the real fix, this is belt-and-suspenders. */
+      allowCwdFallback: false,
+    };
+    seen.add(agent.id);
+    agents.push(agent);
   }
 
   return { value: agents, errors };

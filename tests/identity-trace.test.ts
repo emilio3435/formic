@@ -141,6 +141,35 @@ describe("target resolution trace", () => {
     cwd: "/Users/emilionunezgarcia/Developer/unique-project",
     sourceSessionIds: [agent.sourceSessionId],
   };
+  const cwdBystander: CollectedAgent = {
+    ...agent,
+    id: "omp:22222222-2222-4222-8222-222222222222",
+    sourceSessionId: "22222222-2222-4222-8222-222222222222",
+    cwd: exactSurface.cwd,
+  };
+  const cwdImplicated: CollectedAgent = {
+    ...agent,
+    cwd: exactSurface.cwd,
+  };
+  const cwdConflict: CmuxSurface = {
+    ...exactSurface,
+    sourceSessionIds: [],
+    identityConflict: "cmux SURFACE-HEALTH has conflicting open agent session files on ttys033",
+    identityTrace: {
+      surfaceId: exactSurface.surfaceId,
+      processes: [{ pid: 202, command: "omp -p", recognizedAgentProcess: true }],
+      openFileMatches: [{
+        pid: 202,
+        path: `/tmp/${cwdImplicated.sourceSessionId}.jsonl`,
+        provider: cwdImplicated.provider,
+        sessionId: cwdImplicated.sourceSessionId,
+      }],
+      commandHints: [],
+      outcome: "open-file-conflict",
+      sourceSessionIds: [],
+      identityConflict: "cmux SURFACE-HEALTH has conflicting open agent session files on ttys033",
+    },
+  };
 
   test("an exact session match records why the hook and recorded tiers passed and which surface matched", () => {
     const { target, trace } = resolveAgentTargetWithTrace(agent, [exactSurface]);
@@ -226,15 +255,61 @@ describe("target resolution trace", () => {
     });
   });
 
-  test("a quarantined surface finishes the trace at the tier that observed the conflict", () => {
-    const conflicted: CmuxSurface = {
+  test("C-cwd-bystander: a same-cwd agent absent from the conflict evidence follows the shared-cwd path", () => {
+    const { target, trace } = resolveAgentTargetWithTrace(
+      cwdBystander,
+      [cwdConflict],
+      [cwdImplicated, cwdBystander],
+    );
+
+    expect(target.resolution).toBe("ambiguous");
+    expect(target.reason).toContain("2 active sources share this cwd");
+    expect(target.reason).not.toContain("exact identity evidence conflicts");
+    expect(trace.steps.at(-1)).toMatchObject({ tier: "cwd", outcome: "ambiguous" });
+  });
+
+  test("I-shared-host-target: a Grok session on a shared-host surface is not exact", () => {
+    const grokAgent: CollectedAgent = {
+      ...agent,
+      id: "grok:01a00dd7-337a-7a71-9d46-201d9c3dc4c1",
+      provider: "grok",
+      sourceSessionId: "01a00dd7-337a-7a71-9d46-201d9c3dc4c1",
+      cwd: exactSurface.cwd,
+    };
+    const host: CmuxSurface = {
       ...exactSurface,
       sourceSessionIds: [],
-      identityConflict: "cmux SURFACE-HEALTH has conflicting open agent session files on ttys033",
+      identityTrace: {
+        surfaceId: exactSurface.surfaceId,
+        processes: [{ pid: 9103, command: "agent", recognizedAgentProcess: false }],
+        openFileMatches: [{
+          pid: 9103,
+          path: `/Users/me/.grok/sessions/proj/${grokAgent.sourceSessionId}/events.jsonl`,
+          provider: "grok",
+          sessionId: grokAgent.sourceSessionId,
+        }],
+        commandHints: [],
+        outcome: "shared-host",
+        sourceSessionIds: [],
+      },
     };
-    const cwdAgent: CollectedAgent = { ...agent, cwd: "/Users/emilionunezgarcia/Developer/unique-project" };
 
-    const { target, trace } = resolveAgentTargetWithTrace(cwdAgent, [conflicted]);
+    const { target, trace } = resolveAgentTargetWithTrace(grokAgent, [host]);
+
+    expect(target.resolution).toBe("shared-host");
+    expect(target.reason).toBe(
+      "Several Grok chats share this terminal; Send stays off until the pane is one chat.",
+    );
+    expect(target.surfaceId).toBe(host.surfaceId);
+    expect(trace.steps.some(({ detail }) => detail.includes("share this terminal"))).toBe(true);
+  });
+
+  test("C-cwd-implicated: an agent named by open-file evidence stays quarantined at cwd", () => {
+    const { target, trace } = resolveAgentTargetWithTrace(
+      cwdImplicated,
+      [cwdConflict],
+      [cwdImplicated, cwdBystander],
+    );
 
     expect(target.resolution).toBe("ambiguous");
     expect(target.reason).toContain("quarantined");

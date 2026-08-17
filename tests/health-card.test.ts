@@ -274,3 +274,119 @@ describe("health chip — can I trust these readings, and healthRemedy behind it
     expect(M.healthRemedy(snap).problem).toContain("1 live session");
   });
 });
+
+/* D4 — the Readings chip is a verdict about INSTRUMENTS, not about routing.
+
+   Emilio's board: collectors 9/9 healthy, cmux reachable, snapshot live,
+   /api/health `healthy` with `controlErrors: 2` — and the chip read "Readings
+   degraded" because two Grok panes were hosting several chats each. The chip
+   was reporting Send being off somewhere as the instruments being broken, which
+   is what trained him to stop reading it.
+
+   The strings below are the server's, verbatim from identity.ts and
+   identity-copy.ts. They are the whole point of these tests: a paraphrase
+   ("conflicting session files") passes any filter and proves nothing. */
+const IDENTITY_ERRORS = [
+  "cmux 8B1F2C3D-4E5F-4A6B-8C9D-0E1F2A3B4C5D has conflicting open agent session files on ttys011",
+  "cmux 7A2E1D0C-3B4F-4C5D-9E8A-1F2B3C4D5E6F refused command identity: two recognized commands on one pane",
+  "cmux 6C5B4A39-2D1E-4F0A-8B7C-9D0E1F2A3B4C has conflicting recognized agent commands on ttys016",
+];
+const SHARED_HOST_REASON =
+  "Several Grok chats share this terminal; Send stays off until the pane is one chat.";
+
+describe("R — Readings reports the instruments, not the routing", () => {
+  test("R-errors-only-healthy: identity conflicts alone leave the chip healthy", () => {
+    const snap = snapshot({
+      controlHealth: { cmuxReachable: true, lastCheckedAt: "x", errors: IDENTITY_ERRORS, staleSources: [] },
+    });
+    const data = M.summaryWidgetData("health", snap, "live", "percent", [], false);
+    expect(data.value).toBe("Readings healthy");
+    expect(data.tone).toBe("ok");
+    expect(M.systemStatus(snap, "live", false).key).toBe("operational");
+    expect(M.degradedSeverity(snap, "live", false)).toBeNull();
+    // The conflicts have not been swallowed — they are still findings with a
+    // route. The chip simply is not the surface that reports them.
+    expect(snap.controlHealth.errors).toHaveLength(3);
+    // And the healthy sublabel is the collector census, not a quoted conflict.
+    expect(data.sublabel).toContain("4/4 sources healthy");
+    expect(data.sublabel).not.toContain("conflicting");
+
+    // The shared-host lane must not emit its reason as an error at all; if a
+    // later change did, this chip is not how we would find out.
+    const hosted = snapshot({
+      controlHealth: { cmuxReachable: true, lastCheckedAt: "x", errors: [SHARED_HOST_REASON], staleSources: [] },
+    });
+    expect(M.summaryWidgetData("health", hosted, "live", "percent", [], false).value).toBe("Readings healthy");
+  });
+
+  test("R-cmux-down-degraded: every real instrument fault still degrades", () => {
+    /* The failure mode of D4 is a filter so wide the chip can never go amber.
+       Each of these is a genuine instrument fault sitting BESIDE the identity
+       noise, and each one must still be read. */
+    const down = snapshot({
+      controlHealth: { cmuxReachable: false, lastCheckedAt: "x", errors: IDENTITY_ERRORS, staleSources: [] },
+    });
+    const downCard = M.summaryWidgetData("health", down, "live", "percent", [], false);
+    expect(downCard.value).toBe("Readings degraded");
+    expect(downCard.severityKey).toBe("blocking");
+
+    // A collector that cannot open its database is an instrument failure, and
+    // the chip quotes ITS sentence rather than a routing conflict's.
+    const collectorFault = snapshot({
+      controlHealth: {
+        cmuxReachable: true, lastCheckedAt: "x", staleSources: [],
+        errors: [...IDENTITY_ERRORS, "cursor GUI conversations: unable to open database file"],
+      },
+    });
+    const faultCard = M.summaryWidgetData("health", collectorFault, "live", "percent", [], false);
+    expect(faultCard.value).toBe("Readings degraded");
+    expect(faultCard.sublabel).toBe("cursor GUI conversations: unable to open database file");
+    expect(faultCard.sublabel).not.toContain("conflicting");
+
+    // Stale sources, a dead feed and a failed refresh are untouched by D4.
+    const stale = snapshot({
+      controlHealth: { cmuxReachable: true, lastCheckedAt: "x", errors: IDENTITY_ERRORS, staleSources: ["codex"] },
+    });
+    expect(M.summaryWidgetData("health", stale, "live", "percent", [], false).value).toBe("Readings degraded");
+    const quiet = snapshot({
+      controlHealth: { cmuxReachable: true, lastCheckedAt: "x", errors: IDENTITY_ERRORS, staleSources: [] },
+    });
+    expect(M.summaryWidgetData("health", quiet, "stale", "percent", [], false).value).toBe("Readings degraded");
+    expect(M.summaryWidgetData("health", quiet, "live", "percent", [], true).value).toBe("Readings degraded");
+    const sourceDown = snapshot({
+      controlHealth: { cmuxReachable: true, lastCheckedAt: "x", errors: IDENTITY_ERRORS, staleSources: [] },
+      totals: { live: 1, tracked: 1, attention: 0, sourceHealth: { healthy: 3, degraded: 1, absent: 0, total: 4 } },
+    });
+    expect(M.summaryWidgetData("health", sourceDown, "live", "percent", [], false).value).toBe("Readings degraded");
+  });
+
+  test("R-unaddressable-quarantine: a live quarantined row counts as un-drivable", () => {
+    /* "N can't take commands" counted `unproven` only, so the rows wearing the
+       red quarantine mark — the ones an operator is most likely to try — were
+       invisible to the very sentence that exists to warn them. */
+    const quarantined = agent({ id: "codex:q", activity: "working", controlState: "quarantined" });
+    const unproven = agent({ id: "codex:u", activity: "working", controlState: "unproven" });
+    const linked = agent({ id: "codex:l", activity: "working", controlState: "linked" });
+    // Ended rows are uncontrollable by definition and are not a shortfall.
+    const finished = agent({ id: "codex:e", activity: "ended", status: "archived", controlState: "quarantined" });
+    // observed-only is the resting state of every session with no cmux surface
+    // at all (all of Grok Build); counting it would report a healthy board as
+    // broken, so it stays out.
+    const watched = agent({ id: "codex:o", activity: "working", controlState: "observed-only" });
+
+    const one = snapshot({ programs: [{ id: "p1", name: "p1", agents: [quarantined, linked] }] });
+    expect(M.unaddressableCount(one)).toBe(1);
+    expect(M.summaryWidgetData("health", one, "live", "percent", [], false).sublabel)
+      .toContain("1 session cannot take commands");
+
+    const both = snapshot({ programs: [{ id: "p1", name: "p1", agents: [quarantined, unproven, linked, finished, watched] }] });
+    expect(M.unaddressableCount(both)).toBe(2);
+    expect(M.summaryWidgetData("health", both, "live", "percent", [], false).sublabel)
+      .toContain("2 sessions cannot take commands");
+    // The murmur reads the same derivation, so the two cannot disagree.
+    expect(M.watchClauses(both)).toContain("2 can't take commands");
+
+    const none = snapshot({ programs: [{ id: "p1", name: "p1", agents: [linked, finished, watched] }] });
+    expect(M.unaddressableCount(none)).toBe(0);
+  });
+});

@@ -24,6 +24,7 @@ import { canWriteToTarget } from "./targets";
 import { modelConfigLoadError } from "./model-config";
 import { handleCollectorInstancesRequest, type JsonCollectorInstanceStore } from "./collector-instances";
 import { handleControlRequest } from "./http";
+import { ensureFormicOrchToken, handleOrchFleet, handleOrchLaunch, handleOrchPeek, handleOrchSend } from "./orch";
 import { handleProgramAliasRequest, type ProgramAliasStore } from "./program-aliases";
 import {
   DEFAULT_SCAN_WINDOW_HOURS,
@@ -1054,7 +1055,8 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
          two paths. Clearing another agent's request for a human is quieter than
          a misrouted instruction and worse in one respect: the signal that
          someone needed help is gone and nothing reports that it was. */
-      if (!canWriteToTarget(agent.target)) {
+      const attentionSurfaceId = agent.target.kind === "grok-bot" ? undefined : agent.target.surfaceId;
+      if (!canWriteToTarget(agent.target) || !attentionSurfaceId) {
         return responseError(
           409,
           "UNSAFE_TARGET",
@@ -1067,7 +1069,7 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
       }
       try {
         const state = await (await attentionStore).apply(
-          agent.target.surfaceId,
+          attentionSurfaceId,
           action as AttentionAction,
           until,
         );
@@ -1247,6 +1249,34 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
           "content-type": "text/event-stream; charset=utf-8",
         },
       });
+    }
+    if (url.pathname.startsWith("/api/orch/")) {
+      const projectRoot = dependencies.repoRoot
+        ?? (dependencies.webRoot.endsWith(`${sep}src${sep}web`)
+          ? resolve(dependencies.webRoot, "../..")
+          : resolve(dependencies.webRoot, ".."));
+      try {
+        ensureFormicOrchToken(projectRoot);
+      } catch {
+        return responseError(500, "ORCH_TOKEN_UNREADABLE", "The orch token file could not be read.");
+      }
+      const orch = {
+        getSnapshot: () => dependencies.state.get(),
+        runner: dependencies.runner,
+        archiveStore: dependencies.archiveStore,
+        projectRoot,
+        cmuxExecutable: dependencies.cmuxExecutable,
+        now: dependencies.now,
+        afterSend: async (agentId: string) => {
+          await markIssuesForAgents([agentId]);
+          await dependencies.state.refresh({ cmux: true });
+        },
+      };
+      if (url.pathname === "/api/orch/fleet") return handleOrchFleet(request, orch);
+      if (url.pathname === "/api/orch/peek") return handleOrchPeek(request, orch);
+      if (url.pathname === "/api/orch/send") return handleOrchSend(request, orch);
+      if (url.pathname === "/api/orch/launch") return handleOrchLaunch(request, orch);
+      return responseError(404, "NOT_FOUND", "Unknown orch verb.");
     }
     if (url.pathname === "/api/control") {
       const body = jsonRecord(request.clone());

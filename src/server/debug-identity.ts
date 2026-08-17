@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { isAbsolute } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import type {
   AgentSnapshot,
   HubSnapshot,
@@ -8,6 +8,7 @@ import type {
   TargetResolution,
 } from "../shared/types";
 import { readableChatBody } from "./human-message";
+import { isReplicaBlob, parseReplicaBlob } from "./grok-bot";
 import { routingSurfaceObservations, type RoutingSurfaceObservation } from "./targets";
 import type { CmuxSurface } from "./types";
 
@@ -140,6 +141,15 @@ function transcriptRole(value: unknown): TranscriptLine["role"] {
     : "unknown";
 }
 
+function transcriptTimestamp(value: unknown): string | null {
+  const millis = typeof value === "number"
+    ? value * (value < 10_000_000_000 ? 1_000 : 1)
+    : typeof value === "string"
+      ? Date.parse(value)
+      : Number.NaN;
+  return Number.isFinite(millis) ? new Date(millis).toISOString() : null;
+}
+
 function transcriptCandidate(
   agent: AgentSnapshot,
   row: Record<string, any>,
@@ -182,7 +192,290 @@ function transcriptCandidate(
   };
 }
 
-function transcriptLines(agent: AgentSnapshot, contents: string): TranscriptLine[] {
+function pushTranscriptLine(
+  lines: TranscriptLine[],
+  role: unknown,
+  content: unknown,
+  at: unknown,
+  provider: AgentSnapshot["provider"],
+): void {
+  const text = readableChatBody(provider, content);
+  if (!text) return;
+  const line: TranscriptLine = { at: transcriptTimestamp(at), role: transcriptRole(role), text };
+  const previous = lines.at(-1);
+  if (previous?.role === line.role && previous.text === line.text) return;
+  lines.push(line);
+}
+
+function replicaTranscriptLines(agent: AgentSnapshot, contents: string): TranscriptLine[] {
+  const lines: TranscriptLine[] = [];
+  for (const message of parseReplicaBlob(contents).humanMessages) {
+    pushTranscriptLine(lines, message.role, message.content, message.timestamp, agent.provider);
+  }
+  return lines;
+}
+
+type GrokSpeechDraft = {
+  kind: "speech";
+  at: unknown;
+  role: "user" | "assistant" | "system";
+  content: string;
+};
+
+type GrokToolDraft = {
+  kind: "tool";
+  at: unknown;
+  callId: string;
+  title?: string;
+  status?: string;
+  output?: string;
+  historyOutput?: string;
+  startedMs?: number;
+  endedMs?: number;
+};
+
+type GrokTranscriptDraft = GrokSpeechDraft | GrokToolDraft;
+
+function object(value: unknown): Record<string, any> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, any>
+    : undefined;
+}
+
+function grokChunkText(content: unknown): string | undefined {
+  if (typeof content === "string") return content;
+  const item = object(content);
+  return typeof item?.text === "string" ? item.text : undefined;
+}
+
+function timestampMillis(value: unknown): number | undefined {
+  const normalized = transcriptTimestamp(value);
+  return normalized === null ? undefined : Date.parse(normalized);
+}
+
+function byteText(value: unknown): string | undefined {
+  if (!Array.isArray(value) || !value.every((item) => Number.isInteger(item) && item >= 0 && item <= 255)) {
+    return undefined;
+  }
+  return new TextDecoder().decode(Uint8Array.from(value));
+}
+
+function grokToolOutput(value: unknown, depth = 0): string | undefined {
+  if (typeof value === "string") return value.trim() ? value : undefined;
+  if (depth > 3) return undefined;
+  const bytes = byteText(value);
+  if (bytes !== undefined) return bytes.trim() ? bytes : undefined;
+  if (Array.isArray(value)) {
+    const parts = value.flatMap((item) => {
+      const part = grokToolOutput(item, depth + 1);
+      return part ? [part] : [];
+    });
+    return parts.length > 0 ? parts.join("\n") : undefined;
+  }
+  const item = object(value);
+  if (!item) return undefined;
+  for (const key of [
+    "output_for_prompt",
+    "tool_output_for_prompt",
+    "tool_output_for_prompt_concise",
+    "content_concise",
+    "raw_output",
+    "content",
+    "output",
+    "stdout",
+    "stderr",
+  ]) {
+    const rendered = grokToolOutput(item[key], depth + 1);
+    if (rendered) return rendered;
+  }
+  for (const key of ["Content", "FileContent", "EditsApplied"]) {
+    const rendered = grokToolOutput(item[key], depth + 1);
+    if (rendered) return rendered;
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function pushGrokSpeech(
+  drafts: GrokTranscriptDraft[],
+  role: GrokSpeechDraft["role"],
+  content: string,
+  at: unknown,
+): void {
+  const previous = drafts.at(-1);
+  if (previous?.kind === "speech" && previous.role === role) {
+    previous.content += content;
+    return;
+  }
+  drafts.push({ kind: "speech", at, role, content });
+}
+
+function grokToolTitle(update: Record<string, any>): string | undefined {
+  if (typeof update.title === "string" && update.title.trim()) return update.title.trim();
+  const metadata = object(object(update._meta)?.["x.ai/tool"]);
+  for (const candidate of [metadata?.label, metadata?.name]) {
+    if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
+  }
+  return undefined;
+}
+
+function enrichGrokHistory(
+  drafts: GrokTranscriptDraft[],
+  tools: Map<string, GrokToolDraft>,
+  historyContents: string | undefined,
+): void {
+  if (!historyContents) return;
+  const speech = {
+    user: drafts.filter((draft): draft is GrokSpeechDraft => draft.kind === "speech" && draft.role === "user"),
+    assistant: drafts.filter((draft): draft is GrokSpeechDraft => draft.kind === "speech" && draft.role === "assistant"),
+  };
+  const consumed = { user: 0, assistant: 0 };
+
+  for (const raw of historyContents.split("\n")) {
+    if (!raw.trim()) continue;
+    let row: Record<string, any> | undefined;
+    try {
+      row = object(JSON.parse(raw));
+    } catch {
+      continue;
+    }
+    if (!row) continue;
+    if (row.type === "tool_result" && typeof row.tool_call_id === "string") {
+      const tool = tools.get(row.tool_call_id);
+      const output = grokToolOutput(row.content);
+      if (tool && output) tool.historyOutput = output;
+      continue;
+    }
+    if (row.type === "assistant" && Array.isArray(row.tool_calls)) {
+      for (const call of row.tool_calls) {
+        const item = object(call);
+        const tool = typeof item?.id === "string" ? tools.get(item.id) : undefined;
+        if (tool && !tool.title && typeof item?.name === "string" && item.name.trim()) {
+          tool.title = item.name.trim();
+        }
+      }
+    }
+    if (row.type !== "user" && row.type !== "assistant") continue;
+    const role: "user" | "assistant" = row.type;
+    const content = readableChatBody("grok", row.content);
+    if (!content) continue;
+    const target = speech[role][consumed[role]++];
+    if (!target) {
+      drafts.push({ kind: "speech", at: null, role, content });
+      continue;
+    }
+    const current = readableChatBody("grok", target.content);
+    if (!current || (content.length > current.length && content.includes(current))) {
+      target.content = content;
+    }
+  }
+}
+
+function formatDuration(startedMs: number | undefined, endedMs: number | undefined): string | undefined {
+  if (startedMs === undefined || endedMs === undefined || endedMs < startedMs) return undefined;
+  const seconds = (endedMs - startedMs) / 1_000;
+  return `${Number.isInteger(seconds) ? seconds : seconds.toFixed(1)}s`;
+}
+
+function grokToolLine(tool: GrokToolDraft): TranscriptLine {
+  const duration = formatDuration(tool.startedMs, tool.endedMs);
+  const output = tool.historyOutput ?? tool.output;
+  const text = [
+    tool.title ?? "Tool call",
+    `Call: ${tool.callId}`,
+    ...(tool.status ? [`Status: ${tool.status}`] : []),
+    ...(duration ? [`Duration: ${duration}`] : []),
+    ...(output ? [`Output:\n${output}`] : []),
+  ].join("\n");
+  return { at: transcriptTimestamp(tool.at), role: "tool", text };
+}
+
+function grokTranscriptLines(
+  agent: AgentSnapshot,
+  contents: string,
+  historyContents?: string,
+): TranscriptLine[] {
+  const drafts: GrokTranscriptDraft[] = [];
+  const tools = new Map<string, GrokToolDraft>();
+  for (const raw of contents.split("\n")) {
+    if (!raw.trim()) continue;
+    let row: Record<string, any> | undefined;
+    try {
+      row = object(JSON.parse(raw));
+    } catch {
+      continue;
+    }
+    if (!row || (row.method !== "session/update" && row.method !== "_x.ai/session/update")) continue;
+    const update = object(object(row.params)?.update);
+    if (!update) continue;
+    const content = grokChunkText(update.content);
+    if (update.sessionUpdate === "user_message_chunk") {
+      if (object(update._meta)?.hideFromScrollback !== true) {
+        pushGrokSpeech(drafts, "user", content ?? "", row.timestamp);
+      }
+      continue;
+    }
+    if (update.sessionUpdate === "agent_message_chunk") {
+      pushGrokSpeech(drafts, "assistant", content ?? "", row.timestamp);
+      continue;
+    }
+    if (update.sessionUpdate === "agent_thought_chunk") {
+      pushGrokSpeech(drafts, "system", content ?? "", row.timestamp);
+      continue;
+    }
+    if (update.sessionUpdate !== "tool_call" && update.sessionUpdate !== "tool_call_update") continue;
+    if (typeof update.toolCallId !== "string" || !update.toolCallId.trim()) continue;
+    let tool = tools.get(update.toolCallId);
+    const atMs = timestampMillis(row.timestamp);
+    if (!tool) {
+      tool = {
+        kind: "tool",
+        at: row.timestamp,
+        callId: update.toolCallId,
+        startedMs: atMs,
+        endedMs: atMs,
+      };
+      tools.set(update.toolCallId, tool);
+      drafts.push(tool);
+    }
+    tool.title ??= grokToolTitle(update);
+    if (typeof update.status === "string" && update.status.trim()) tool.status = update.status.trim();
+    const output = grokToolOutput(update.rawOutput) ?? grokToolOutput(update.content);
+    if (output) tool.output = output;
+    if (atMs !== undefined) tool.endedMs = atMs;
+  }
+
+  enrichGrokHistory(drafts, tools, historyContents);
+  const lines: TranscriptLine[] = [];
+  for (const draft of drafts) {
+    if (draft.kind === "tool") {
+      lines.push(grokToolLine(draft));
+      continue;
+    }
+    pushTranscriptLine(
+      lines,
+      draft.role,
+      draft.role === "system" ? `Thought\n${draft.content}` : draft.content,
+      draft.at,
+      agent.provider,
+    );
+  }
+  return lines;
+}
+
+export function transcriptLines(
+  agent: AgentSnapshot,
+  contents: string,
+  historyContents?: string,
+): TranscriptLine[] {
+  /* Grok Bot sand replicas are one JSON envelope, not JSONL. Splitting on
+     newlines leaves the root object (no content/message) and an empty feed. */
+  if (isReplicaBlob(contents)) return replicaTranscriptLines(agent, contents);
+  if (agent.provider === "grok") return grokTranscriptLines(agent, contents, historyContents);
+
   const lines: TranscriptLine[] = [];
   for (const raw of contents.split("\n")) {
     if (!raw.trim()) continue;
@@ -195,15 +488,7 @@ function transcriptLines(agent: AgentSnapshot, contents: string): TranscriptLine
     if (!row || typeof row !== "object" || Array.isArray(row)) continue;
     const candidate = transcriptCandidate(agent, row as Record<string, any>);
     if (!candidate) continue;
-    const text = readableChatBody(agent.provider, candidate.content);
-    if (!text) continue;
-    const timestamp = typeof candidate.at === "string" && Number.isFinite(Date.parse(candidate.at))
-      ? new Date(candidate.at).toISOString()
-      : null;
-    const line: TranscriptLine = { at: timestamp, role: transcriptRole(candidate.role), text };
-    const previous = lines.at(-1);
-    if (previous?.role === line.role && previous.text === line.text) continue;
-    lines.push(line);
+    pushTranscriptLine(lines, candidate.role, candidate.content, candidate.at, agent.provider);
   }
   return lines;
 }
@@ -235,7 +520,16 @@ export async function transcriptResponse(
     );
   }
   try {
-    const lines = transcriptLines(agent, await readFile(source, "utf8"));
+    const contents = await readFile(source, "utf8");
+    let historyContents: string | undefined;
+    if (agent.provider === "grok") {
+      try {
+        historyContents = await readFile(join(dirname(source), "chat_history.jsonl"), "utf8");
+      } catch {
+        // The history is optional enrichment; updates.jsonl remains authoritative.
+      }
+    }
+    const lines = transcriptLines(agent, contents, historyContents);
     if (lines.length === 0) {
       return Response.json(
         { ok: true, agentId, source, truncated: false, lines: [] },

@@ -30,7 +30,7 @@ function parseControlRequest(value: unknown): ControlRequest | string {
   if (!value || typeof value !== "object" || Array.isArray(value)) return "Body must be a JSON object.";
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record);
-  if (keys.some((key) => !["action", "agentId", "instruction"].includes(key))) {
+  if (keys.some((key) => !["action", "agentId", "instruction", "clientNonce"].includes(key))) {
     return "Body contains an unsupported field.";
   }
   if (typeof record.action !== "string" || !CONTROL_ACTIONS.includes(record.action as ControlRequest["action"])) {
@@ -49,10 +49,17 @@ function parseControlRequest(value: unknown): ControlRequest | string {
   } else if (record.instruction !== undefined) {
     return "instruction is only valid for instruct.";
   }
+  if (record.clientNonce !== undefined) {
+    if (record.action !== "instruct") return "clientNonce is only valid for instruct.";
+    if (typeof record.clientNonce !== "string" || !record.clientNonce.trim() || record.clientNonce.length > 128) {
+      return "clientNonce must be a non-empty string no longer than 128 characters.";
+    }
+  }
   return {
     action: record.action as ControlRequest["action"],
     agentId: record.agentId,
     instruction: record.instruction as string | undefined,
+    clientNonce: typeof record.clientNonce === "string" ? record.clientNonce : undefined,
   };
 }
 

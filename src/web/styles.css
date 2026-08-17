@@ -1923,6 +1923,11 @@ body.feed-frozen .programs { opacity: 0.62; }
 }
 /* Instrument-column labels sit right-aligned over their (right-aligned) values. */
 .ri-col-label { justify-self: end; text-align: right; }
+/* The docked roster's two-line label (#158) is off everywhere except the
+   ≥1025px inspector-open block, which reveals it. Hidden here rather than with
+   a `hidden` attribute: the [hidden] rule at the top of this file is !important
+   on purpose, so an element the client hides can never be un-hidden by CSS. */
+.ri-col-stack { display: none; }
 
 .agent-grid {
   display: grid;
@@ -2106,6 +2111,20 @@ body.feed-frozen .programs { opacity: 0.62; }
   font-size: 12px;
   font-weight: 500;
   line-height: 1.25;
+}
+/* The Forager relay, ahead of the verb it belongs to. Keyframes live inside the
+   SVG (loaded as an <img>, the only path CSP `style-src 'self'` lets animate),
+   so this rule sizes and seats it and nothing more. The band is baseline-
+   aligned for type; a 14px square wants its own middle on the verb's middle.
+   0.25em of extra gutter clears the verb's 5.4px indigo drop-shadow, which the
+   band's own 0.4em gap alone does not. */
+.row-time-relay {
+  display: block;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  align-self: center;
+  margin-inline-end: 0.25em;
 }
 .row-time-band-verb {
   font-weight: 600;
@@ -2614,9 +2633,15 @@ body.feed-frozen .programs { opacity: 0.62; }
   body.inspector-open .dw-agent.pane-inspector {
     overscroll-behavior: auto;
   }
+  /* DEFINITE second track, not minmax(4.5rem, auto). Every .agent-row is its
+     own grid, so an auto track is sized by that row's OWN content and the
+     instrument column lands at a different x on every row — 160px of spread
+     measured on the live board. A stack that does not line up down the list is
+     not tabular. 12.5rem covers the widest cluster in the live inventory
+     ("Needs you" + "claude opus 4.8" + 46% + 189k + 87.1d). */
   body.inspector-open .agent-grid,
   body.inspector-open .agent-column-header {
-    grid-template-columns: minmax(0, 1fr) minmax(4.5rem, auto);
+    grid-template-columns: minmax(0, 1fr) 12.5rem;
   }
   /* The docked roster used to DELETE model, context, tokens and elapsed from
      every row — measured on the live board: an unselected row still held
@@ -2627,18 +2652,81 @@ body.feed-frozen .programs { opacity: 0.62; }
 
      There genuinely is not room for five columns in a 40%-width roster, so the
      answer is fewer COLUMNS, not less information: the instrument cluster stops
-     being display:contents and becomes one compact run under the name, reading
-     "opus 5 · 67% · 668k · 35.3h". */
+     being display:contents and becomes a two-line stack inside one track —
+     "Working … 35.3h" over "opus 5 · 67% · 668k".
+
+     Two lines, not one run (Gate A1, #158). At the clamp's 380px floor the full
+     one-line sentence measures ~350px against a 347px row, so it wrapped anyway
+     and ate the agent name — two of five names rendered at 0px. Placing by
+     grid-template-areas rather than flow means an omitted field leaves a HOLE:
+     the cluster is the same height and the same x on every row whether or not
+     tokens, context or quiet are known. */
   body.inspector-open .agent-grid > .row-instruments {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: auto auto auto;
+    grid-template-areas:
+      "st st el"
+      "mo ctx tok";
+    /* Reserved rows: the second line exists even on a row that knows nothing,
+       so rows do not change height as their facts arrive over SSE. */
+    grid-template-rows: 17px 15px;
+    justify-content: end;
+    justify-items: end;
     align-items: baseline;
-    justify-content: flex-end;
-    gap: 0 0.45rem;
+    column-gap: 0.3rem;
+    row-gap: 0;
+    min-height: 32px;
     grid-column: 2;
     min-width: 0;
   }
-  body.inspector-open .agent-grid .ri-cell { grid-column: auto; }
+  body.inspector-open .agent-grid .row-state { grid-area: st; justify-self: start; align-self: baseline; }
+  body.inspector-open .agent-grid .ri-elapsed { grid-area: el; }
+  body.inspector-open .agent-grid .ri-ctx { grid-area: ctx; }
+  body.inspector-open .agent-grid .ri-tokens { grid-area: tok; }
+  /* The model is the one field allowed to ellipsis; every other token is short
+     and fixed-width, so shrinking them would only make numbers unreadable. */
+  body.inspector-open .agent-grid .ri-model { grid-area: mo; min-width: 0; overflow: hidden; }
+  body.inspector-open .agent-grid .ri-model .ri-value { max-width: 100%; }
+  /* THE FIX for #158. The base rule's width: 100% is the closed 7-track grid's
+     ellipsis lock — pinned by the formic-plan regression-5 test — and stays
+     exactly where it is; a 100%-wide item simply cannot share a line with a
+     sibling, so the override belongs here, scoped to the docked roster. */
+  body.inspector-open .agent-grid .ri-cell {
+    display: inline-flex;
+    align-items: baseline;
+    width: auto;
+    padding-top: 0;
+  }
+  /* After .ri-cell — at equal specificity the harness would stay visible and
+     auto-place into an implicit THIRD row. The dual avatar mark already prints
+     the harness on every row, so the cell is the duplicate here. */
+  body.inspector-open .agent-grid .ri-harness { display: none; }
+  /* Only between two fields that are both present. The selected row folds the
+     model away and unknown context omits its cell honestly — a blanket
+     "* + *::before" would open those lines with a stray dot. */
+  body.inspector-open .agent-grid .ri-model + .ri-ctx::before,
+  body.inspector-open .agent-grid .ri-ctx + .ri-tokens::before {
+    content: "·";
+    flex: 0 0 auto;
+    margin-right: 0.3rem;
+    color: var(--placeholder);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
+  }
+  /* Adjacency is a DOM relation, not a layout one. The selected row folds the
+     model with display: none and it remains .ri-ctx's previous sibling, so the
+     rule above paints a middot with nothing before it — measured on the live
+     board at 520px, the selected row opened its second line with "· —". */
+  body.inspector-open .agent-row.is-selected .ri-ctx::before { content: none; }
+  /* An unknown context window is a HOLE in the stack, not a dash. The row
+     builder always emits .ri-ctx and prints an em-dash when the model's window
+     is unknown; in the closed seven-column grid that dash holds its column, but
+     folded into two lines it reads "grok 4.6 · —" — a fact the row does not
+     have. Hidden here only; the closed board keeps its placeholder column. The
+     middot rules key off DOM adjacency, so a hidden .ri-ctx still leaves
+     .ri-tokens as its next sibling and "model · tokens" keeps one separator. */
+  body.inspector-open .agent-grid .ri-ctx.is-unknown { display: none; }
   body.inspector-open .agent-grid .ri-value { font-size: 11px; font-weight: 500; }
   /* The SELECTED row alone stays quiet: its drawer carries these facts inches
      away, so there the instruments really are a duplicate. */
@@ -2655,6 +2743,21 @@ body.feed-frozen .programs { opacity: 0.62; }
      Only the selected row's copy is a duplicate — the other 200 are the board. */
   body.inspector-open .agent-row.is-selected .row-description,
   body.inspector-open .agent-column-header > :nth-child(n + 3) { display: none; }
+  /* The header agrees with the rows it labels. Status now rides line 1 of the
+     stack, so the standalone Status label would print the word twice; every
+     per-column label folds and the two-line kicker takes the whole track. */
+  body.inspector-open .agent-column-header > :nth-child(n + 2):not(.ri-col-stack) { display: none; }
+  /* Beats both the [hidden] UA rule that keeps this label out of the closed
+     board and the nth-child(n + 3) fold above it. */
+  body.inspector-open .agent-column-header > .agent-column-label.ri-col-stack {
+    display: grid;
+    grid-column: 2;
+    justify-items: end;
+    align-content: end;
+    row-gap: 0;
+    line-height: 1.55;
+    text-align: right;
+  }
 }
 
 /* A 1080p-class viewport has room to keep the masthead and the complete RHSP
@@ -4116,6 +4219,10 @@ body.feed-frozen .programs { opacity: 0.62; }
     -webkit-background-clip: unset;
     background-clip: unset;
     color: var(--color-status-info);
+    /* Dropping the gradient is not enough: the shimmer rule also paints the
+       glyphs with -webkit-text-fill-color: transparent, which survives here
+       and left reduced-motion users a blank space where the verb should be. */
+    -webkit-text-fill-color: currentColor;
   }
 }
 @media (prefers-reduced-motion: no-preference) {
@@ -4194,23 +4301,302 @@ body.feed-frozen .programs { opacity: 0.62; }
   display: grid;
   place-items: start center;
   padding: 4vh 1rem 1rem;
-  background: color-mix(in srgb, var(--ink) 42%, transparent);
-  overflow-y: auto;
+  background: color-mix(in srgb, var(--ink) 46%, transparent);
+  overflow: hidden;
 }
 .settings-panel[hidden] { display: none; }
+.desk,
 .settings-inner {
-  width: min(42rem, 100%);
-  background: var(--surface);
-  border: 1px solid var(--rule);
-  border-radius: 12px;
-  box-shadow: 0 18px 48px color-mix(in srgb, var(--ink) 28%, transparent);
-  padding: 1.15rem 1.35rem 1.35rem;
-  display: grid;
-  gap: 0.75rem;
+  width: min(40rem, 100%);
+  max-height: 100%;
+  min-height: 0;
+  background: var(--color-surface-card);
+  border: 1px solid var(--color-border-default);
+  border-radius: 14px;
+  box-shadow: 0 18px 50px color-mix(in srgb, var(--ink) 24%, transparent);
+  display: flex;
+  flex-direction: column;
 }
-.settings-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
-.settings-close { border: 0; background: none; color: var(--muted); font-size: 1.1rem; line-height: 1; padding: 0.2rem 0.4rem; border-radius: 5px; }
-.settings-close:hover { background: var(--surface-2); color: var(--ink); }
+.desk-head, .desk-foot { flex: none; }
+.desk-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.7rem 0.95rem 0.65rem 1rem;
+  border-bottom: 1px solid var(--line);
+}
+.desk-brand { display: flex; align-items: center; gap: 0.55rem; }
+.desk-brand img { width: 20px; height: 20px; }
+.desk-brand h2 { margin: 0; font: 600 0.95rem/1 var(--font-ui); }
+.desk-brand small {
+  display: block;
+  font: 500 0.62rem/1 var(--font-mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-top: 0.18rem;
+}
+.desk-body {
+  flex: 1;
+  overflow: auto;
+  padding: 0.85rem 1rem 1rem;
+  display: grid;
+  gap: 1.05rem;
+}
+.desk-foot {
+  border-top: 1px solid var(--line);
+  padding: 0.65rem 0.95rem 0.75rem;
+  display: grid;
+  gap: 0.4rem;
+}
+.desk-foot .acts { display: flex; align-items: center; gap: 0.45rem; }
+.settings-close { border: 0; background: none; color: var(--muted); font-size: 1.2rem; line-height: 1; width: 2rem; height: 2rem; padding: 0; border-radius: 8px; }
+.settings-close:hover { background: var(--canvas); color: var(--ink); }
+.settings-close:focus-visible { outline: none; box-shadow: var(--color-focus-ring); }
+.span { display: grid; gap: 0.55rem; }
+.span-top { display: flex; justify-content: space-between; align-items: baseline; gap: 0.75rem; }
+.kicker {
+  margin: 0;
+  font: 500 0.62rem/1 var(--font-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.counts { display: flex; gap: 0.85rem; font-variant-numeric: tabular-nums; }
+.counts b { display: block; font: 500 1.05rem/1 var(--font-mono); }
+.counts span {
+  display: block;
+  font: 500 0.62rem/1.2 var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+  margin-top: 0.18rem;
+}
+.counts .c-work b { color: var(--working); }
+.counts .c-wait b { color: var(--ended); }
+.counts .c-hist b { color: var(--faint); }
+.rail {
+  position: relative;
+  height: 2.35rem;
+  margin-top: 1.65rem;
+  border-radius: 10px;
+  overflow: visible;
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: var(--w) var(--q) 1fr;
+}
+.seg { position: relative; min-width: 0; overflow: visible; }
+.seg.work {
+  border-radius: 9px 0 0 9px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--working) 78%, #fff), var(--working));
+  min-width: 4.4rem;
+}
+.seg.quiet { background: linear-gradient(180deg, #7a828c, var(--ended)); }
+.seg.hist {
+  border-radius: 0 9px 9px 0;
+  background: repeating-linear-gradient(-55deg, #eef0f2, #eef0f2 6px, #e6e8ec 6px, #e6e8ec 12px);
+}
+.well {
+  position: absolute;
+  top: -1.45rem;
+  left: 0.2rem;
+  background: var(--surface);
+  border-radius: 8px;
+  padding: 0.16rem 0.4rem 0.12rem;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 12%, transparent);
+  border: 1px solid var(--line);
+  min-width: 3.4rem;
+  text-align: center;
+}
+.seg.work .well { left: 0.15rem; }
+.seg.quiet .well { left: 50%; transform: translateX(-50%); }
+.well label {
+  display: block;
+  font: 500 0.52rem/1 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.well input {
+  width: 2.4rem;
+  border: 0;
+  background: none;
+  text-align: center;
+  font: 500 0.92rem/1.1 var(--font-mono);
+  color: var(--ink);
+  padding: 0;
+}
+.well input:focus { outline: none; }
+.well input:focus-visible { box-shadow: inset 0 -2px 0 var(--color-interactive); }
+.postures { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.4rem; }
+.posture {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 10px;
+  padding: 0.45rem 0.5rem 0.5rem;
+  text-align: left;
+  display: grid;
+  gap: 0.35rem;
+}
+.posture:hover { border-color: var(--line-strong); }
+.posture.is-on {
+  border-color: var(--color-interactive);
+  background: var(--color-brand-secondary-tint);
+  box-shadow: inset 0 0 0 1px var(--color-interactive);
+}
+.posture:focus-visible { outline: none; box-shadow: var(--color-focus-ring); }
+.mini { height: 6px; border-radius: 99px; display: grid; overflow: hidden; background: var(--canvas); }
+.mini i:first-child { background: var(--working); }
+.mini i:last-child { background: var(--ended); }
+.posture b { font: 600 0.78rem/1.1 var(--font-ui); }
+.posture em { font: 500 0.68rem/1 var(--font-mono); color: var(--muted); font-style: normal; }
+.split { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+.plate { border: 1px solid var(--line); border-radius: 12px; padding: 0.6rem 0.65rem 0.7rem; min-width: 0; }
+.modes { display: grid; grid-template-columns: 1fr 1fr; gap: 0.35rem; }
+.mode {
+  border: 1px solid var(--line);
+  background: var(--canvas);
+  border-radius: 10px;
+  padding: 0.5rem 0.4rem 0.45rem;
+  display: grid;
+  justify-items: center;
+  gap: 0.3rem;
+}
+.mode.is-on {
+  border-color: var(--color-interactive);
+  background: var(--color-brand-secondary-tint);
+  box-shadow: inset 0 0 0 1px var(--color-interactive);
+}
+.mode:focus-visible { outline: none; box-shadow: var(--color-focus-ring); }
+.mode svg { width: 22px; height: 22px; }
+.mode b { font: 600 0.72rem/1 var(--font-ui); }
+.mode span { font: 500 0.62rem/1.25 var(--font-ui); color: var(--muted); text-align: center; }
+.repos { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.4rem; }
+.repo { border: 0; background: none; padding: 0; display: grid; justify-items: center; gap: 0.28rem; }
+.swatch {
+  width: 1.7rem;
+  height: 1.7rem;
+  border-radius: 50%;
+  border: 2px solid var(--surface);
+  box-shadow: 0 0 0 1px var(--line);
+  background: var(--repo-tint, var(--sand));
+}
+.repo.is-yours .swatch { box-shadow: 0 0 0 2px var(--ink); }
+.repo b { font: 500 0.62rem/1.15 var(--font-ui); text-align: center; color: var(--muted); font-weight: 600; }
+.repo.is-absent b { color: var(--faint); }
+.repo:focus-visible { outline: none; box-shadow: var(--color-focus-ring); }
+.homes h3, .split h3, .horizon h3 {
+  margin: 0 0 0.45rem;
+  font: 500 0.62rem/1 var(--font-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.home-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 0.4rem; }
+.home {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  border-radius: 12px;
+  padding: 0.5rem 0.35rem 0.45rem;
+  display: grid;
+  justify-items: center;
+  gap: 0.32rem;
+  min-height: 5.4rem;
+}
+.home-mark, .home-letter {
+  width: 1.85rem;
+  height: 1.85rem;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--canvas);
+  padding: 0.28rem;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+}
+.home-mark { object-fit: contain; }
+.home-letter {
+  font: 600 0.72rem/1 var(--font-ui);
+  color: var(--ink);
+  padding: 0;
+}
+.home b { font: 600 0.68rem/1.15 var(--font-ui); text-align: center; }
+.home s { font: 500 0.58rem/1 var(--font-mono); color: var(--ok); text-decoration: none; letter-spacing: 0.02em; }
+.home.is-wait {
+  border-color: color-mix(in srgb, var(--warn) 55%, var(--line));
+  background: var(--amber-soft);
+}
+.home.is-wait .home-mark,
+.home.is-wait .home-letter {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 28%, transparent);
+}
+.home.is-wait s { color: var(--color-brand-control); }
+.home.is-off { opacity: 0.45; }
+.home.is-wait label {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-size: 0.62rem;
+  color: var(--muted);
+}
+.home.is-wait input { margin: 0; }
+.home-acts { display: flex; gap: 0.45rem; margin-top: 0.45rem; align-items: center; }
+.home-note { margin: 0.45rem 0 0; }
+@media (max-width: 520px) {
+  .home-grid { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 520px) {
+  .settings-panel { padding: 1rem; }
+  .desk, .settings-inner { width: 100%; }
+  .split { grid-template-columns: 1fr; }
+  .postures { grid-template-columns: repeat(3, 1fr); }
+  .counts { justify-content: space-between; }
+  .rail { height: 3.4rem; }
+}
+.horizon { display: grid; gap: 0.45rem; }
+.meters { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.4rem; }
+.meter {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.45rem 0.5rem 0.5rem;
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+.meter .ico {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--muted);
+  width: auto;
+  height: auto;
+}
+.meter .ico svg,
+.meter .ico img { width: 16px; height: 16px; }
+.meter label {
+  font: 500 0.62rem/1 var(--font-mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.meter input,
+.meter select {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: none;
+  padding: 0;
+  font: 500 1rem/1.1 var(--font-mono);
+  color: var(--ink);
+}
+.meter input:focus,
+.meter select:focus { outline: none; }
+.meter input:focus-visible,
+.meter select:focus-visible { box-shadow: inset 0 -2px 0 var(--color-interactive); }
+@media (max-width: 420px) {
+  .meters { grid-template-columns: repeat(2, 1fr); }
+}
 /* The confirmation a successful save never had. Every save posted, persisted
    and re-classified the board in silence, so the only way to tell it had worked
    was to go looking for a number that had moved — which reads exactly like a
@@ -4231,39 +4617,14 @@ body.feed-frozen .programs { opacity: 0.62; }
   font-size: 0.85rem;
 }
 .settings-inner h2 { font-size: 1rem; margin: 0; }
-.settings-lede { margin: 0; color: var(--muted); font-size: 0.85rem; }
-.settings-presets { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
-.settings-field { display: grid; gap: 0.25rem; max-width: 40rem; }
-.settings-field-label { font-weight: 600; font-size: 0.9rem; }
 .settings-input { width: 7rem; padding: 0.3rem 0.45rem; border: 1px solid var(--rule); border-radius: 4px; background: var(--surface); color: var(--ink); font: inherit; }
-.settings-help { color: var(--muted); font-size: 0.8rem; }
-/* The preview is the point of the panel: it says what these numbers do to the
-   board in front of you, before you commit to them. */
-.settings-preview { margin: 0; padding: 0.5rem 0.65rem; border-left: var(--signal-rail) solid var(--working); background: var(--moss-soft); font-size: 0.85rem; }
-.settings-advanced summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; }
-.settings-advanced[open] { display: grid; gap: 0.75rem; }
-/* The per-browser section, ruled off from the server fields above it because
-   it answers to a different authority: this browser, not the fleet. */
-.settings-local { border: 0; border-top: 1px solid var(--rule); margin: 0.25rem 0 0; padding: 0.75rem 0 0; display: grid; gap: 0.5rem; }
-.settings-local legend { float: left; font-weight: 600; font-size: 0.9rem; padding: 0; }
-/* Inventory of scanned agent homes. First under the title, so no top rule of
-   its own — sibling `.settings-section`s draw the later dividers. */
-.settings-section { display: grid; gap: 0.55rem; }
-.settings-section + .settings-section { border-top: 1px solid var(--rule); padding-top: 0.75rem; margin-top: 0.15rem; }
 .settings-collectors { border: 0; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
-.settings-collectors h3 { font-weight: 600; font-size: 0.9rem; margin: 0; }
 .settings-collectors-group { display: grid; gap: 0.5rem; }
-.settings-collectors-row { display: grid; grid-template-columns: auto 1fr auto; gap: 0.35rem 0.65rem; align-items: start; }
-.settings-collectors-copy { display: grid; gap: 0.12rem; }
-.settings-collectors-actions { display: flex; align-items: center; gap: 0.65rem; }
 .settings-collectors-ignore {
   border: 0; background: none; color: var(--muted); font: inherit; font-size: 0.8rem;
   padding: 0.15rem 0; min-height: 0; cursor: pointer;
 }
 .settings-collectors-ignore:hover { color: var(--ink); }
-.settings-radio { display: flex; align-items: baseline; gap: 0.5rem; cursor: pointer; }
-.settings-actions { display: flex; gap: 0.5rem; align-items: center; border-top: 1px solid var(--rule); padding-top: 0.75rem; margin-top: 0.15rem; }
-.settings-actions .settings-spacer { flex: 1; }
 /* The half-circle context dial and its median/average ticks. */
 /* Sized to sit in a dense strip, not to be the hero of it. At 8.5rem the dial
    was taller than the number it annotates and pushed the card past its
@@ -5080,6 +5441,62 @@ body.feed-frozen .programs { opacity: 0.62; }
 .chat-msg[data-role="user"] .sender-unconfirmed,
 .chat-msg[data-role="task"] .sender-unconfirmed { background: var(--raise); }
 .chat-feed .tr-line { opacity: 0.85; }
+/* Reasoning is the quietest thing in the feed — no card, no fill, one hairline
+   rule and faint ink, so a closed run of thoughts reads as a margin note
+   between two bubbles rather than a third kind of message. */
+.chat-thought {
+  min-width: 0;
+  padding-left: 10px;
+  border-left: 1px solid var(--line);
+  color: var(--faint-strong);
+}
+.chat-thought-summary {
+  min-width: 0;
+  min-height: 22px;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  list-style: none;
+}
+.chat-thought-summary::-webkit-details-marker { display: none; }
+.chat-thought-disclosure { display: grid; place-items: center; transition: transform 140ms ease; }
+.chat-thought-disclosure .ico { width: 12px; height: 12px; }
+.chat-thought[open] .chat-thought-disclosure { transform: rotate(90deg); }
+.chat-thought-copy {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font: 500 10.5px/1.35 var(--font-mono);
+}
+.chat-thought-label { flex: none; letter-spacing: 0.04em; text-transform: uppercase; }
+.chat-thought-gist {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--faint);
+  font-family: var(--font-sans);
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+.chat-thought-at { flex: none; font: 500 9.5px/1.25 var(--font-mono); }
+.chat-thought[open] .chat-thought-body {
+  max-height: 16rem;
+  margin-top: 5px;
+  padding-top: 6px;
+  overflow: auto;
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: 6px;
+}
+.chat-thought-text {
+  margin: 0;
+  font: 400 11.5px/1.5 var(--font-sans);
+  white-space: pre-wrap;
+}
 .chat-tool-group {
   display: grid;
   gap: 7px;
@@ -5435,7 +5852,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .notify-group,
 .notify-row:hover,
 .notify-row:focus-within,
-.settings-preview,
 .board-skeleton .sk-head { background: var(--color-surface-subtle); }
 
 .reading-label,
@@ -5446,7 +5862,6 @@ body.feed-frozen .programs { opacity: 0.62; }
 .agent-column-label,
 .usage-title,
 .usage-table th,
-.settings-help,
 .notify-eyebrow,
 .notify-rest { color: var(--color-text-secondary); }
 .reading-label { font-family: var(--font-ui); }
@@ -5525,8 +5940,7 @@ body.feed-frozen .programs { opacity: 0.62; }
 .dw-backlink:hover b,
 .dw-roster-row:hover .dw-roster-name { color: var(--color-interactive); }
 .settings-input { border-color: var(--color-border-default); background: var(--color-surface-card); color: var(--color-text-primary); }
-.settings-actions,
-.settings-local { border-color: var(--color-border-subtle); }
+.desk-foot { border-color: var(--color-border-subtle); }
 .settings-saved { border-left-color: var(--color-status-success); background: var(--color-status-success-tint); color: var(--color-text-primary); }
 .settings-error { border-left-color: var(--color-status-danger); background: var(--color-status-danger-tint); color: var(--color-text-primary); }
 .notify-incomplete,
@@ -6079,64 +6493,5 @@ a.artifact-path:hover { text-decoration: underline; }
   border-left: 2px solid color-mix(in srgb, var(--repo-tint) 45%, transparent);
 }
 
-/* The repo-colour region in Settings: one swatch row per repository. */
-.repo-colors {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-}
-.repo-colors-row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.3rem 0.45rem;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-}
-.repo-colors-name {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12.5px;
-}
-.repo-colors-swatch {
-  flex: none;
-  width: 1.1rem;
-  height: 1.1rem;
-  padding: 0;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-sm);
-  background: var(--repo-tint);
-  cursor: pointer;
-}
-.repo-colors-source {
-  flex: none;
-  font-size: 10.5px;
-  color: var(--faint);
-}
-.repo-colors-reset {
-  flex: none;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 10.5px;
-  padding: 0 0.3rem;
-  cursor: pointer;
-}
-.repo-colors-reset:hover { color: var(--ink); border-color: var(--line-strong); }
+/* Empty colour plate copy. Swatch chrome lives on .repos / .repo / .swatch. */
 .repo-colors-empty { margin: 0; color: var(--faint); font-size: 12px; }
-.repo-colors-row.is-absent {
-  background: var(--sand);
-}
-.repo-colors-row.is-absent .repo-colors-name {
-  color: var(--muted);
-}
-.repo-colors-row.is-absent .repo-colors-source {
-  color: var(--muted);
-  font-weight: 600;
-}

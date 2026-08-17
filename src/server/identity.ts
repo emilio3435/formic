@@ -144,7 +144,7 @@ export function identityFromSessionPath(path: string): IdentityHint | null {
        sibling from matching as a second identity for the same session. */
     ["factory", new RegExp(`\\/.factory\\/sessions\\/.+?\\/(${UUID})\\.jsonl$`, "i")],
     ["prime", new RegExp(`\\/.prime\\/agent\\/sessions\\/(${UUID})\\.jsonl$`, "i")],
-    ["grok", new RegExp(`\\/.grok\\/sessions\\/.+\\/(${UUID})\\/(?:updates\\.jsonl|summary\\.json)$`, "i")],
+    ["grok", new RegExp(`\\/.grok\\/sessions\\/.+\\/(${UUID})\\/(?:events\\.jsonl|updates\\.jsonl|summary\\.json)$`, "i")],
     ["hermes", new RegExp(`\\/.hermes\\/sessions\\/([^/]+)\\.jsonl$`, "i")],
     ["muse", new RegExp(`\\/muse\\/sessions\\/\\d{4}\\/\\d{2}\\/\\d{2}\\/(${UUID})\\/session\\.jsonl$`, "i")],
     ["antigravity", new RegExp(`\\/antigravity(?:-cli|-ide)?\\/conversations\\/(${UUID})\\.db(?:-wal|-shm)?$`, "i")],
@@ -519,7 +519,10 @@ export async function enrichCmuxIdentity(
     }
   }
 
-  const allAttributedPids = new Set([...attributedPids.values()].flatMap((pids) => [...pids]));
+  const readySurfaceIds = new Set(readySurfaces.map(({ surfaceId }) => surfaceId));
+  const allAttributedPids = new Set(
+    [...attributedPids].flatMap(([surfaceId, pids]) => readySurfaceIds.has(surfaceId) ? [...pids] : []),
+  );
   if (ttyNames.size === 0 && allAttributedPids.size === 0) {
     reportProbeOverrun();
     return {
@@ -634,7 +637,7 @@ export async function enrichCmuxIdentity(
     }
     return resolvedCommandHints.get(key) ?? {};
   };
-  const pids = [...new Set(recognizedAgentProcessIds)];
+  const pids = [...new Set([...recognizedAgentProcessIds, ...processes.map(({ pid }) => pid)])];
   let openFiles = new Map<number, string[]>();
   if (pids.length > 0) {
     // Absolute path: Bun/server PATH can omit /usr/sbin, which made identity
@@ -865,6 +868,19 @@ export async function enrichCmuxIdentity(
         full: true,
       }));
       const openIdentity = primaryOpenIdentity(openHints, agentsByIdentity);
+      const sharedGrokHost = openHints.length > 0
+        && !openIdentity
+        && openHints.every(({ provider }) => provider === "grok")
+        && new Set(openFileMatches.map(({ pid }) => pid)).size === 1;
+      if (sharedGrokHost) {
+        return {
+          ...surface,
+          sourceSessionClaims: [],
+          sourceSessionIds: [],
+          identityConflict: undefined,
+          identityTrace: trace("shared-host", [], undefined, attributionNotes),
+        };
+      }
       if (openHints.length > 0 && !openIdentity) {
         const identityConflict = `cmux ${surface.surfaceId} has conflicting open agent session files${conflictLocation}`;
         errors.push(identityConflict);

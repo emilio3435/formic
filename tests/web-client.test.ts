@@ -434,6 +434,7 @@ function agent(overrides: Record<string, unknown> = {}) {
     gates: [],
     target: { resolution: "exact", surfaceId: "s1", workspaceId: "w1" },
     controls: [],
+    lastThreadAt: undefined as string | undefined,
     ...overrides,
   };
 }
@@ -530,7 +531,13 @@ function makeNode(tag: string): FakeNode {
       const i = node.parent.children.indexOf(node as unknown as FakeNode);
       return (i >= 0 && node.parent.children[i + 1]) || null;
     },
-    setAttribute(k: string, v: unknown) { node.attributes[k] = String(v); },
+    setAttribute(k: string, v: unknown) {
+      node.attributes[k] = String(v);
+      if (k === "id" && v) {
+        (node as { id?: string }).id = String(v);
+        domById.set(String(v), node as unknown as FakeNode);
+      }
+    },
     /* Same "present but finds nothing" contract fakeDocument already offers.
        Selector matching is not implemented here on purpose — tests reach nodes
        through byFkey/byClass, which walk the real tree. These exist so a paint
@@ -1205,9 +1212,6 @@ describe("summary status and widgets", () => {
     });
     expect(healthy.degraded).toBe(false);
     expect(healthy.message).toBe("Watching. No sessions running yet.");
-    expect(healthy.hint).toBe(
-      "Start Claude, Codex, or Cursor in any folder. A row appears here in a few seconds.",
-    );
     /* The proof is the point: a count of collectors and a timestamp are evidence
        a stalled client cannot manufacture, which is what distinguishes this from
        a board that simply never loaded. */
@@ -2929,8 +2933,24 @@ describe("unavailable-control explanation stays plain-language", () => {
      it could not fail if a reason were echoed through a variable, and it broke
      whenever a function moved. Now a real routing reason is planted and both
      surfaces are read: the banner explains, the dock stays silent. */
-  test("command dock never echoes capability reasons in the Operate chrome", () => {
-    const reason = "surface a1b2 is claimed by two sessions (lsof evidence conflicts)";
+  /* D5 rewrote the first half of this test's contract and left the second half
+     exactly as it was.
+
+     What changed: the banner used to print ONE generic sentence for every
+     refusal — "this session's identity is ambiguous" — and discard the reason
+     the server had already computed. On the live board that sentence appeared
+     over Grok chats sharing a host and over sessions merely sharing a folder,
+     accusing both of an evidence conflict neither had. The banner now prints
+     the server's own sentence, which is the point of stamping `target.reason`.
+
+     What did NOT change, and is why this test still exists: the surface UUID
+     inside that sentence never reaches the chrome, and the DOCK stays silent.
+     A tty name survives on purpose — it names the terminal an operator has to
+     go and look at, which is the one identifier that is an instruction rather
+     than a fact about our own bookkeeping. */
+  test("the banner prints the server's reason, ID-stripped; the dock stays silent", () => {
+    const reason = "cmux surface is quarantined because exact identity evidence conflicts:"
+      + " cmux 8B1F2C3D-4E5F-4A6B-8C9D-0E1F2A3B4C5D has conflicting open agent session files on ttys011";
     const quarantined = agent({
       controlState: "quarantined",
       target: { resolution: "ambiguous", reason },
@@ -2944,19 +2964,26 @@ describe("unavailable-control explanation stays plain-language", () => {
     const dock = withDom(() => M.renderCommandDock(quarantined, "quarantined", null, []));
     const banner = withDom(() => M.renderControlBanner(quarantined, "quarantined"));
 
-    // The banner owns the explanation — in its own operator sentence, not by
-    // pasting the resolver's evidence string at someone.
+    // The banner explains with the reason the SERVER stamped, so the client
+    // cannot describe this refusal differently from the notification that
+    // reports it.
     expect(banner).not.toBeNull();
-    expect(textOf(banner)).toContain(M.controlUnavailableText("quarantined"));
-    expect(textOf(banner)).not.toContain(reason);
+    const bannerText = textOf(banner);
+    expect(bannerText).toContain("has conflicting open agent session files on ttys011");
+    // ...and it is no longer the generic accusation.
+    expect(bannerText).not.toContain("this session's identity is ambiguous");
+    // The one identifier that stays out of operator copy.
+    expect(bannerText).not.toContain("8B1F2C3D-4E5F-4A6B-8C9D-0E1F2A3B4C5D");
+    expect(bannerText).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+    // Stripping the ID must not leave the sentence limping.
+    expect(bannerText).not.toContain("cmux  has");
+    expect(bannerText).not.toContain("conflicts: cmux has");
 
-    // The dock never repeats the raw routing reason — not in text, not in a
-    // title, not in an aria-label. That string is evidence, not operator copy.
+    // The dock never repeats the routing reason — not in text, not in a title,
+    // not in an aria-label. Unchanged by D5: the banner explains, the dock acts.
     const dockText = textOf(dock);
     expect(dockText).not.toContain(reason);
-    // The explanation now travels with the dock only when renderAgentDrawer
-    // inserts the banner into the pane footer; the dock primitive stays silent.
-    expect(dockText).not.toContain(M.controlUnavailableText("quarantined"));
+    expect(dockText).not.toContain("conflicting open agent session files");
     const leaked = findAll(dock, (n: any) =>
       Object.values(n.attributes || {}).some((v) => String(v).includes(reason)));
     expect(leaked).toEqual([]);
@@ -4686,6 +4713,37 @@ describe("fail-loud control invariants (source-level)", () => {
      or `200 {ok:false}`) must never be recorded as a success — that is the
      whole invariant, and it is now asserted from the feedback the drawer
      actually renders. */
+  test("instruct retries reuse clientNonce until the send succeeds", async () => {
+    const target = agent();
+    const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [target] }] });
+    await withState({
+      snap,
+      conn: "live",
+      pending: new Set(),
+      feedback: new Map(),
+      drafts: new Map([[target.id, "go"]]),
+      instructNonces: new Map(),
+    }, async () => {
+      await withRequests([
+        { status: 502, json: { ok: false, error: { code: "GROK_BOT_SEND_FAILED", message: "down" } } },
+        { status: 200, json: { ok: true } },
+        { status: 200, json: { ok: true } },
+      ], async (calls) => {
+        await M.sendControl(target, "instruct", "go");
+        const nonce = calls[0]!.body.clientNonce;
+        expect(typeof nonce).toBe("string");
+        expect(nonce.length).toBeGreaterThan(0);
+        expect(M.state.instructNonces.get(target.id)).toBe(nonce);
+        await M.sendControl(target, "instruct", "go");
+        expect(calls[1]!.body.clientNonce).toBe(nonce);
+        expect(M.state.instructNonces.get(target.id)).toBeUndefined();
+        await M.sendControl(target, "instruct", "again");
+        expect(calls[2]!.body.clientNonce).toBeTruthy();
+        expect(calls[2]!.body.clientNonce).not.toBe(nonce);
+      });
+    });
+  });
+
   test("HTTP completion alone is never treated as control success", async () => {
     const target = agent();
     const snap = snapshot({ programs: [{ id: "p", name: "P", agents: [target] }] });
@@ -7959,6 +8017,16 @@ describe("FE-B: harness-backed client behavior", () => {
       expect(field.tagName).toBe("input");
       expect(field.attributes.max).toBe("168");
       expect(field.value).toBe("48"); // and it opens on the server's value
+      const cap = document.getElementById("setting-historyRecordLimit");
+      expect(cap).toBeTruthy();
+      expect(document.querySelector("details.settings-advanced")).toBeNull();
+      let hidden = false;
+      for (let node = cap as { hasAttribute?(k: string): boolean; parent?: unknown } | null;
+        node;
+        node = (node as { parent?: typeof node }).parent ?? null) {
+        if (node.hasAttribute?.("hidden")) hidden = true;
+      }
+      expect(hidden).toBe(false);
     }));
   });
 
@@ -7979,7 +8047,7 @@ describe("FE-B: harness-backed client behavior", () => {
   // network), so the assertions need one turn of the loop to see it land.
   const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-  test("(3b3) Advanced exposes the fleet provider wait on the server's value", async () => {
+  test("(3b3) Horizon exposes the fleet provider wait on the server's value", async () => {
     await withState({
       settingsPanelOpen: true,
       settings: { version: 2, providerWaitMs: 15000 },
@@ -7997,8 +8065,8 @@ describe("FE-B: harness-backed client behavior", () => {
         .toEqual(["3000", "5000", "7500", "10000", "15000"]);
       expect(options.map(textOf))
         .toEqual(["3 seconds", "5 seconds", "7.5 seconds", "10 seconds", "15 seconds"]);
-      expect(textOf(panel)).toContain("Provider wait");
-      expect(textOf(panel)).toContain("How long each refresh waits for provider scans before showing last-known data as degraded.");
+      expect(select.parent?.className).toBe("meter");
+      expect(textOf(panel)).toContain("Horizon");
     }));
   });
 
@@ -12190,6 +12258,155 @@ describe("inspector chat is one messenger, not a clipped log", () => {
     });
   });
 
+  test("inspector chat for a Grok Bot replica uses the loaded thread, not two preview bubbles", () => {
+    const a = agent({
+      id: "grok:bot:14ee8878-7022-43d7-a6b3-b6c36d56915c",
+      provider: "grok",
+      displayName: "Formic Agent",
+      lastUserMessage: "Ship the closer next.",
+      lastAgentMessage: "Shipped the closer from send-message.",
+      lastAgentClosing: "Shipped the closer from send-message.",
+    });
+    const preview = withDom(() => M.renderChat(a));
+    expect(allByClass(preview, "chat-msg")).toHaveLength(2);
+
+    const loaded = withDom(() => M.renderChatFeedBody(a, transcriptUi({
+      agentId: a.id,
+      data: {
+        source: "/tmp/replica.blob",
+        truncated: false,
+        lines: [
+          { at: "2026-08-16T12:00:01.000Z", role: "user", text: "Please parse the persisted conversation." },
+          { at: "2026-08-16T12:00:02.000Z", role: "assistant", text: "Parsed the Grok Bot transcript." },
+          { at: "2026-08-16T12:00:03.000Z", role: "user", text: "Ship the closer next." },
+          { at: "2026-08-16T12:00:04.000Z", role: "assistant", text: "Shipped the closer from send-message." },
+        ],
+      },
+    })));
+    expect(allByClass(loaded, "chat-msg").map((node: { dataset: { role: string } }) => node.dataset.role))
+      .toEqual(["user", "assistant", "user", "assistant"]);
+    expect(textOf(loaded)).toContain("Please parse the persisted conversation.");
+    expect(textOf(loaded)).toContain("Parsed the Grok Bot transcript.");
+  });
+
+  test("a later send-message invalidates the held transcript without a new user send", async () => {
+    const bot = agent({
+      id: "grok:bot:14ee8878-7022-43d7-a6b3-b6c36d56915c",
+      provider: "grok",
+      lastThreadAt: "2026-08-16T12:00:02.000Z",
+      lastUserMessage: "Please parse the persisted conversation.",
+      lastAgentMessage: "Parsed the Grok Bot transcript.",
+      lastAgentClosing: "Parsed the Grok Bot transcript.",
+      updatedAt: "2026-08-16T11:00:00.000Z",
+    });
+    /* Agent-only turn: lastThreadAt + lastAgent* move. lastUserMessage and
+       roster updatedAt stay put — that is the live Formic Agent RCA. */
+    const later = {
+      ...bot,
+      lastThreadAt: "2026-08-16T12:00:04.000Z",
+      lastAgentMessage: "Shipped the closer from send-message.",
+      lastAgentClosing: "Shipped the closer from send-message.",
+    };
+    const clockOnly = {
+      ...bot,
+      lastThreadAt: "2026-08-16T12:00:04.000Z",
+    };
+    const held = [
+      { at: "2026-08-16T12:00:01.000Z", role: "user", text: "Please parse the persisted conversation." },
+      { at: "2026-08-16T12:00:02.000Z", role: "assistant", text: "Parsed the Grok Bot transcript." },
+    ];
+    const refreshed = [
+      ...held,
+      { at: "2026-08-16T12:00:04.000Z", role: "assistant", text: "Shipped the closer from send-message." },
+    ];
+    const emptyHeld = {
+      agentId: bot.id,
+      loading: false,
+      error: "",
+      limit: 200,
+      threadStamp: M.transcriptThreadStamp(bot),
+      data: { source: "/tmp/replica.blob", truncated: false, lines: [] },
+    };
+    const heldView = {
+      agentId: bot.id, loading: false, error: "", threadStamp: M.transcriptThreadStamp(bot),
+      data: { source: "/tmp/replica.blob", truncated: false, lines: held },
+    };
+
+    expect(M.isGrokBotAgent(bot)).toBe(true);
+    expect(M.shouldRefreshHeldTranscript(bot, heldView)).toBe(false);
+    expect(M.shouldRefreshHeldTranscript(clockOnly, heldView)).toBe(true);
+    expect(M.shouldRefreshHeldTranscript(later, heldView)).toBe(true);
+    expect(M.shouldRefreshHeldTranscript(later, emptyHeld)).toBe(true);
+    expect(M.shouldAutoLoadTranscript({ kind: "agent", id: bot.id }, emptyHeld)).toBe(false);
+
+    const codex = agent({
+      id: "codex:not-a-bot",
+      lastThreadAt: "2026-08-16T12:00:02.000Z",
+      lastUserMessage: "go",
+      lastAgentMessage: "working",
+    });
+    expect(M.shouldRefreshHeldTranscript({ ...codex, lastThreadAt: "2026-08-16T12:00:04.000Z" }, {
+      agentId: codex.id, loading: false, error: "", threadStamp: "2026-08-16T12:00:02.000Z",
+      data: { source: "/tmp/t.jsonl", truncated: false, lines: held },
+    })).toBe(false);
+
+    const botSel = { kind: "agent", id: bot.id };
+    const botView = { kind: "agent", agent: bot, program: { id: "p", name: "P", agents: [bot] } };
+    const clockView = { kind: "agent", agent: clockOnly, program: { id: "p", name: "P", agents: [clockOnly] } };
+    const paintUi = identityUi(transcriptUi(heldView));
+    expect(M.inspectorPaintSig(botSel, clockView, paintUi)).not.toBe(M.inspectorPaintSig(botSel, botView, paintUi));
+    const codexSel = { kind: "agent", id: codex.id };
+    const codexView = { kind: "agent", agent: codex, program: { id: "p", name: "P", agents: [codex] } };
+    const laterCodexView = {
+      kind: "agent",
+      agent: { ...codex, lastThreadAt: "2026-08-16T12:00:04.000Z" },
+      program: { id: "p", name: "P", agents: [codex] },
+    };
+    expect(M.inspectorPaintSig(codexSel, laterCodexView, paintUi)).toBe(M.inspectorPaintSig(codexSel, codexView, paintUi));
+
+    const workingBot = { ...bot, status: "running", lifecycle: "working", workingSince: bot.lastThreadAt };
+    expect(M.agentRowSig(
+      { ...workingBot, lastThreadAt: "2026-08-16T12:00:04.000Z" },
+      listUi({ snap: snapshot({ programs: [{ id: "p", name: "P", agents: [workingBot] }] }) }),
+      { depth: 0, childCount: 0, fullById: new Map() },
+    )).toBe(M.agentRowSig(
+      workingBot,
+      listUi({ snap: snapshot({ programs: [{ id: "p", name: "P", agents: [workingBot] }] }) }),
+      { depth: 0, childCount: 0, fullById: new Map() },
+    ));
+
+    expect(source).toContain("maybeRefreshHeldTranscript(snap)");
+
+    await withState({
+      selected: { kind: "agent", id: bot.id },
+      selectedId: bot.id,
+      snap: snapshot({ programs: [{ id: "p", name: "P", agents: [clockOnly] }] }),
+      transcript: {
+        agentId: bot.id,
+        loading: false,
+        error: "",
+        limit: 200,
+        threadStamp: M.transcriptThreadStamp(bot),
+        data: { source: "/tmp/replica.blob", truncated: false, lines: held },
+      },
+    }, async () => {
+      await withRequests([{
+        status: 200,
+        json: { ok: true, source: "/tmp/replica.blob", truncated: false, lines: refreshed },
+      }], async (calls) => {
+        M.maybeRefreshHeldTranscript(M.state.snap);
+        expect(M.state.transcript.loading).toBe(false);
+        expect(M.state.transcript.data.lines).toHaveLength(2);
+        for (let i = 0; i < 20 && M.state.transcript.data.lines.length < 3; i++) {
+          await Promise.resolve();
+        }
+        expect(calls[0]!.url).toContain("/api/transcript?agent=" + encodeURIComponent(bot.id));
+        expect(M.state.transcript.data.lines).toHaveLength(3);
+        expect(M.state.transcript.data.lines.at(-1).text).toBe("Shipped the closer from send-message.");
+      });
+    });
+  });
+
   test("a long loaded turn collapses to about six lines and expands in place", async () => {
     const long = Array.from({ length: 10 }, (_, i) => `Line ${i + 1} of the agent turn.`).join("\n");
     expect(M.chatSpeechNeedsCollapse(long)).toBe(true);
@@ -12273,6 +12490,191 @@ describe("inspector chat is one messenger, not a clipped log", () => {
     const evidence = withDom(() => M.renderEvidence(a, ui));
     expect(allByClass(evidence, "chat-msg")).toHaveLength(0);
     expect(ui.transcript.data.source).toBe("/tmp/session.jsonl");
+  });
+});
+
+/* ---------------------------------------------------------------------------
+   Funnel C — Grok Build reasoning in the drawer.
+
+   The transcript lane emits a thought as role `system` with a `Thought\n`
+   prefix (no new TranscriptLine role, by contract). Rendered as-is, a
+   900-thought Grok session becomes 900 quiet "System" rows and the operator
+   loses the two sentences they opened the drawer to read. These claims fix the
+   presentation: thoughts read as Thought, collapse by default, and never cost
+   a user or assistant bubble its place.
+   ------------------------------------------------------------------------- */
+describe("F-: Grok thoughts read as collapsed Thought rows, not System noise", () => {
+  const thought = (text: string, at: string | null = null) => ({ at, role: "system", text: "Thought\n" + text });
+
+  test("F-thought-collapsed: a Thought-prefixed system line renders as Thought, not System", () => {
+    const at = "2026-08-16T12:00:00.000Z";
+    const a = agent({ id: "grok:01a006fb-c477-79c1-917b-41c1efbcb9d2", provider: "grok" });
+    const lines = [
+      { at, role: "user", text: "Why is the transcript empty?" },
+      thought("The parser only special-cases codex and claude envelopes.", at),
+      { at, role: "system", text: "Thought\r\nGrok nests content at params.update.content." },
+      { at, role: "tool", text: "rg -n transcriptCandidate src/server\nstatus: passed" },
+      { at, role: "assistant", text: "The candidate matcher never matched Grok." },
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const body: any = withDom(() => M.renderChatFeedBody(a, transcriptUi({
+      agentId: a.id, data: { source: "/tmp/updates.jsonl", truncated: false, lines },
+    })));
+
+    // The two consecutive thoughts are ONE disclosure, closed on arrival. A
+    // `details` that shipped `open` would put reasoning above the answer.
+    const thoughts = allByClass(body, "chat-thought");
+    expect(thoughts).toHaveLength(1);
+    expect(thoughts[0].tagName).toBe("details");
+    expect(thoughts[0].attributes.open).toBeUndefined();
+    expect(thoughts[0].dataset.count).toBe("2");
+
+    // It says Thought — and the drawer never calls this turn "System" again.
+    expect(textOf(byClass(thoughts[0], "chat-thought-label"))).toBe("2 thoughts");
+    expect(textOf(body)).not.toContain("System");
+    expect(allByClass(body, "tr-line")).toHaveLength(0);
+
+    // The wire prefix is chrome, not prose: it is stripped from every body,
+    // and from the summary gist, in both \n and \r\n forms.
+    const texts = allByClass(thoughts[0], "chat-thought-text").map((n: any) => textOf(n));
+    expect(texts).toEqual([
+      "The parser only special-cases codex and claude envelopes.",
+      "Grok nests content at params.update.content.",
+    ]);
+    expect(textOf(thoughts[0])).not.toContain("Thought\n");
+    expect(textOf(byClass(thoughts[0], "chat-thought-gist")))
+      .toBe("The parser only special-cases codex and claude envelopes.");
+    expect(byClass(thoughts[0], "chat-thought-at").attributes.datetime).toBe(at);
+
+    // Speech and tools keep every bit of the standing they had. The tool card
+    // is still the ONE tool chrome — thoughts did not fork a second one.
+    const bubbles = allByClass(body, "chat-msg");
+    expect(bubbles.map((n: any) => n.dataset.role)).toEqual(["user", "assistant"]);
+    expect(allByClass(body, "chat-tool-group")).toHaveLength(1);
+    expect(allByClass(body, "chat-tool-card")).toHaveLength(1);
+
+    // The pure seam, without a DOM: a thought is a system line whose text
+    // opens with the prefix. Any other role, or the bare word, is not one.
+    expect(M.thoughtText({ role: "system", text: "Thought\nweigh the options" })).toBe("weigh the options");
+    expect(M.thoughtText({ role: "system", text: "Thought\r\nweigh the options" })).toBe("weigh the options");
+    expect(M.thoughtText({ role: "system", text: "Thought\n" })).toBe("");     // an empty thought is still one
+    expect(M.thoughtText({ role: "system", text: "Thought experiment failed" })).toBeNull();
+    expect(M.thoughtText({ role: "system", text: "Warning: compacted" })).toBeNull();
+    expect(M.thoughtText({ role: "assistant", text: "Thought\nnot mine" })).toBeNull();
+    expect(M.thoughtText({ role: "tool", text: "Thought\nnot mine" })).toBeNull();
+
+    /* Secondary by construction, at the stylesheet: reasoning is quieter ink
+       than the bubbles it sits between, and its body only exists when open. */
+    expect(styles).toMatch(/\.chat-thought \{[^}]*color: var\(--faint-strong\)/);
+    expect(styles).toMatch(/\.chat-thought(?:\[open\])? \.chat-thought-body \{/);
+  });
+
+  test("F-thought-collapsed: 900 thoughts cannot bury the two bubbles that matter", () => {
+    const a = agent({ id: "grok:01a006fb-thought-flood", provider: "grok" });
+    const lines = [
+      { at: null, role: "user", text: "Land the limiter." },
+      ...Array.from({ length: 900 }, (_, i) => thought("step " + i)),
+      { at: null, role: "assistant", text: "Landed — the limiter is in." },
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const body: any = withDom(() => M.renderChatFeedBody(a, transcriptUi({
+      agentId: a.id, data: { source: "/tmp/updates.jsonl", truncated: false, lines },
+    })));
+
+    /* The window keeps the tail 300 turns, so the user bubble is off the top
+       by design. What must never happen is the ASSISTANT answer drowning in a
+       column of reasoning rows: the thought run collapses to one closed node,
+       so the feed is two children — thoughts, then the answer. */
+    expect(body.childNodes).toHaveLength(2);
+    expect(allByClass(body, "chat-thought")).toHaveLength(1);
+    expect(allByClass(body, "chat-thought")[0].attributes.open).toBeUndefined();
+    const bubbles = allByClass(body, "chat-msg");
+    expect(bubbles).toHaveLength(1);
+    expect(bubbles[0].dataset.role).toBe("assistant");
+    expect(textOf(bubbles[0])).toContain("Landed — the limiter is in.");
+    // The count is the honest number of thoughts in the window, not of all 900.
+    expect(byClass(body, "chat-thought").dataset.count).toBe("299");
+    expect(textOf(byClass(body, "chat-thought-label"))).toBe("299 thoughts");
+  });
+
+  test("F-system-untouched: a system line without the prefix still says System", () => {
+    const at = "2026-08-16T12:00:00.000Z";
+    const a = agent({ id: "grok:01a006fb-system-untouched", provider: "grok" });
+    const lines = [
+      { at, role: "system", text: "Warning: context compacted" },
+      thought("and this one is reasoning", at),
+      { at, role: "system", text: "Thought experiment: what if the pane is gone" },
+      { at, role: "unknown", text: "provider event" },
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const body: any = withDom(() => M.renderChatFeedBody(a, transcriptUi({
+      agentId: a.id, data: { source: "/tmp/updates.jsonl", truncated: false, lines },
+    })));
+
+    // Two quiet rows survive: the real warning, and the near-miss that only
+    // starts with the word. A warning swallowed into a closed disclosure is
+    // the failure this claim exists to prevent.
+    const rows = allByClass(body, "tr-line");
+    expect(rows.map((n: any) => n.dataset.role)).toEqual(["system", "system", "unknown"]);
+    expect(rows.map((n: any) => textOf(byClass(n, "tr-role")))).toEqual(["System", "System", "Event"]);
+    expect(textOf(rows[0])).toContain("Warning: context compacted");
+    expect(textOf(rows[1])).toContain("Thought experiment: what if the pane is gone");
+    expect(rows.every((n: any) => n.parent === body)).toBe(true);
+
+    // The one real thought between them is the only disclosure.
+    const thoughts = allByClass(body, "chat-thought");
+    expect(thoughts).toHaveLength(1);
+    expect(textOf(byClass(thoughts[0], "chat-thought-label"))).toBe("Thought");
+    expect(textOf(byClass(thoughts[0], "chat-thought-text"))).toBe("and this one is reasoning");
+  });
+
+  test("F-empty-grok-preview: an empty or failed transcript still shows the collector preview", async () => {
+    const closing = "Should I land the limiter now?";
+    const a = agent({
+      id: "grok:01a006fb-c477-79c1-917b-41c1efbcb9d2",
+      provider: "grok",
+      lastAgentMessage: "Reviewed the SEM forecast and the limiter buckets",
+      lastAgentClosing: closing,
+    });
+    const program = { id: "p", name: "P", agents: [a] };
+
+    // History path: HTTP 200 with lines: [] — the drawer keeps collector speech
+    // and adds no thought chrome to a feed that has no thoughts.
+    const empty = {
+      agentId: a.id, loading: false, error: "", limit: 200,
+      data: { source: "/tmp/updates.jsonl", truncated: false, lines: [] },
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const emptyBody: any = withDom(() => M.renderChatFeedBody(a, { transcript: empty }));
+    expect(textOf(byClass(emptyBody, "chat-msg-body"))).toBe(closing);
+    expect(allByClass(emptyBody, "chat-thought")).toHaveLength(0);
+    expect(allByClass(emptyBody, "tr-line")).toHaveLength(0);
+    expect(textOf(emptyBody)).not.toContain("No readable turns");
+    expect(withDom(() => M.renderTranscriptFeedLead(a, { transcript: empty }, { hasPreviewSpeech: true }))).toBeNull();
+
+    await withState({ transcript: empty }, () => {
+      const drawer = withDom(() => {
+        const pane = newNode("div");
+        M.renderAgentDrawer(pane, { kind: "agent", agent: a, program });
+        return pane;
+      });
+      const scroll = byClass(drawer, "drawer-chat-scroll");
+      expect(textOf(scroll)).toContain(closing);
+      expect(byClass(scroll, "chat-feed-state")).toBeNull();
+    });
+
+    // Failed-fetch path: the preview stands in for the body, and the lead —
+    // not the feed — carries the failure and its one retry.
+    const failed = { agentId: a.id, loading: false, error: "Transcript request timed out.", limit: 200, data: null };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const failedBody: any = withDom(() => M.renderChatFeedBody(a, { transcript: failed }));
+    expect(textOf(byClass(failedBody, "chat-msg-body"))).toBe(closing);
+    expect(allByClass(failedBody, "chat-thought")).toHaveLength(0);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const lead: any = withDom(() => M.renderTranscriptFeedLead(a, { transcript: failed }));
+    expect(lead.dataset.state).toBe("unavailable");
+    expect(textOf(lead)).toContain("Transcript request timed out.");
+    expect(textOf(lead)).toContain("Try again");
   });
 });
 
@@ -13172,7 +13574,10 @@ describe("W4-B: read endpoints, liveness, attention, triage lifecycle", () => {
   test("(3) 'died' is unmistakable on the row; absence changes nothing", () => {
     const program = { id: "p", name: "P" };
     const calm = withDom(() => M.renderAgentRow(agent(), program));
-    const dead = withDom(() => M.renderAgentRow(agent({ processLiveness: "died" }), program));
+    // Ended, because D7 gates the row mark on the lifecycle — the claim under
+    // test (a death is unmistakable when the row makes it) is unchanged.
+    const dead = withDom(() => M.renderAgentRow(
+      agent({ processLiveness: "died", status: "archived", activity: "ended" }), program));
     const unclear = withDom(() => M.renderAgentRow(agent({ processLiveness: "unknown" }), program));
 
     // Absent renders exactly what it renders today: no mark, no row class.
@@ -13534,7 +13939,10 @@ describe("W5-B: the wire, as the server actually speaks it", () => {
 
     // The row marks only death, and it must be driven by the REAL carrier —
     // reading processLiveness alone left every dead process unmarked.
-    const dead = withDom(() => M.renderAgentRow(agent({ processState: "died" }), program));
+    // R-died-ended-only: on an ENDED session, which is the only lifecycle whose
+    // row is allowed to make this claim. See the D7 test below for why.
+    const dead = withDom(() => M.renderAgentRow(
+      agent({ processState: "died", status: "archived", activity: "ended" }), program));
     expect(dead.className).toContain("is-died");
     expect(dead.attributes["aria-label"]).toContain("Process: Died");
 
@@ -14166,25 +14574,30 @@ describe("the lifecycle contract on the board itself", () => {
       }, () => withRequests([], async (calls) => {
         M.renderSettingsPanel();
         const panel = domById.get("settings-panel")!;
-        const paneRadio = byFkey(panel, "needs-you-display-pane");
-        const inlineRadio = byFkey(panel, "needs-you-display-inline");
-        expect(paneRadio).not.toBe(null);
-        expect(inlineRadio).not.toBe(null);
-        expect(paneRadio.attributes.checked).toBe("");
-        expect(inlineRadio.hasAttribute("checked")).toBe(false);
-        expect(textOf(panel)).toContain("this browser only");
+        const panePlate = byFkey(panel, "needs-you-display-pane");
+        const inlinePlate = byFkey(panel, "needs-you-display-inline");
+        const freshBefore = domById.get("setting-activityFreshMinutes");
+        const quietBefore = domById.get("setting-activityQuietMinutes");
+        expect(panePlate).not.toBe(null);
+        expect(inlinePlate).not.toBe(null);
+        expect(freshBefore).toBeTruthy();
+        expect(quietBefore).toBeTruthy();
+        expect(String(panePlate.className)).toMatch(/is-on/);
+        expect(String(inlinePlate.className)).not.toMatch(/is-on/);
+        expect(textOf(panel)).not.toContain("this browser only");
+        expect(textOf(panel)).not.toMatch(/This browser/);
 
-        await fire(inlineRadio, "change");
+        await fire(inlinePlate, "click");
         expect(M.state.needsYouDisplay).toBe("inline");
         expect(store.get("mtn3-needs-you-display")).toBe("inline");
         // No server round-trip: the pref is not a setting the fleet shares.
         expect(calls).toHaveLength(0);
-        /* And the panel repainted itself: the pref is in its paint signature,
-           so the radio the operator just clicked reads as chosen — without
-           this the form would keep the stale checkmark until a server value
-           changed. */
+        /* Plates paint into their host. The desk rail must not remount just
+           because the operator picked Inline — only the selected plate flips. */
         const rebuilt = byFkey(domById.get("settings-panel")!, "needs-you-display-inline");
-        expect(rebuilt.attributes.checked).toBe("");
+        expect(String(rebuilt.className)).toMatch(/is-on/);
+        expect(domById.get("setting-activityFreshMinutes")).toBe(freshBefore);
+        expect(domById.get("setting-activityQuietMinutes")).toBe(quietBefore);
       }));
     } finally {
       G.localStorage = realLS;
@@ -16603,3 +17016,130 @@ function trackFocusByFkey(): () => string[] {
   };
   return () => seen;
 }
+
+/* ---------------------------------------------------------------------------
+   R — the row says the true thing (grok-host-0817, D5 and D7).
+
+   Two separate lies the board was telling on Emilio's live screen:
+
+   - Every quarantined row hovered "Conflicting identity evidence — controls are
+     quarantined until the target is unambiguous." That sentence was a GUESS the
+     client made from the control state alone. It was wrong for Grok chats
+     sharing one host process (nobody is conflicting) and wrong for sessions
+     merely sharing a folder (no evidence collided). The server had already
+     computed the true sentence and stamped it on `target.reason`.
+
+   - `grok-build-plan` wore Working and Died at once: its pid was gone, a sibling
+     had taken the pane, and its transcript was still fresh — so lifecycle Row 4
+     held it `working` for the 3-minute window while `processState` said `died`.
+     ------------------------------------------------------------------------- */
+describe("R — the quarantine mark and the Died chip tell the truth", () => {
+  const program = { id: "p1", name: "P" };
+  // Verbatim from src/shared/identity-copy.ts. Copied rather than imported: this
+  // suite drives the browser client, which cannot import a TS module. A third
+  // wording invented here would be the exact defect D5 removes, so if the
+  // shared constant ever changes, this literal is meant to fail loudly.
+  const SHARED_HOST_REASON =
+    "Several Grok chats share this terminal; Send stays off until the pane is one chat.";
+  const TWO_OWNER_REASON =
+    "Two sessions share this terminal; Send stays off until one leaves.";
+
+  test("R-hover-reason: a quarantined row hovers the server's reason, not the generic guess", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const dotFor = (overrides: Record<string, unknown>): any =>
+      byClass(withDom(() => M.renderAgentRow(agent(overrides) as any, program)), "control-dot");
+
+    const explained = dotFor({
+      controlState: "quarantined",
+      target: { resolution: "ambiguous", reason: TWO_OWNER_REASON, surfaceId: "s1" },
+    });
+    expect(explained).not.toBeNull();
+    expect(explained.attributes.title).toContain(TWO_OWNER_REASON);
+    expect(explained.attributes["aria-label"]).toContain(TWO_OWNER_REASON);
+    // The guess is gone from this row — it is not appended, not kept as a lead.
+    expect(explained.attributes.title).not.toContain("Conflicting identity evidence");
+
+    // The cmux surface UUID never reaches a hover; the tty name does, because it
+    // is the terminal the operator has to go and look at.
+    const live = dotFor({
+      controlState: "quarantined",
+      target: {
+        resolution: "ambiguous", surfaceId: "s1",
+        reason: "cmux surface is quarantined because exact identity evidence conflicts:"
+          + " cmux 8B1F2C3D-4E5F-4A6B-8C9D-0E1F2A3B4C5D has conflicting open agent session files on ttys011",
+      },
+    });
+    expect(live.attributes.title).toContain("has conflicting open agent session files on ttys011");
+    expect(live.attributes.title).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+    // Stripping the id must not leave cmux itself accused of the collision.
+    expect(live.attributes.title).not.toContain("cmux has conflicting");
+    expect(live.attributes.title).toContain("this pane has conflicting");
+
+    // A quarantine the server did not explain still gets a sentence: a red mark
+    // with no words is worse than an imprecise one.
+    const bare = dotFor({ controlState: "quarantined", target: { resolution: "ambiguous", surfaceId: "s1" } });
+    expect(bare.attributes.title).toContain("Conflicting identity evidence");
+  });
+
+  test("R-hover-reason: a shared host is observed-only — no red mark, and the drawer says why", () => {
+    /* The whole point of admitting Grok to shared-host: the parent pane is not
+       fighting anyone, so it must not wear the mark that says it is. */
+    const hosted = agent({
+      id: "grok:host",
+      provider: "grok",
+      target: { resolution: "shared-host", reason: SHARED_HOST_REASON, surfaceId: "s1" },
+      controlState: undefined,
+    });
+    // Derived, not asserted by the fixture: shared-host maps to observed-only.
+    expect(M.deriveControlState(hosted)).toBe("observed-only");
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const row: any = withDom(() => M.renderAgentRow(hosted as any, program));
+    expect(byClass(row, "control-dot")).toBeNull();
+
+    // The drawer explains, in the same sentence, without accusing anyone.
+    const brief = M.quarantineBrief(hosted, "observed-only");
+    expect(brief.summary).toBe(SHARED_HOST_REASON);
+    expect(brief.summary).not.toContain("no safe cmux target is linked");
+    expect(brief.cause).toBe("shared-host");
+    // It must not inherit the contested-terminal instruction, which would send
+    // an operator to close work that is not in anyone's way.
+    expect(brief.nextStep).not.toContain("End or close one of the sessions");
+    expect(brief.why).toContain("hosting several chats");
+  });
+
+  test("R-died-ended-only: a Working row with a dead probe stays Working", () => {
+    /* Lifecycle Row 4 is the more conservative claim — a fresh transcript is
+       direct evidence of work — and it is what the rest of the row is built on.
+       One row cannot report a session as both alive and dead. */
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rowFor = (overrides: Record<string, unknown>): any =>
+      withDom(() => M.renderAgentRow(agent(overrides) as any, program));
+
+    const working = rowFor({ processState: "died", status: "running", activity: "working" });
+    expect(byClass(working, "row-died")).toBeNull();
+    // ...and not in colour either: is-died is the pill's scannable echo, so a
+    // row that declines to say Died must not paint it.
+    expect(working.className.split(/\s+/)).not.toContain("is-died");
+    expect(textOf(working)).not.toContain("Died");
+
+    // Waiting is the same case: a dead probe on a live row is not a death.
+    const waiting = rowFor({ processState: "died", status: "waiting", activity: "waiting" });
+    expect(byClass(waiting, "row-died")).toBeNull();
+
+    // Ended IS the lifecycle that can make the claim, and still does.
+    const ended = rowFor({ processState: "died", status: "archived", activity: "ended" });
+    expect(textOf(byClass(ended, "row-died"))).toContain("Died");
+    expect(ended.className.split(/\s+/)).toContain("is-died");
+
+    /* Nothing was deleted from the wire or from the drawer. `processState` is
+       still `died` on the working row, the drawer still states it, and the row's
+       accessible name still carries the process fact — the row chip is a
+       lifecycle verdict, and only that verdict was corrected. */
+    expect(M.livenessState(agent({ processState: "died", activity: "working" }))).toBe("died");
+    expect(M.livenessView(agent({ processState: "died", activity: "working" })).label).toBe("Died");
+    const live = agent({ processState: "died", status: "running", activity: "working" });
+    const pane = newNode("div");
+    withDom(() => M.renderAgentDrawer(pane, { kind: "agent", agent: live, program: { id: "p1", name: "P", agents: [live] } }));
+    expect(textOf(byClass(pane, "status-line-liveness"))).toContain("Died");
+  });
+});

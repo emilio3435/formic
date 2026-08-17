@@ -16,7 +16,8 @@
     "test": "bun test",
     "test:ci": "bash scripts/ci-tests.sh",
     "typecheck": "bunx tsc --noEmit",
-    "check": "bun run typecheck && bun test"
+    "check": "bun run typecheck && bun test",
+    "formic": "bun src/cli/formic.ts"
   },
   "devDependencies": {
     "@types/bun": "1.3.14",

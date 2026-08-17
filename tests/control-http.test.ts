@@ -491,6 +491,44 @@ describe("same-origin loopback control HTTP boundary", () => {
     expect(await oversized.json()).toMatchObject({ error: { code: "BODY_TOO_LARGE" } });
   });
 
+  test("accepts an optional clientNonce on instruct and rejects it on other actions", async () => {
+    const runner = new StubRunner([
+      { exitCode: 0, stdout: "", stderr: "", timedOut: false },
+      { exitCode: 0, stdout: "", stderr: "", timedOut: false },
+    ]);
+    const accepted = await handleControlRequest(
+      post(JSON.stringify({
+        action: "instruct",
+        agentId: "codex:test-session",
+        instruction: "Continue.",
+        clientNonce: "11111111-2222-4333-8444-555555555555",
+      })),
+      {
+        runner,
+        archiveStore: archiveStore(),
+        getSnapshot: snapshot,
+        now: () => Date.parse(snapshot().generatedAt),
+      },
+    );
+    expect(accepted.status).toBe(200);
+
+    const rejected = await handleControlRequest(
+      post(JSON.stringify({
+        action: "focus",
+        agentId: "codex:test-session",
+        clientNonce: "11111111-2222-4333-8444-555555555555",
+      })),
+      {
+        runner: new StubRunner([]),
+        archiveStore: archiveStore(),
+        getSnapshot: snapshot,
+        now: () => Date.parse(snapshot().generatedAt),
+      },
+    );
+    expect(rejected.status).toBe(400);
+    expect(await rejected.json()).toMatchObject({ ok: false, error: { code: "INVALID_CONTROL_REQUEST" } });
+  });
+
   test.each([
     { action: "command", agentId: "codex:test-session", command: "open -a Calculator" },
     { action: "focus", agentId: "codex:test-session", command: "open -a Calculator" },

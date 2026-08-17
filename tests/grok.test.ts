@@ -18,6 +18,11 @@ import { PROVIDERS } from "../src/shared/types";
 
 const FIXTURE = join(import.meta.dir, "fixtures/grok-session");
 const ID = "01a0072a-1b2c-7d3e-8f40-123456789abc";
+const PARENT_ID = "01a00dd7-337a-7a71-9d46-201d9c3dc4c1";
+const OTHER_PARENT_ID = "01a00dd8-337a-7a71-9d46-201d9c3dc4c2";
+const SAME_CWD_CHILD_ID = "01a00ddd-08ca-7e30-af54-9206017816a8";
+const OTHER_CWD_CHILD_ID = "01a00dde-08ca-7e30-af54-9206017816a9";
+const INVALID_PARENT_CHILD_ID = "01a00ddf-08ca-7e30-af54-9206017816aa";
 const NOW = Date.parse("2026-08-15T20:02:30.000Z");
 
 const fixture = (name: string): string => readFileSync(join(FIXTURE, name), "utf8");
@@ -146,6 +151,81 @@ describe("the Grok collector follows the real nested layout", () => {
       cwd: "/Users/ant/Developer/formic",
       tokens: { provenance: "unknown" },
     });
+  });
+
+  test("P-meta-parent: meta.json links same-cwd and cross-cwd children to their parent", async () => {
+    const home = mkdtempSync(join(tmpdir(), "anthill-grok-meta-parent-"));
+    const parentProject = join(home, ".grok/sessions/%2FUsers%2Fant%2FDeveloper%2Fformic");
+    const childProject = join(home, ".grok/sessions/%2FUsers%2Fant%2FDeveloper%2Fchild");
+    const parent = join(parentProject, PARENT_ID);
+    const otherParent = join(childProject, OTHER_PARENT_ID);
+    mkdirSync(join(parent, "subagents", SAME_CWD_CHILD_ID), { recursive: true });
+    mkdirSync(join(parent, "subagents", OTHER_CWD_CHILD_ID), { recursive: true });
+    mkdirSync(join(parent, "subagents", INVALID_PARENT_CHILD_ID), { recursive: true });
+    mkdirSync(join(otherParent, "subagents", SAME_CWD_CHILD_ID), { recursive: true });
+    mkdirSync(join(parentProject, SAME_CWD_CHILD_ID), { recursive: true });
+    mkdirSync(join(childProject, OTHER_CWD_CHILD_ID), { recursive: true });
+    mkdirSync(join(childProject, INVALID_PARENT_CHILD_ID), { recursive: true });
+    writeFileSync(join(parent, "subagents", SAME_CWD_CHILD_ID, "meta.json"), JSON.stringify({
+      parent_session_id: PARENT_ID,
+      child_session_id: SAME_CWD_CHILD_ID,
+    }));
+    writeFileSync(join(parent, "subagents", OTHER_CWD_CHILD_ID, "meta.json"), JSON.stringify({
+      parent_session_id: PARENT_ID,
+      child_session_id: OTHER_CWD_CHILD_ID,
+    }));
+    writeFileSync(join(parent, "subagents", INVALID_PARENT_CHILD_ID, "meta.json"), JSON.stringify({
+      parent_session_id: "not-a-session-uuid",
+      child_session_id: INVALID_PARENT_CHILD_ID,
+    }));
+    writeFileSync(join(otherParent, "subagents", SAME_CWD_CHILD_ID, "meta.json"), JSON.stringify({
+      parent_session_id: OTHER_PARENT_ID,
+      child_session_id: SAME_CWD_CHILD_ID,
+    }));
+
+    const result = await collectSessionProvider("grok", home, Number.POSITIVE_INFINITY);
+    const bySessionId = new Map(result.value.map((agent) => [agent.sourceSessionId, agent]));
+
+    expect(result.errors).toEqual([]);
+    expect(bySessionId.get(SAME_CWD_CHILD_ID)?.parentSourceSessionId).toBe(PARENT_ID);
+    expect(bySessionId.get(OTHER_CWD_CHILD_ID)?.parentSourceSessionId).toBe(PARENT_ID);
+    expect(bySessionId.get(INVALID_PARENT_CHILD_ID)?.parentSourceSessionId).toBeUndefined();
+  });
+
+  test("P-summary-wins: a subagent_resume summary parent wins over disagreeing meta.json", async () => {
+    const home = mkdtempSync(join(tmpdir(), "anthill-grok-summary-parent-"));
+    const project = join(home, ".grok/sessions/%2FUsers%2Fant%2FDeveloper%2Fformic");
+    const child = join(project, SAME_CWD_CHILD_ID);
+    const otherParent = join(project, OTHER_PARENT_ID);
+    mkdirSync(join(project, PARENT_ID), { recursive: true });
+    mkdirSync(join(otherParent, "subagents", SAME_CWD_CHILD_ID), { recursive: true });
+    mkdirSync(child, { recursive: true });
+    writeFileSync(join(child, "summary.json"), JSON.stringify({
+      session_kind: "subagent_resume",
+      parent_session_id: PARENT_ID,
+    }));
+    writeFileSync(join(otherParent, "subagents", SAME_CWD_CHILD_ID, "meta.json"), JSON.stringify({
+      parent_session_id: OTHER_PARENT_ID,
+      child_session_id: SAME_CWD_CHILD_ID,
+    }));
+
+    const result = await collectSessionProvider("grok", home, Number.POSITIVE_INFINITY);
+    const childAgent = result.value.find((agent) => agent.sourceSessionId === SAME_CWD_CHILD_ID);
+
+    expect(result.errors).toEqual([]);
+    expect(childAgent?.parentSourceSessionId).toBe(PARENT_ID);
+  });
+
+  test("P-no-meta: an ordinary main without summary or metadata stays parent-less", async () => {
+    const home = mkdtempSync(join(tmpdir(), "anthill-grok-no-parent-"));
+    const session = join(home, ".grok/sessions/%2FUsers%2Fant%2FDeveloper%2Fformic", ID);
+    mkdirSync(session, { recursive: true });
+
+    const result = await collectSessionProvider("grok", home, Number.POSITIVE_INFINITY);
+
+    expect(result.errors).toEqual([]);
+    expect(result.value).toHaveLength(1);
+    expect(result.value[0]?.parentSourceSessionId).toBeUndefined();
   });
 });
 

@@ -1,4 +1,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
+// @ts-expect-error the dependency-free browser client has no declaration file
+import { fetchCollectorInstances } from "../src/web/settings-collectors.js";
 
 /* Same TheAntHill import as tests/grok.test.ts. The settings dialog has no
    dedicated DOM test, so this file paints it through the real renderer. */
@@ -161,7 +163,7 @@ function makeNode(tag: string): FakeNode {
   return node as unknown as FakeNode;
 }
 
-function withDom<T>(fn: () => T): T {
+function installDom() {
   byId = new Map();
   const panel = makeNode("div");
   panel.setAttribute("id", "settings-panel");
@@ -177,9 +179,20 @@ function withDom<T>(fn: () => T): T {
     body: makeNode("body"),
   };
   (globalThis as unknown as { document: unknown }).document = doc;
-  try { return fn(); } finally {
-    delete (globalThis as unknown as { document?: unknown }).document;
-  }
+}
+
+function uninstallDom() {
+  delete (globalThis as unknown as { document?: unknown }).document;
+}
+
+function withDom<T>(fn: () => T): T {
+  installDom();
+  try { return fn(); } finally { uninstallDom(); }
+}
+
+async function withDomAsync<T>(fn: () => Promise<T>): Promise<T> {
+  installDom();
+  try { return await fn(); } finally { uninstallDom(); }
 }
 
 describe("Settings Collectors inventory", () => {
@@ -222,7 +235,7 @@ describe("Settings Collectors inventory", () => {
     });
   });
 
-  test("Import selected is primary and disabled until a box is checked", () => {
+  test("Import selected is a ghost and disabled until a box is checked", () => {
     const instances = [
       { id: "cursor-gui:cursor", kind: "cursor-gui", label: "Cursor", dataDir: "/Users/me/Library/Application Support/Cursor", default: true, onboarded: true, ignored: false },
       { id: "cursor-gui:cursor-2", kind: "cursor-gui", label: "Cursor-2", dataDir: "/Users/me/Library/Application Support/Cursor-2", default: false, onboarded: false, ignored: false },
@@ -234,8 +247,80 @@ describe("Settings Collectors inventory", () => {
       if (web.state.paintSig) web.state.paintSig.settings = "";
       web.renderSettingsPanel();
       const btn = document.querySelector("[data-fkey='collectors-import']") as HTMLButtonElement | null;
-      expect(btn?.className).toMatch(/primary/);
+      expect(btn?.className.split(/\s+/)).not.toContain("primary");
       expect(btn?.disabled).toBe(true);
+    });
+  });
+
+  test("home tiles wear harness marks and a waiting Claude is amber", () => {
+    const instances = [
+      { id: "cursor-gui:cursor", kind: "cursor-gui", label: "Cursor", dataDir: "/Users/me/Library/Application Support/Cursor", default: true, onboarded: true, ignored: false },
+      { id: "grok-bot:grok-bot-2", kind: "grok-bot", label: "Grok Bot 2", dataDir: "/Users/me/Library/Application Support/Grok Bot 2", default: false, onboarded: true, ignored: false, reason: "needs-parser" },
+      { id: "claude:claude", kind: "claude", label: "Claude", dataDir: "/Users/me/.claude", default: false, onboarded: false, ignored: false, reason: "needs-parser" },
+      { id: "muse:muse", kind: "muse", label: "Muse", dataDir: "/Users/me/.local/share/muse", default: false, onboarded: false, ignored: true },
+    ];
+    withDom(() => {
+      web.state.collectorInstances = instances;
+      web.state.collectorInstancesPending = false;
+      web.state.settingsPanelOpen = true;
+      if (web.state.paintSig) web.state.paintSig.settings = "";
+      web.renderSettingsPanel();
+      const cursor = document.querySelector("[data-instance='cursor-gui:cursor'] img");
+      expect(cursor?.getAttribute("src")).toMatch(/cursor\.svg/);
+      const grok = document.querySelector("[data-instance='grok-bot:grok-bot-2'] img");
+      expect(grok?.getAttribute("src")).toMatch(/grok\.svg/);
+      const waiting = document.querySelector("[data-instance='claude:claude']");
+      expect(waiting?.className).toMatch(/is-wait/);
+      expect(document.querySelector("[data-instance='claude:claude'] input[type='checkbox']")).toBeTruthy();
+      expect(document.querySelector("[data-instance='muse:muse'] [data-fkey='instance-restore']")).toBeTruthy();
+    });
+  });
+
+  test("collector fetch paints homes without remounting the span", async () => {
+    const waiting = [
+      { id: "claude:claude", kind: "claude", label: "Claude", dataDir: "/Users/me/.claude", default: false, onboarded: false, ignored: false, reason: "needs-parser" },
+    ];
+    const instances = [
+      { id: "cursor-gui:cursor", kind: "cursor-gui", label: "Cursor", dataDir: "/Users/me/Library/Application Support/Cursor", default: true, onboarded: true, ignored: false },
+      ...waiting,
+    ];
+    await withDomAsync(async () => {
+      web.state.collectorInstances = waiting;
+      web.state.collectorInstancesPending = false;
+      web.state.settingsPanelOpen = true;
+      web.state.settings = {
+        activityFreshMinutes: 3,
+        activityQuietMinutes: 45,
+        scanWindowHours: 36,
+        providerWaitMs: 7500,
+        historyRetentionDays: 30,
+        historyRecordLimit: 5000,
+      };
+      if (web.state.paintSig) web.state.paintSig.settings = "";
+      web.renderSettingsPanel();
+      const quiet = document.getElementById("setting-activityQuietMinutes") as unknown as { value: string };
+      quiet.value = "12";
+      const box = document.querySelector("[data-instance='claude:claude'] input[type='checkbox']") as { checked?: boolean } | null;
+      expect(box).toBeTruthy();
+      box!.checked = true;
+      expect(document.querySelector("[data-instance='cursor-gui:cursor']")).toBeNull();
+
+      const previousFetch = (globalThis as { fetch?: unknown }).fetch;
+      (globalThis as { fetch: unknown }).fetch = async () => ({
+        ok: true,
+        json: async () => ({ ok: true, instances }),
+      });
+      try {
+        await fetchCollectorInstances();
+      } finally {
+        (globalThis as { fetch?: unknown }).fetch = previousFetch;
+      }
+
+      expect(document.querySelector("[data-instance='cursor-gui:cursor']")).toBeTruthy();
+      expect((document.getElementById("setting-activityQuietMinutes") as unknown as { value: string }).value).toBe("12");
+      const kept = document.querySelector("[data-instance='claude:claude'] input[type='checkbox']") as { checked?: boolean } | null;
+      expect(kept?.checked).toBe(true);
+      expect((document.querySelector("[data-fkey='collectors-import']") as { disabled?: boolean } | null)?.disabled).toBe(false);
     });
   });
 });

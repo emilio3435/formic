@@ -8,6 +8,8 @@ import { $, el } from "./dom-primitives.js";
 import { apiFetch, API_READ_TIMEOUT_MS, API_WRITE_TIMEOUT_MS } from "./api-client.js";
 import { renderSettingsPanel } from "./settings-panel.js";
 
+let collectorImportFailed = false;
+
 function collectorInstanceList() {
   return Array.isArray(state.collectorInstances) ? state.collectorInstances : [];
 }
@@ -64,28 +66,55 @@ function collectorImportNoteFor(ids) {
   }).join(" ");
 }
 
-function selectedCollectorIds() {
-  const root = $("settings-collectors");
-  if (!root) return [];
-  const ids = [];
+function collectorCheckboxId(node) {
+  return (node.dataset && node.dataset.instance)
+    || (typeof node.getAttribute === "function" ? node.getAttribute("data-instance") : "")
+    || "";
+}
+
+function visitCollectorCheckboxes(root, fn) {
   const visit = (node) => {
     if (!node || typeof node !== "object") return;
     const tag = node.tagName;
     const type = node.type || (typeof node.getAttribute === "function" ? node.getAttribute("type") : "");
-    if ((tag === "input" || tag === "INPUT") && type === "checkbox" && node.checked) {
-      const id = (node.dataset && node.dataset.instance)
-        || (typeof node.getAttribute === "function" ? node.getAttribute("data-instance") : "");
-      if (id) ids.push(id);
-    }
+    if ((tag === "input" || tag === "INPUT") && type === "checkbox") fn(node);
     for (const kid of node.children || node.childNodes || []) visit(kid);
   };
   visit(root);
+}
+
+function selectedCollectorIds() {
+  const root = $("settings-collectors");
+  if (!root) return [];
+  const ids = [];
+  visitCollectorCheckboxes(root, (node) => {
+    if (!node.checked) return;
+    const id = collectorCheckboxId(node);
+    if (id) ids.push(id);
+  });
   return ids;
+}
+
+function restoreCollectorChecks(root, ids) {
+  if (!root || !ids.length) return;
+  const wanted = new Set(ids);
+  visitCollectorCheckboxes(root, (node) => {
+    if (wanted.has(collectorCheckboxId(node))) node.checked = true;
+  });
+}
+
+function paintCollectorHomes() {
+  if (!state.settingsPanelOpen) return;
+  if ($("settings-homes")) {
+    renderCollectorsBlock();
+    return;
+  }
+  renderSettingsPanel();
 }
 
 async function fetchCollectorInstances() {
   state.collectorInstancesPending = true;
-  if (state.settingsPanelOpen) renderSettingsPanel();
+  paintCollectorHomes();
   try {
     const res = await apiFetch("/api/collector-instances", { headers: { accept: "application/json" } }, API_READ_TIMEOUT_MS);
     const body = await res.json();
@@ -97,13 +126,13 @@ async function fetchCollectorInstances() {
     console.warn("collector instances fetch failed:", err);
   } finally {
     state.collectorInstancesPending = false;
-    if (state.settingsPanelOpen) renderSettingsPanel();
+    paintCollectorHomes();
   }
 }
 
 async function postCollectorInstances(body, importNote) {
   state.collectorInstancesPending = true;
-  if (state.settingsPanelOpen) renderSettingsPanel();
+  paintCollectorHomes();
   try {
     const res = await apiFetch("/api/collector-instances", {
       method: "POST",
@@ -114,12 +143,17 @@ async function postCollectorInstances(body, importNote) {
     if (!res.ok || !payload || payload.ok !== true) {
       throw new Error((payload && payload.error && payload.error.message) || ("collector instances " + res.status));
     }
-    if (typeof importNote === "string") state.collectorImportNote = importNote;
+    if (typeof importNote === "string") {
+      state.collectorImportNote = importNote;
+      collectorImportFailed = false;
+    }
     await fetchCollectorInstances();
   } catch (err) {
-    console.warn("collector instances update failed:", err);
+    const message = err && err.message ? err.message : "collector instances update failed";
+    state.collectorImportNote = "Not saved. " + message;
+    collectorImportFailed = true;
     state.collectorInstancesPending = false;
-    if (state.settingsPanelOpen) renderSettingsPanel();
+    paintCollectorHomes();
   }
 }
 
@@ -140,27 +174,70 @@ function ignoreCollectorInstance(id) {
   void postCollectorInstances({ id, ignored: true });
 }
 
+function restoreCollectorInstance(id) {
+  if (!id) return;
+  void postCollectorInstances({ id, ignored: false });
+}
+
+const HOME_MARK = {
+  "cursor-gui": "/icons/cursor.svg",
+  "cursor-cli": "/icons/cursor.svg",
+  "grok-cli": "/icons/xai.svg",
+  "grok-bot": "/icons/grok.svg",
+  claude: "/icons/claude-code.svg",
+  factory: "/icons/factory.svg",
+  prime: "/icons/prime-orch.svg",
+  omp: "/icons/omp.svg",
+  hermes: "/icons/formic-mark.svg",
+  codex: "/icons/codex.webp",
+  burnbar: "/icons/history.svg",
+};
+
+function homeMark(inst) {
+  const src = HOME_MARK[inst.kind];
+  const label = inst.label || inst.id;
+  if (!src) {
+    return el("span", { class: "home-letter", text: String(label).slice(0, 1), title: label });
+  }
+  return el("img", { class: "home-mark", src, alt: label });
+}
+
 function collectorRow(inst) {
-  const extra = !inst.default && !inst.onboarded && !inst.ignored;
+  const ignored = Boolean(inst.ignored);
+  const waiting = !ignored && !inst.default && !inst.onboarded;
+  const on = !ignored && (inst.default || inst.onboarded);
+  const classes = ["home"];
+  if (waiting) classes.push("is-wait");
+  if (ignored) classes.push("is-off");
   return el("div", {
-    class: "settings-collectors-row",
+    class: classes.join(" "),
     "data-instance": inst.id,
     dataset: { instance: inst.id },
+    title: collectorStatusLine(inst),
   },
-    extra ? el("input", {
-      type: "checkbox",
-      dataset: { instance: inst.id },
-      onchange: syncImportSelectedState,
-    }) : null,
-    el("div", { class: "settings-collectors-copy" },
-      el("span", { class: "settings-field-label", text: inst.label || inst.id }),
-      el("span", { class: "settings-help", text: collectorStatusLine(inst) })),
-    extra ? el("button", {
+    homeMark(inst),
+    el("b", { text: inst.label || inst.id }),
+    on ? el("s", { text: "on" }) : null,
+    waiting ? el("label", {},
+      el("input", {
+        type: "checkbox",
+        dataset: { instance: inst.id },
+        onchange: syncImportSelectedState,
+      }),
+      "import") : null,
+    waiting ? el("button", {
       type: "button",
       class: "settings-collectors-ignore",
       dataset: { fkey: "instance-ignore" },
       onclick: () => ignoreCollectorInstance(inst.id),
-    }, "Ignore") : null);
+    }, "Ignore") : null,
+    ignored ? el("button", {
+      type: "button",
+      class: "settings-collectors-ignore",
+      dataset: { fkey: "instance-restore" },
+      onclick: () => restoreCollectorInstance(inst.id),
+    }, "Restore") : null,
+    el("span", { hidden: "", text: collectorStatusLine(inst) }));
 }
 
 function collectorGroup(title, rows, group) {
@@ -170,36 +247,50 @@ function collectorGroup(title, rows, group) {
     "data-group": group,
     dataset: { group },
   },
-    el("p", { class: "settings-field-label", text: title }),
-    ...rows.map(collectorRow));
+    el("div", { class: "home-grid" },
+      ...rows.map(collectorRow)));
+}
+
+function collectorsImportNoteNode() {
+  if (!state.collectorImportNote) return null;
+  return el("p", {
+    class: collectorImportFailed ? "home-note settings-error" : "home-note settings-saved",
+    id: "collectors-import-note",
+    role: collectorImportFailed ? "alert" : "status",
+    text: state.collectorImportNote,
+  });
 }
 
 function renderCollectorsBlock() {
+  const kept = selectedCollectorIds();
   const instances = collectorInstanceList();
   const { onBoard, importedNoRows, found, needsParser, ignored } = collectorGroups(instances);
   const importable = found.length + needsParser.length;
   const importBtn = importable ? el("button", {
     type: "button",
-    class: "btn primary",
+    class: "btn",
     disabled: "",
     dataset: { fkey: "collectors-import" },
     onclick: importSelectedCollectors,
   }, "Import selected") : null;
   if (importBtn) importBtn.disabled = true;
-  return el("section", { id: "settings-collectors", class: "settings-collectors" },
-    el("h3", { text: "Collectors" }),
-    el("p", { class: "settings-help", text: collectorPreviewText(instances) }),
+  const block = el("section", { id: "settings-collectors", class: "settings-collectors" },
+    el("h3", { text: "Homes on this machine" }),
     collectorGroup("On the board", onBoard, "on-board"),
     collectorGroup("Imported, no rows yet", importedNoRows, "imported-no-rows"),
     collectorGroup("Found, not imported", found, "found"),
     collectorGroup("Needs a parser", needsParser, "needs-parser"),
-    collectorGroup("Ignored", ignored, "ignored"),
-    importable ? el("div", { class: "settings-collectors-actions" },
-      importBtn,
-      el("span", { class: "settings-help", text: "Select a home above." })) : null,
-    state.collectorImportNote
-      ? el("p", { class: "settings-preview", id: "collectors-import-note", role: "status", text: state.collectorImportNote })
-      : null);
+    importable ? el("div", { class: "home-acts" }, importBtn) : null,
+    collectorsImportNoteNode(),
+    collectorGroup("Ignored", ignored, "ignored"));
+  restoreCollectorChecks(block, kept);
+  const host = $("settings-homes");
+  if (host) {
+    host.textContent = "";
+    host.append(block);
+  }
+  syncImportSelectedState();
+  return block;
 }
 
 export {

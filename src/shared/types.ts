@@ -152,7 +152,10 @@ export interface AgentLineage {
 
 export type LineageAgreement = "corroborated" | "contradicted" | "unobserved";
 export type AgentSpecialty = "frontend" | "backend";
-export type TargetResolution = "exact" | "unique-cwd" | "ambiguous" | "missing";
+export type ControlSurfaceKind = "cmux" | "grok-bot";
+export type TargetResolution = "exact" | "unique-cwd" | "ambiguous" | "missing" | "gateway" | "shared-host";
+/* Why a Grok Bot row cannot Send. Snapshot may carry this enum — never the token. */
+export type GrokBotGatewayMiss = "no-token" | "unreachable-box" | "probe-rejected";
 /* `unarchive` is net-new. The board has told operators "Un-archive it from
    History if you filed it early" since the archive shipped, and there was no
    store method, no endpoint and no button behind that sentence — `#agentIds`
@@ -223,6 +226,22 @@ export interface CostUsage {
 }
 
 export interface CmuxTarget {
+  /* Absent means cmux. Do not put a Bot chat on a fake surfaceId — that would
+     type into a tty. Grok Bot / Grok Bot 2 are `kind: "grok-bot"` plus the
+     roster agentId and the instance that owns the gateway token. */
+  kind?: ControlSurfaceKind;
+  /** Roster UUID for a Grok Bot chat — not the Formic row id. */
+  agentId?: string;
+  /** Collector instance, e.g. grok-bot:grok-bot vs grok-bot:grok-bot-2. */
+  instanceId?: string;
+  instanceLabel?: string;
+  /** Mac replica cache for this Bot instance. Not the token home. */
+  originCwd?: string;
+  /* Token is never published. True when attach is up, an in-memory token is
+     present, the roster has agentId, and the last listAgents probe succeeded. */
+  gatewayReady?: boolean;
+  /** Why Send is off. Enum only — never a secret. */
+  gatewayMiss?: GrokBotGatewayMiss;
   workspaceId?: string;
   workspaceTitle?: string;
   surfaceId?: string;
@@ -241,13 +260,14 @@ export interface CmuxTarget {
                     once; nothing in this scan confirms it still is.
 
      Both produce `resolution: "exact"`, so the write gate could not tell "cmux
-     says the session is there" from "we wrote that down some time ago". */
+     says the session is there" from "we wrote that down some time ago".
+     Grok Bot never uses these: its write gate is `kind` + `gatewayReady`. */
   attestation?: "hook-store" | "live" | "remembered";
   resolution: TargetResolution;
   reason?: string;
 }
 
-export type IdentityTraceTier = "hook-store" | "recorded" | "session" | "cwd";
+export type IdentityTraceTier = "hook-store" | "recorded" | "session" | "cwd" | "gateway";
 
 export interface IdentityTraceStep {
   tier: IdentityTraceTier;
@@ -317,6 +337,7 @@ export type SurfaceIdentityOutcome =
   | "command-hint-match"
   | "open-file-conflict"
   | "command-hint-conflict"
+  | "shared-host"
   | "no-evidence"
   | "stale-surface"
   | "no-tty"
@@ -379,6 +400,8 @@ export interface AgentSnapshot {
   cwd?: string;
   /** Working directory recorded by the provider hook at process launch. */
   launchCwd?: string;
+  /** First working directory / collector root. Grok Bot uses this to find gateway.json. */
+  originCwd?: string;
   model?: string;
   effort?: string;
   task?: string;
@@ -846,6 +869,9 @@ export interface ControlRequest {
   action: ControlAction;
   agentId: string;
   instruction?: string;
+  /* Instruct only. Retries of the same Send reuse this; a new nonce is a
+     second user turn. The Grok Bot gateway treats it as the idempotency key. */
+  clientNonce?: string;
 }
 
 export interface ControlResponse {

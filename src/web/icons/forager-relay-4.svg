@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" role="img" aria-labelledby="title desc">
+  <title id="title">Forager relay working indicator</title>
+  <desc id="desc">An indigo work unit travels with purpose across an angular graphite path between clay nodes.</desc>
+  <!-- One of five identical copies, forager-relay-0..4.svg. Browsers give every
+       <img> of the SAME url one shared animation clock, so a board of working
+       rows would step in unison; each file starts a fifth of the 2s cycle
+       earlier via a negative animation-delay. Nothing else differs between
+       them. Pick one per row with relayPhase(id) in row-time-band.js. -->
+  <style>
+    #relay-head {
+      animation: relay 2s cubic-bezier(.42,0,.2,1) infinite;
+      animation-delay: -1.6s;
+      transform-origin: center;
+    }
+    #relay-receipt {
+      animation: receipt 2s steps(1,end) infinite;
+      animation-delay: -1.6s;
+      transform-origin: 17px 5px;
+    }
+    @keyframes relay {
+      0%,8% { transform:translate(3px,14px); }
+      25% { transform:translate(7px,9px); }
+      43% { transform:translate(11px,11px); }
+      62% { transform:translate(14px,7px); }
+      78%,100% { transform:translate(17px,5px); }
+    }
+    @keyframes receipt {
+      0%,77% { transform:scale(1); fill:#c1632b; }
+      78%,88% { transform:scale(1.7); fill:#5b4fd1; }
+      89%,100% { transform:scale(1); fill:#c1632b; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #relay-head,#relay-receipt { animation:none; }
+      #relay-head { transform:translate(11px,11px); }
+    }
+  </style>
+  <path d="M3 14 7 9 11 11 14 7 17 5" fill="none" stroke="#1f1f1f" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round" opacity=".38"/>
+  <path d="M3 14 7 9 11 11 14 7 17 5" fill="none" stroke="#c1632b" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" opacity=".27" stroke-dasharray="2 4"/>
+  <circle cx="3" cy="14" r="2.1" fill="#c1632b" opacity=".86"/>
+  <circle id="relay-receipt" cx="17" cy="5" r="2.1" fill="#c1632b" opacity=".86"/>
+  <g id="relay-head" transform="translate(3 14)">
+    <rect x="-1.7" y="-1.7" width="3.4" height="3.4" rx="1" fill="#5b4fd1" opacity=".9"/>
+  </g>
+</svg>

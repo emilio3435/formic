@@ -16,6 +16,7 @@ import type {
   OperatorIssue,
   Provider,
 } from "../shared/types";
+import { SHARED_HOST_REASON, TWO_OWNER_REASON } from "../shared/identity-copy";
 import { PROVIDERS } from "../shared/types";
 import { PROVIDER_DISPLAY_NAMES } from "./naming";
 import type { CmuxSurface } from "./types";
@@ -162,17 +163,37 @@ export function buildOperatorIssues(
      surface conflicts it had no connection to. Blame only the sessions the
      conflicting surfaces actually name. */
   if (split.liveErrors.length > 0) {
-    const surfaceCount = split.liveErrors.length;
     issues.push({
       id: "system:cmux-identity-conflicts",
       kind: "system",
       severity: "error",
-      title: "Two live sessions share one cmux pane",
-      summary: `${surfaceCount} ${surfaceCount === 1 ? "pane has" : "panes have"} more than one running session writing the same transcript, so the hub cannot tell them apart. `
-        + `Focus, Send and Interrupt stay unavailable for ${split.affectedLiveAgentIds.length} `
-        + `${split.affectedLiveAgentIds.length === 1 ? "session" : "sessions"} until one is closed.`,
+      title: "Two sessions share one terminal",
+      summary: TWO_OWNER_REASON,
       affectedAgentIds: split.affectedLiveAgentIds,
       technicalDetails: split.liveErrors,
+    });
+  }
+
+  const sharedHostSurfaces = surfaces.filter(
+    (surface) => surface.runtimeSurfaceReady !== false
+      && surface.identityTrace?.outcome === "shared-host",
+  );
+  if (sharedHostSurfaces.length > 0) {
+    const grokSessionIds = new Set(
+      sharedHostSurfaces.flatMap((surface) => surface.identityTrace?.openFileMatches
+        .filter(({ provider }) => provider === "grok")
+        .map(({ sessionId }) => sessionId.toLowerCase()) ?? []),
+    );
+    issues.push({
+      id: "system:grok-shared-host",
+      kind: "system",
+      severity: "warning",
+      title: "Several Grok chats share one terminal",
+      summary: SHARED_HOST_REASON,
+      affectedAgentIds: agents
+        .filter((agent) => agent.provider === "grok"
+          && grokSessionIds.has(agent.sourceSessionId.toLowerCase()))
+        .map((agent) => agent.id),
     });
   }
 
