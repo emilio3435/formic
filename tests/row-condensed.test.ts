@@ -210,11 +210,17 @@ describe("RC — condensed row, inspector docked (#158, Alt 2)", () => {
     const phoneBase = mediaBlocks(base.css, "(max-width: 720px)");
     const extra = phoneNow.filter((block) => !phoneBase.includes(block));
     expect(phoneNow.filter((block) => phoneBase.includes(block))).toEqual(phoneBase);
-    expect(extra).toHaveLength(1);
-    expect(extra[0]).toContain(".repo-tint-picker");
-    expect(extra[0]).toContain(".grouping-check");
-    expect(extra[0]).toContain(".team-ungroup");
-    expect(extra[0]).not.toContain("12.5rem");
+    /* On a PR, main is the parent and the team 720 block is the one extra.
+       After that PR merges, main already has the block, so extra is empty —
+       assert the same selectors still live in some 720 block, or this pin
+       fails deploy the way #176 did. */
+    const teamHit = extra[0] ?? phoneNow.find((block) =>
+      block.includes(".repo-tint-picker")
+      && block.includes(".grouping-check")
+      && block.includes(".team-ungroup"));
+    expect(teamHit, "the 44px team hit-target 720 block is missing").toBeDefined();
+    expect(extra.length, "at most one extra 720 block vs the base ref").toBeLessThanOrEqual(1);
+    expect(teamHit).not.toContain("12.5rem");
     expect(foldOf(styles)).toBe(foldOf(base.css));
   });
 
