@@ -4,9 +4,42 @@ A harness is not covered because a row appears. Covered means the same fields Cl
 
 ## For future agents
 
-Update this file in the **same commit** as the collector or `config/models.json` change. Not a follow-up PR. Not a later cleanup. If the code and this table disagree, the table is wrong.
+Every instruction set for Formic work includes all three, in the **same commit**:
 
-Rewrite only the rows you actually changed. Do not claim coverage you did not ship. Keep the "watch is not coverage" rule.
+1. The collector / catalog change.
+2. This file, rewritten for the rows you actually changed. Not a follow-up PR. If the code and this table disagree, the table is wrong.
+3. **Real logos.** Research and pull the official mark for every new or newly-wired harness and model provider. Cite the source URL in the PR. Put the file in `src/web/icons/` and wire `HARNESS_MARK` / `AGENT_MARK` / `PROVIDER_MARK` in `src/web/app.js`.
+
+Do not generate a mark. Do not draw a stand-in. Do not reuse `formic-mark.svg` as someone else's logo. Do not ship a label with no `src`. If the vendor has no official public mark you can legally use, leave the icon unset, say so in this file, and do not invent one.
+
+Keep the "watch is not coverage" rule. Do not claim coverage you did not ship.
+
+## Logos
+
+Two badges per row: **harness** (where it ran) and **agent** (what thought). Maps live in `src/web/app.js`.
+
+| Key | Role | File | Honest? |
+|---|---|---|---|
+| claude | harness | `claude-code.svg` | yes |
+| claude | agent | `claude.svg` | yes |
+| codex | harness | `codex.webp` (official raster) | yes |
+| openai / sol / luna | agent | `openai.svg` | yes |
+| cursor | both | `cursor.svg` | yes |
+| factory | harness | `factory.svg` | yes |
+| prime | harness | `prime-orch.svg` | yes |
+| omp | harness | `omp.svg` | yes |
+| grok | harness | `xai.svg` | yes |
+| grok | agent | `grok.svg` | yes |
+| spark | agent | `meta.svg` | yes (Meta, not a Muse wordmark) |
+| muse | harness | **no `src`** | missing official Muse Code mark |
+| antigravity | harness | **no `src`** | missing official Antigravity / Gemini mark |
+| copilot | harness | **no `src`** | missing official Copilot mark |
+| hermes | harness | `formic-mark.svg` | **fake. Replace.** |
+| gemini / google | agent | **none** | missing |
+
+Also on disk, unused as a harness mark: `anthropic.svg`, `spark.svg`.
+
+In-flight CLI work (Muse window / Copilot window / Antigravity + Gemini catalog) must pull official Muse, Copilot, and Antigravity/Gemini marks in that same commit and wire them. Hermes stays on the Formic mark until its own end-evidence pass replaces it with Nous Research's official mark.
 
 ## Bar
 
@@ -22,10 +55,11 @@ From `makeAgent` / `CollectedAgent` on `main`:
 - end evidence (session-exit or turn-complete) when the harness actually ends
 - resume identity
 - Send / Focus / Interrupt: cmux-exact, same as the other CLIs, unless a dedicated surface exists
+- official harness mark + official model-provider mark (or an honest unset)
 
 Cost is fleet BurnBar, not per-row USD. `CollectedAgent.cost` is almost never set. Missing source reads `unavailable`, never `$0`.
 
-Audited on public `emilio3435/formic` `6307167` (Copilot CLI).
+Audited on public `emilio3435/formic` `6307167` (Copilot CLI) plus icon maps in `src/web/app.js`.
 
 ## Harness fields
 
@@ -39,12 +73,12 @@ Audited on public `emilio3435/formic` `6307167` (Copilot CLI).
 | omp | yes | yes | yes | yes | yes | observed; corrupt → estimated | needle table | session-exit | cmux-exact | Legacy. |
 | grok (Build CLI) | yes | yes | yes | yes | yes | occupancy `total`, not billed in/out | signals only | turn-complete | cmux-exact | Catalog 500k unused if signals omit window. |
 | grok-bot | extra root only | yes | yes | **never** | instance home | **never** | **never** | **never** | gateway send; focus opens app; interrupt off | Not a `Provider`. No source-health slot. |
-| hermes | yes | yes | yes | yes | yes | **never** | **never** | **none** | cmux-exact | Session tokens never. Cron is spend-only. |
-| muse | yes | yes | yes | yes | yes | observed on `model_completed` | **never** | session-exit / turn-complete | cmux-exact | Spark 1.2 is in the catalog; collector does not attach it. No honest `contextPct`. |
-| antigravity | yes | yes | yes | sqlite if real | yes | **never** | **never** | **none** | cmux-exact | Tokens hardcoded unknown. No Gemini catalog. |
-| copilot | yes | yes | yes | model_change / shutdown | yes | **only on shutdown** | **never** | session-exit | cmux-exact | Live sessions have unknown tokens. No window. |
+| hermes | yes | yes | yes | yes | yes | **never** | **never** | **none** | cmux-exact | Session tokens never. Cron is spend-only. Icon is the Formic mark. |
+| muse | yes | yes | yes | yes | yes | observed on `model_completed` | **never** | session-exit / turn-complete | cmux-exact | Spark 1.2 is in the catalog; collector does not attach it. No honest `contextPct`. No Muse mark. |
+| antigravity | yes | yes | yes | sqlite if real | yes | **never** | **never** | **none** | cmux-exact | Tokens hardcoded unknown. No Gemini catalog. No Antigravity mark. |
+| copilot | yes | yes | yes | model_change / shutdown | yes | **only on shutdown** | **never** | session-exit | cmux-exact | Live sessions have unknown tokens. No window. No Copilot mark. |
 
-Not modelled (discover / `needs-parser` or absent): Cline, OpenCode, Amp, Kiro, Devin Desktop / Windsurf, Goose, OpenHands, Aider. Cloud-only (Jules, Bolt, v0, Codex/Claude web with no local dir): out.
+Not modelled (discover / `needs-parser` or absent): Cline, OpenCode, Amp, Kiro, Devin Desktop / Windsurf, Goose, OpenHands, Aider. Cloud-only (Jules, Bolt, v0, Codex/Claude web with no local dir): out. Each of those, when added, ships with an official mark in the same commit.
 
 ## US model catalog
 
@@ -66,12 +100,12 @@ Not modelled (discover / `needs-parser` or absent): Cline, OpenCode, Amp, Kiro, 
 
 ## Work order (field parity, then new harnesses)
 
-In flight on a local CLI (not a cloud agent): Muse window, Copilot window, Antigravity usage-if-real + Gemini catalog, Opus 5 / Terra / Prime grok catalog honesty. That agent must update this file in the same commit.
+In flight on a local CLI (not a cloud agent): Muse window, Copilot window, Antigravity usage-if-real + Gemini catalog, Opus 5 / Terra / Prime grok catalog honesty, **plus official Muse / Copilot / Antigravity-or-Gemini marks**. That agent must update this file in the same commit.
 
 Once that lands:
 
-1. Hermes / Factory / Prime: end-evidence only when the file has a real close. Do not invent one. Same-commit PARITY.md.
-2. New watchers at this bar, not watch-only: Cline, then OpenCode, then Amp. Same-commit PARITY.md each time.
+1. Hermes / Factory / Prime: end-evidence only when the file has a real close. Replace the Hermes Formic-mark stand-in with Nous Research's official mark. Same-commit PARITY.md.
+2. New watchers at this bar, not watch-only: Cline, then OpenCode, then Amp. Official mark each time. Same-commit PARITY.md.
 3. Then Kiro, then Devin Desktop / Windsurf. Same rule.
 4. After public formic is the real board: point production :4701 at formic, or keep the-ant-hill as history only. Do not develop in both.
 
