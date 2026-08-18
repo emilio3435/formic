@@ -472,6 +472,7 @@ describe("Codex app dock copy", () => {
   let presentation: { controlUnavailableText: (state: string, agent?: object) => string };
 
   beforeAll(async () => {
+    // @ts-expect-error The dependency-free browser client has no declaration file.
     presentation = await import("../src/web/presentation.js");
   });
 
