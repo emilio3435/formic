@@ -36,7 +36,7 @@ export function completedCloseStillHolds(agent: CompletedCloseEvidence): boolean
 export function completedCloseAtFor(
   surfaceId: string | undefined,
   startedAt: string | undefined,
-  notes: readonly Array<{
+  notes: ReadonlyArray<{
     surfaceId?: string;
     createdAt?: string;
     title?: string;

@@ -143,7 +143,7 @@ describe("completed cmux close is declaredDone even with a live prompt pid", () 
     expect(serverIsStalled(agent, NOW, THRESHOLD)).toBe(false);
     expect(snap.totals.live).toBe(0);
     expect(snap.totals.needsYou).toBe(0);
-    expect(snap.programs[0]?.rollup.needsYou).toBe(0);
+    expect(snap.programs[0]?.rollup?.needsYou).toBe(0);
     expect(rollupFor([agent], NOW).needsYou).toBe(0);
   });
 
@@ -241,7 +241,7 @@ describe("client declaredDone / operatorState / rollup match the server", () => 
   beforeAll(async () => {
     // @ts-expect-error browser client has no declaration
     await import("../src/web/app.js");
-    M = (globalThis as { TheAntHill: typeof M }).TheAntHill;
+    M = (globalThis as unknown as { TheAntHill: typeof M }).TheAntHill;
   });
 
   test("the live 11h Codex fixture leaves the waiting board as Done", () => {
@@ -268,7 +268,8 @@ describe("client declaredDone / operatorState / rollup match the server", () => 
     }));
 
     expect(M.declaredDone(agent)).toBe(false);
-    expect(["waiting", "working"]).toContain(M.operatorState(agent, NOW, THRESHOLD));
+    const revived = M.operatorState(agent, NOW, THRESHOLD);
+    expect(revived === "waiting" || revived === "working").toBe(true);
     expect(M.isLive(agent, NOW, THRESHOLD)).toBe(true);
     expect(M.viewMatches("board", agent)).toBe(true);
     expect(M.declaredDone(agent)).toBe(serverIsDeclaredDone(agent));

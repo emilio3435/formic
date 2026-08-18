@@ -178,7 +178,7 @@ describe("fresh working does not let offer-style question-pending win", () => {
     expect(agent?.processState).toBe("unknown");
     expect(agent?.attention).not.toBe(true);
     expect(snap.totals.needsYou).toBe(0);
-    expect(snap.programs[0]?.rollup.needsYou).toBe(0);
+    expect(snap.programs[0]?.rollup?.needsYou).toBe(0);
     expect(agent && serverIsAlerting(agent)).toBe(false);
   });
 });
@@ -202,7 +202,7 @@ describe("client mirrors the working question-pending suppress", () => {
   beforeAll(async () => {
     // @ts-expect-error browser client has no declaration
     await import("../src/web/app.js");
-    M = (globalThis as { TheAntHill: typeof M }).TheAntHill;
+    M = (globalThis as unknown as { TheAntHill: typeof M }).TheAntHill;
     // @ts-expect-error browser client has no declaration
     clientTaskState = await import("../src/web/task-state.js");
   });
