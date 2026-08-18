@@ -180,6 +180,56 @@ describe("readableClosing — the end of a message, not its beginning", () => {
     expect(extractClosingByRole("claude", candidates, "user"))
       .toBe("Now do the migration and tell me when it lands.");
   });
+
+  /* #17: Codex appends a memory-citation / rollout trailer after spoken prose.
+     The end-anchored 240-char window lands inside that trailer unless the
+     collector strips it first. The spoken close must survive; the guts must
+     not. When that window starts inside the trailer, keep the spoken front
+     of THIS turn — do not walk back to N-1. */
+  const SPOKEN_FRONT =
+    "Done. Lane grok-bot meets its Definition of Done. - Local commit: 83abc44 on feat/grok-bot-parser.";
+  const TRAILER =
+    " <oai-mem-citation> <citation_entries> MEMORY.md:201-204|note=[report first and strict lane fence preference] </citation_entries> <rollout_ids> 019fabc123 </rollout_ids> </oai-mem-citation>";
+  const PADDING =
+    " The parser, tests, and send closer are committed locally. Nothing here is pushed or staged by this lane. The remaining work is operator review, not another edit from this session. Padding sentence one keeps the spoken front away from the citation trailer. Padding sentence two keeps the spoken front away from the citation trailer. Padding sentence three keeps the spoken front away from the citation trailer. Padding sentence four keeps the spoken front away from the citation trailer. Work is not pushed or staged by this lane.";
+  const CITATION_TURN = SPOKEN_FRONT + PADDING + TRAILER;
+
+  test("strips Codex MEMORY.md / oai-mem-citation / rollout trailers and keeps the spoken close", () => {
+    const closing = readableClosing("codex", CITATION_TURN);
+    expect(closing).toContain("Definition of Done");
+    expect(closing).not.toContain("oai-mem-citation");
+    expect(closing).not.toContain("MEMORY.md");
+    expect(closing).not.toContain("rollout_ids");
+    expect(closing).not.toContain("citation_entries");
+    expect(closing).not.toContain("|note=[");
+
+    const body = readableChatBody("codex", CITATION_TURN);
+    expect(body).toContain("Definition of Done");
+    expect(body).not.toContain("oai-mem-citation");
+    expect(body).not.toContain("MEMORY.md:");
+    expect(body).not.toContain("rollout_ids");
+  });
+
+  test("a close window that lands in the citation trailer stays on this turn's spoken front", () => {
+    const candidates: HumanMessageCandidate[] = [
+      { role: "assistant", content: "November Generate-button leftover is still in the drawer." },
+      { role: "assistant", content: CITATION_TURN },
+    ];
+    const closing = extractClosingByRole("codex", candidates, "assistant");
+    const message = extractLastMessageByRole("codex", candidates, "assistant");
+    expect(closing).toContain("Definition of Done");
+    expect(closing).not.toContain("November Generate-button");
+    expect(closing).not.toContain("oai-mem-citation");
+    expect(message).toContain("Definition of Done");
+    expect(message).not.toContain("oai-mem-citation");
+  });
+
+  test("a spoken mention of MEMORY.md without a citation entry is still the close", () => {
+    const spoken = "I recorded the fence in MEMORY.md and stopped there.";
+    expect(readableClosing("codex", spoken)).toBe(spoken);
+    expect(extractLastMessageByRole("codex", [{ role: "assistant", content: spoken }], "assistant"))
+      .toBe(spoken);
+  });
 });
 
 /* Chat must keep the CLI's line breaks. The row one-liner still joins; this

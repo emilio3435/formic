@@ -9869,10 +9869,21 @@ function humanReadableAgentText(value) {
   return text;
 }
 
+function latestTurnContainsClosing(agent, closing) {
+  const body = previewChatBody(agent.lastAgentChatBody);
+  if (!body) return true;
+  const haystack = body.replace(/\s+/g, " ").toLowerCase();
+  const needle = String(closing || "").replace(/\s+/g, " ").toLowerCase();
+  return Boolean(needle) && haystack.includes(needle);
+}
+
 function rowClosingText(agent) {
   const closing = humanReadableAgentText(agent.lastAgentClosing);
-  if (closing) return closing;
   const spoken = humanReadableAgentText(agent.lastAgentMessage);
+  /* lastAgentChatBody is the latest assistant turn. A leftover closing that
+     does not appear in it is turn N-1 and must not beat message N. */
+  if (closing && spoken && !latestTurnContainsClosing(agent, closing)) return spoken;
+  if (closing) return closing;
   if (spoken) return spoken;
   return "";
 }

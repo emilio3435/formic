@@ -1854,6 +1854,43 @@ describe("row last-close (#73) and observed-only mark (#78)", () => {
     expect(textOf(summary)).toContain("Should I land");
     expect(kickoff).toHaveLength(0);
   });
+
+  test("a stale lastAgentClosing from turn N-1 never beats a newer assistant message N", () => {
+    const latest = "Live. f57ad09 deployed — cockpit, worker, and the Generate veil are on master.";
+    const stale = "November Generate-button leftover is still in the drawer.";
+    const needsYou = agent({
+      status: "attention",
+      activity: "idle",
+      outcome: "needs-you",
+      task: "Port cooper-scheduler",
+      lastAgentClosing: stale,
+      lastAgentMessage: latest,
+      lastAgentChatBody: latest,
+    });
+    const parts = M.rowSummaryParts(needsYou);
+    expect(parts.primary).toContain("f57ad09 deployed");
+    expect(parts.primary).not.toContain("November Generate-button");
+    expect(M.rowClosingText(needsYou)).toContain("f57ad09 deployed");
+    expect(M.previewChatTurns(needsYou)[0].text).toContain("f57ad09 deployed");
+    expect(M.previewChatTurns(needsYou)[0].text).not.toContain("November Generate-button");
+    expect(M.deriveOutcome(needsYou)).toBe("needs-you");
+  });
+
+  test("a same-turn ellipsis tail still beats the clipped front window", () => {
+    const body = [
+      "I started at the top of the file and walked the limiter.",
+      "",
+      "Should I land this now?",
+    ].join("\n");
+    const parts = M.rowSummaryParts(agent({
+      task: "Port the rate limiter",
+      lastAgentClosing: "…Should I land this now?",
+      lastAgentMessage: "I started at the top of the file and walked the limiter…",
+      lastAgentChatBody: body,
+    }));
+    expect(parts.primary).toContain("Should I land this now");
+    expect(parts.primary).not.toContain("I started at the top");
+  });
 });
 
 describe("provider-aware row summaries", () => {
