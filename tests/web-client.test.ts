@@ -13937,7 +13937,7 @@ describe("FE-C: an agent that starts waiting reaches the operator outside the ta
      partition; the rows below are the ones that used to fire and no longer do. */
   test("(4) delivery fires for a person-blocker, not for everything unhealthy", () => {
     const asks = (id: string) => agent({
-      id, displayName: id,
+      id, displayName: id, status: "waiting",
       attentionSignal: { kind: "question-pending", evidence: "Push, or hold for the reconciliation?" },
     });
     const snap = snapOf(
@@ -16667,6 +16667,7 @@ describe("T7: lineage the kernel contradicts, and a sender the server could not 
 describe("S1: the notification center is attention, and it never aggregates", () => {
   const blocked = (id: string, over: Record<string, unknown> = {}) => agent({
     id, displayName: id, programId: "p",
+    status: "waiting",
     attentionSignal: { kind: "question-pending", evidence: "Push the branch and open the PR, or hold for the reconciliation?" },
     ...over,
   });
@@ -16767,9 +16768,14 @@ describe("S1: the notification center is attention, and it never aggregates", ()
   test("the blocking/noticed partition is the server's word, and the client's only until it ships", () => {
     // S0-T2's exact rule over the kinds that ARE on the wire today.
     for (const kind of ["permission-requested", "input-requested", "fork-unresolved",
-      "handoff-stated", "question-pending", "assumption-stated"]) {
+      "handoff-stated", "assumption-stated"]) {
       expect(M.attentionClassOf(agent({ attentionSignal: { kind } })), kind).toBe("blocking");
     }
+    expect(M.attentionClassOf(agent({
+      status: "waiting",
+      attentionSignal: { kind: "question-pending" },
+    }))).toBe("blocking");
+    expect(M.attentionClassOf(agent({ attentionSignal: { kind: "question-pending" } }))).toBeNull();
     expect(M.attentionClassOf(agent({ attentionSignal: { kind: "stalled-active" } }))).toBe("noticed");
     // Absence, not a third value.
     for (const kind of ["nothing-wanted", "out-of-scope", "not-readable"]) {
@@ -16777,8 +16783,11 @@ describe("S1: the notification center is attention, and it never aggregates", ()
     }
     expect(M.attentionClassOf(agent({}))).toBeNull();
     // When be-dwell ships the field, the server's word wins over the derivation.
-    expect(M.attentionClassOf(agent({ attentionClass: "noticed", attentionSignal: { kind: "question-pending" } })))
-      .toBe("noticed");
+    expect(M.attentionClassOf(agent({
+      status: "waiting",
+      attentionClass: "noticed",
+      attentionSignal: { kind: "question-pending" },
+    }))).toBe("noticed");
     expect(M.attentionClassOf(agent({ attentionClass: "blocking", attentionSignal: { kind: "stalled-active" } })))
       .toBe("blocking");
   });
@@ -16865,7 +16874,7 @@ describe("S1: the notification center is attention, and it never aggregates", ()
 describe("S1-T2: hasCurrentImpact is the only gate between live and history", () => {
   const NOW = Date.parse("2026-08-05T21:00:00.000Z");
   const asking = (id: string, over: Record<string, unknown> = {}) => agent({
-    id, displayName: id, programId: "p",
+    id, displayName: id, programId: "p", status: "waiting",
     attentionSignal: { kind: "question-pending", evidence: "Which one?" }, ...over,
   });
   const snapOf = (agents: unknown[], over: Record<string, unknown> = {}) =>

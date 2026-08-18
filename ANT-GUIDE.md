@@ -152,7 +152,7 @@ two of those declarations show up on the row as a quiet dashed chip:
 | Chip | What it means | Where the row goes |
 |---|---|---|
 | `Parked` | Whoever runs this lane stood it down. It is not working on anything and it is not waiting on you. | Stays in the live rows — it is idle, not over |
-| `Done` | The lane reported its assignment complete. | Leaves the live rows for the **Finished shelf** |
+| `Done` | The lane reported its assignment complete — a manifest `done`, or a Completed-in toast plus idle hook plus spoken `Done.` | Leaves the live rows for the **Finished shelf** |
 
 **Neither one says the session ended.** Its process is still up, its controls
 still work, and you can still send it something — which is the point: a lane

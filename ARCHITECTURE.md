@@ -292,7 +292,11 @@ takes finished WORK out of the live views into the Finished shelf
 (`shelfFilter`) without touching `lifecycle.ts` — a done lane still at its
 prompt is still `waiting`, still controllable, and still able to re-alert. Both
 predicates share the mirror's one escape: a `needsInput` hook strictly newer
-than the declaration.
+than the declaration. A completed cmux "Completed in …" toast plus an idle hook
+plus a spoken `Done.` close is the same `declaredDone` even while the pid sits
+at the prompt; a later user turn or hook `running` revives it. `question-pending`
+does not win while `lifecycle` is `working` and the source is fresh — needs-you
+is a stopped turn, not an offer mid-work.
 
 The same pair refuses a cmux-authored title as a name. `surfaceTitle` is
 routinely a sentence cmux distilled from a session's opening prompt and

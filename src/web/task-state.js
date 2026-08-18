@@ -16,11 +16,24 @@ export function hookInputWantsHuman(evidence) {
     && hookLifecycleAt > taskStateAt;
 }
 
+function attentionKind(signal) {
+  if (!signal || typeof signal !== "object") return undefined;
+  return typeof signal.kind === "string" ? signal.kind : undefined;
+}
+
+export function offerQuestionSuppressed(evidence) {
+  if (!evidence) return false;
+  if (attentionKind(evidence.attentionSignal) !== "question-pending") return false;
+  if (evidence.lifecycle !== "working") return false;
+  return evidence.sourceFreshness !== "last-known";
+}
+
 export function taskStateWantsHuman(evidence) {
   if (!evidence) return false;
   const currentHookInput = hookInputWantsHuman(evidence);
   if (evidence.taskState === "parked" || evidence.taskState === "done") {
     return currentHookInput;
   }
+  if (offerQuestionSuppressed(evidence)) return currentHookInput;
   return Boolean(evidence.attentionSignal) || currentHookInput;
 }

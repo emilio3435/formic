@@ -14,6 +14,7 @@ import {
   extractChatBodyByRole,
   extractClosingByRole,
   extractLastHumanFacingAt,
+  extractLastFacingAtByRole,
   extractLastMessageByRole,
   readableHumanMessage,
   type HumanMessageCandidate,
@@ -482,6 +483,7 @@ export function makeAgent(input: {
     ),
     lastHumanFacingAt: input.lastHumanFacingAt
       ?? extractLastHumanFacingAt(input.provider, input.humanMessages ?? []),
+    lastUserFacingAt: extractLastFacingAtByRole(input.provider, input.humanMessages ?? [], "user"),
     lastThreadAt: thread.lastThreadAt,
     workingSince: thread.workingSince,
     lastUserMessage: extractLastMessageByRole(input.provider, input.humanMessages ?? [], "user"),

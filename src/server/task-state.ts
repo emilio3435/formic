@@ -1,10 +1,12 @@
-import type { HookLifecycle, TaskState } from "../shared/types";
+import type { HookLifecycle, LifecycleState, TaskState } from "../shared/types";
 
 export interface TaskAttentionEvidence {
   taskState?: TaskState;
   taskStateAt?: string;
   hookLifecycle?: HookLifecycle;
   hookLifecycleAt?: string;
+  lifecycle?: LifecycleState;
+  sourceFreshness?: "last-known";
   attentionSignal?: unknown;
 }
 
@@ -27,6 +29,21 @@ export function hookInputWantsHuman(evidence: TaskAttentionEvidence): boolean {
     && hookLifecycleAt > taskStateAt;
 }
 
+function attentionKind(signal: unknown): string | undefined {
+  if (!signal || typeof signal !== "object") return undefined;
+  const kind = (signal as { kind?: unknown }).kind;
+  return typeof kind === "string" ? kind : undefined;
+}
+
+/* An offer-question mid-turn is not a stopped ask. needsInput and every other
+   kind still count. last-known rows keep today's behavior: we cannot see that
+   the source is still working. */
+export function offerQuestionSuppressed(evidence: TaskAttentionEvidence): boolean {
+  if (attentionKind(evidence.attentionSignal) !== "question-pending") return false;
+  if (evidence.lifecycle !== "working") return false;
+  return evidence.sourceFreshness !== "last-known";
+}
+
 /* The complete attention verdict before the separate terminal-session gate.
    Parked/done suppresses every older request, not only the hook field that
    exposed the defect; a strictly newer needsInput is the one re-alert path. */
@@ -35,5 +52,6 @@ export function taskStateWantsHuman(evidence: TaskAttentionEvidence): boolean {
   if (evidence.taskState === "parked" || evidence.taskState === "done") {
     return currentHookInput;
   }
+  if (offerQuestionSuppressed(evidence)) return currentHookInput;
   return Boolean(evidence.attentionSignal) || currentHookInput;
 }
