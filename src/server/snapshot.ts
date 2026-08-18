@@ -36,6 +36,7 @@ import {
 import { isLive } from "./live";
 import { agentSortRank, programFor, rollupFor, type ProgramHint } from "./snapshot-programs";
 import { agentIsStripAlerting } from "./strip-alerting";
+import { unboundWaitingNotifications } from "./notification-binding";
 /* Re-exported so the program-resolution move stays invisible to callers:
    state.ts imports ProgramHint from "./snapshot". */
 export type { ProgramHint } from "./snapshot-programs";
@@ -718,6 +719,11 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
       left.name.localeCompare(right.name),
     );
   const allAgents = orderedPrograms.flatMap((program) => program.agents);
+  const unboundWaiting = unboundWaitingNotifications(
+    input.cmuxNotifications ?? [],
+    allAgents,
+    input.surfaces,
+  );
   /* The lifecycle census counts only what is still being watched. Every one of
      these gates on scope, because a retained record that reads "waiting" is
      describing what it was doing when the board last saw it, not what it is
@@ -882,7 +888,8 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
     totals: {
       live: liveAgents.length,
       tracked: allAgents.length,
-      attention: observedAgents.filter((agent) => agent.attention === true).length,
+      attention: observedAgents.filter((agent) => agent.attention === true).length
+        + unboundWaiting.length,
       ...(consumption === undefined ? {} : {
         consumption,
         consumptionReporting: consumptionValues.length,
@@ -921,6 +928,7 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
     issues,
     recentlyResolved,
     cmuxNotifications: [...(input.cmuxNotifications ?? [])],
+    ...(unboundWaiting.length ? { unboundWaiting } : {}),
     acks: [...(input.acks ?? [])],
     programs: orderedPrograms,
     spendSources: [...(input.spendSources ?? [])],

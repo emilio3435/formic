@@ -865,6 +865,9 @@ export interface HubSnapshot {
   pulse?: HubPulse;
   /** Full cmux notification bodies come from notification.list, never events. */
   cmuxNotifications?: CmuxNotificationSummary[];
+  /* Unread cmux Waiting toasts that bind to no snapshot session. Attention,
+     not a minted agent row: no session id, no resolution: exact. */
+  unboundWaiting?: UnboundWaitingAttention[];
   /** Board-local operator judgments; never cmux or agent state. */
   acks?: AgentAck[];
   programs: ProgramSnapshot[];
@@ -923,5 +926,18 @@ export interface CmuxNotificationSummary {
   subtitle: string;
   body: string;
   isRead: boolean;
+  createdAt: string;
+}
+
+/* An unmatched unread Waiting toast. Workspace title is copied from a scanned
+   surface when one exists; never invented. Not a session and not a write target. */
+export interface UnboundWaitingAttention {
+  notificationId: string;
+  workspaceId: string;
+  workspaceTitle?: string;
+  surfaceId: string;
+  title: string;
+  subtitle: string;
+  body: string;
   createdAt: string;
 }

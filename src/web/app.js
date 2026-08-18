@@ -3197,8 +3197,21 @@ function notifyPanelPaintSig(model, open) {
    takes the documented degradation and SAYS SO on the control: it opens the
    session's inspector, where the reply box already is. */
 function notifyRowActions(item) {
-  const found = agentsById(state.snap).get(item.source.agentId);
   const acts = el("span", { class: "notify-row-acts" });
+  if (item.route && item.route.kind === "unbound-waiting") {
+    const noteId = item.route.id;
+    const verb = (action, label) => el("button", {
+      type: "button",
+      class: "notify-act",
+      disabled: syncPending.has("notify:" + noteId) ? "" : null,
+      "aria-label": label + ": " + (item.impact || "no session bound"),
+      dataset: { fkey: "sync-notify:" + action + ":" + noteId },
+      onclick: () => { void clearCmuxNotification(noteId, action); },
+    }, label);
+    acts.append(verb("mark_read", "Mark read"), verb("dismiss", "Dismiss"));
+    return acts;
+  }
+  const found = agentsById(state.snap).get(item.source.agentId);
   if (!found) return acts;
   const focusCap = capability(found.agent, "focus");
   if (focusCap) {
@@ -3230,8 +3243,11 @@ function notifyRowActions(item) {
 }
 
 function notifyRow(item) {
-  const trace = [item.source.agentName, (agentsById(state.snap).get(item.source.agentId) || {}).agent?.provider]
-    .filter(Boolean).join(" · ");
+  const unbound = item.route && item.route.kind === "unbound-waiting";
+  const trace = unbound
+    ? "no session bound"
+    : [item.source.agentName, (agentsById(state.snap).get(item.source.agentId) || {}).agent?.provider]
+      .filter(Boolean).join(" · ");
   return el("div", { class: "notify-row is-blocking" },
     el("div", { class: "notify-row-top" },
       /* The title line is the ROUTE. A whole-row button would have to contain
@@ -3240,7 +3256,9 @@ function notifyRow(item) {
       el("button", {
         type: "button", class: "notify-row-open",
         dataset: { fkey: "notify:open:" + item.id },
-        "aria-label": item.impact + " In " + (item.source.programName || "an unnamed program") + ". Opens the session.",
+        "aria-label": unbound
+          ? item.impact
+          : item.impact + " In " + (item.source.programName || "an unnamed program") + ". Opens the session.",
         onclick: () => { closeNotificationsPanel(false); selectEntity(item.route); },
       }, item.impact),
       /* A handoff row carries no age: `since` is permanently null for one, per
@@ -11140,6 +11158,7 @@ function renderInspector() {
 const DRAWER_ARIA_LABELS = {
   agent: "Agent", intervention: "Intervention", advisory: "Advisory",
   investigation: "Investigation", resolved: "Resolved finding", program: "Program",
+  "unbound-waiting": "Unbound waiting notification",
 };
 
 const DRAWER_RENDERERS = {
@@ -11148,6 +11167,7 @@ const DRAWER_RENDERERS = {
   advisory: renderAdvisoryDrawer,
   investigation: renderInvestigationDrawer,
   resolved: renderResolvedDrawer,
+  "unbound-waiting": renderUnboundWaitingDrawer,
   program: renderProgramDrawer,
 };
 
@@ -11173,6 +11193,11 @@ function resolveSelection(sel) {
   if (sel.kind === "program") {
     const program = dashboardPrograms(state.snap).find((p) => p.id === sel.id);
     return program ? { kind: "program", program } : null;
+  }
+  if (sel.kind === "unbound-waiting") {
+    const note = (Array.isArray(state.snap.unboundWaiting) ? state.snap.unboundWaiting : [])
+      .find((item) => item && item.notificationId === sel.id);
+    return note ? { kind: "unbound-waiting", note } : null;
   }
   return null;
 }
@@ -11387,6 +11412,41 @@ function renderAdvisoryDrawer(pane, view) {
     pane.append(el("div", { class: "dw-block dw-block--fix" },
       el("div", { class: "dw-block-label", text: "Triage" }),
       renderTriage(issue)));
+  }
+}
+
+function renderUnboundWaitingDrawer(pane, view) {
+  const note = view.note || {};
+  const title = typeof note.workspaceTitle === "string" && note.workspaceTitle.trim()
+    ? note.workspaceTitle.trim()
+    : (typeof note.title === "string" && note.title.trim() ? note.title.trim() : "Waiting");
+  drawerAccent(pane, "ember");
+  pane.append(drawerVerdictHead({
+    eyebrow: dwEyebrow("ember", "warning", "Waiting"),
+    title,
+    sub: el("p", { class: "inspector-sub", text: "no session bound" }),
+  }));
+  pane.append(el("p", { class: "dw-lead", text: note.body || "cmux reports it is waiting." }));
+  pane.append(el("p", {
+    class: "inspector-note",
+    text: "No session is bound to this notification. Focus and Send stay off — the surface is not an attested write target.",
+  }));
+  if (note.notificationId) {
+    pane.append(el("div", { class: "controls-row" },
+      el("button", {
+        type: "button", class: "btn",
+        disabled: syncPending.has("notify:" + note.notificationId) ? "" : null,
+        "aria-label": "Mark read: " + title + " — no session bound",
+        dataset: { fkey: "sync-notify:mark_read:" + note.notificationId },
+        onclick: () => { void clearCmuxNotification(note.notificationId, "mark_read"); },
+      }, "Mark read"),
+      el("button", {
+        type: "button", class: "btn",
+        disabled: syncPending.has("notify:" + note.notificationId) ? "" : null,
+        "aria-label": "Dismiss: " + title + " — no session bound",
+        dataset: { fkey: "sync-notify:dismiss:" + note.notificationId },
+        onclick: () => { void clearCmuxNotification(note.notificationId, "dismiss"); },
+      }, "Dismiss")));
   }
 }
 
@@ -15385,6 +15445,7 @@ Object.assign(globalThis.TheAntHill, {
   momentumPopulation, toggleMomentumMagnify,
   cmuxBadgeNode, ackedMarkNode, syncAckButton, acknowledgedClause,
   renderCmuxNotifySection, cmuxNotifyRow, notifyPanelPaintSig,
+  renderNotificationCenter,
   clearCmuxNotification, applySyncAck, syncRequest, syncFailureText, syncPending,
   HARNESS_MARK, AGENT_MARK, harnessKeyOf, agentKeyOf,
 });

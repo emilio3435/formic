@@ -300,7 +300,7 @@ describe("A11Y-5: a quiet row's name contains everything the row visibly says", 
   test("the blocking row still names its program too, by its own route", () => {
     /* The row above this one never had the bug — it says "In <program>." — and
        the fix must not quietly restyle it into agreement. */
-    expect(appjs).toMatch(/"aria-label": item\.impact \+ " In " \+ \(item\.source\.programName \|\| "an unnamed program"\)/);
+    expect(appjs).toMatch(/item\.impact \+ " In " \+ \(item\.source\.programName \|\| "an unnamed program"\)/);
   });
 });
 
