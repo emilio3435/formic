@@ -630,3 +630,163 @@ describe("Grok Bot replica transcript lines", () => {
     ]);
   });
 });
+
+describe("Claude Code inspector thoughts and tools", () => {
+  const claude = { provider: "claude" } as AgentSnapshot;
+  const fixture = readFileSync(join(import.meta.dir, "fixtures/claude-thoughts-tools-session.jsonl"), "utf8");
+  const speechOnly = readFileSync(join(import.meta.dir, "fixtures/claude-session.jsonl"), "utf8");
+
+  test("thinking becomes a Thought-prefixed system line and redacted stays honest", () => {
+    const lines = transcriptLines(claude, fixture);
+    expect(lines).toContainEqual({
+      at: "2026-08-18T01:00:02.000Z",
+      role: "system",
+      text: "Thought\nThe inspector already paints Thought rows. I should check whether transcriptCandidate keeps thinking blocks.",
+    });
+    expect(lines).toContainEqual({
+      at: "2026-08-18T01:00:02.000Z",
+      role: "system",
+      text: "Thought\n[redacted]",
+    });
+    expect(JSON.stringify(lines)).not.toContain("ciphertext-must-not-leak");
+    expect(JSON.stringify(lines)).not.toContain("sig_attested");
+  });
+
+  test("tool_use plus tool_result become one role=tool card, never a user bubble", () => {
+    const lines = transcriptLines(claude, fixture);
+    const tools = lines.filter((line) => line.role === "tool");
+    expect(tools).toHaveLength(1);
+    expect(tools[0]).toMatchObject({ role: "tool", at: "2026-08-18T01:00:02.000Z" });
+    expect(tools[0]?.text).toContain("Read");
+    expect(tools[0]?.text).toContain("Call: toolu_01InspectMap");
+    expect(tools[0]?.text).toContain("function transcriptCandidate");
+    expect(lines.some((line) => line.role === "user" && line.text.includes("transcriptCandidate"))).toBe(false);
+    expect(lines.some((line) => line.role === "user" && /tool_use|tool_result/i.test(line.text))).toBe(false);
+  });
+
+  test("spoken user and assistant text remain", () => {
+    const lines = transcriptLines(claude, fixture);
+    expect(lines).toContainEqual({
+      at: "2026-08-18T01:00:00.000Z",
+      role: "user",
+      text: "Inspect the collector mapping.",
+    });
+    expect(lines).toContainEqual({
+      at: "2026-08-18T01:00:02.000Z",
+      role: "assistant",
+      text: "I will read the inspector mapper.",
+    });
+    expect(lines).toContainEqual({
+      at: "2026-08-18T01:00:06.000Z",
+      role: "assistant",
+      text: "The mapper keeps spoken text and drops thinking plus tool_use.",
+    });
+  });
+
+  test("does not mint thoughts or tools that are not in the file", () => {
+    const lines = transcriptLines(claude, speechOnly);
+    expect(lines.map((line) => line.role)).toEqual(["user", "assistant"]);
+    expect(lines.some((line) => line.role === "system" && line.text.startsWith("Thought\n"))).toBe(false);
+    expect(lines.some((line) => line.role === "tool")).toBe(false);
+  });
+
+  test("an unmatched tool_use stays a running tool card and does not invent duration", () => {
+    const raw = JSON.stringify({
+      type: "assistant",
+      timestamp: "2026-08-18T01:20:00.000Z",
+      message: {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "toolu_01Open", name: "Bash", input: { command: "ls" } }],
+      },
+    });
+    const lines = transcriptLines(claude, raw);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]?.role).toBe("tool");
+    expect(lines[0]?.text).toContain("Bash");
+    expect(lines[0]?.text).toContain("Call: toolu_01Open");
+    expect(lines[0]?.text).toContain("Status: running");
+    expect(lines[0]?.text).not.toContain("Duration:");
+  });
+});
+
+describe("Codex inspector thoughts and tools", () => {
+  const codex = { provider: "codex" } as AgentSnapshot;
+  const fixture = readFileSync(join(import.meta.dir, "fixtures/codex-thoughts-tools-session.jsonl"), "utf8");
+  const speechOnly = readFileSync(join(import.meta.dir, "fixtures/codex-session.jsonl"), "utf8");
+  const citation = readFileSync(join(import.meta.dir, "fixtures/codex-citation-trailer-session.jsonl"), "utf8");
+
+  test("attested reasoning summary becomes a Thought-prefixed system line", () => {
+    const lines = transcriptLines(codex, fixture);
+    expect(lines).toContainEqual({
+      at: "2026-08-18T01:10:02.000Z",
+      role: "system",
+      text: "Thought\nCheck whether function_call rows reach the inspector.",
+    });
+  });
+
+  test("encrypted or empty reasoning is omitted, never faked", () => {
+    const lines = transcriptLines(codex, fixture);
+    const thoughts = lines.filter((line) => line.role === "system" && line.text.startsWith("Thought\n"));
+    expect(thoughts).toHaveLength(1);
+    expect(JSON.stringify(lines)).not.toContain("ciphertext-must-not-leak");
+    expect(JSON.stringify(lines)).not.toContain("ciphertext-empty-summary");
+  });
+
+  test("function_call plus output become one role=tool card", () => {
+    const lines = transcriptLines(codex, fixture);
+    const tools = lines.filter((line) => line.role === "tool");
+    expect(tools).toHaveLength(1);
+    expect(tools[0]).toMatchObject({ role: "tool", at: "2026-08-18T01:10:04.000Z" });
+    expect(tools[0]?.text).toContain("rg");
+    expect(tools[0]?.text).toContain("Call: call_inspect_map");
+    expect(tools[0]?.text).toContain("src/server/debug-identity.ts:153:function transcriptCandidate");
+  });
+
+  test("spoken user and assistant text remain, and citation trailers stay stripped", () => {
+    const lines = transcriptLines(codex, fixture);
+    expect(lines).toContainEqual({
+      at: "2026-08-18T01:10:01.000Z",
+      role: "user",
+      text: "Inspect the Codex transcript mapping.",
+    });
+    const assistant = lines.find((line) => line.role === "assistant");
+    expect(assistant?.text).toContain("The mapper emits speech and tool output");
+    expect(assistant?.text).not.toContain("oai-mem-citation");
+    expect(assistant?.text).not.toContain("MEMORY.md");
+    expect(assistant?.text).not.toContain("rollout_ids");
+
+    const citationLines = transcriptLines(codex, citation);
+    const close = citationLines.filter((line) => line.role === "assistant").at(-1);
+    expect(close?.text).toContain("Definition of Done");
+    expect(close?.text).not.toContain("oai-mem-citation");
+    expect(close?.text).not.toContain("MEMORY.md:");
+  });
+
+  test("does not mint thoughts or tools that are not in the file", () => {
+    const lines = transcriptLines(codex, speechOnly);
+    expect(lines.map((line) => line.role)).toEqual(["user", "assistant"]);
+    expect(lines.some((line) => line.role === "system" && line.text.startsWith("Thought\n"))).toBe(false);
+    expect(lines.some((line) => line.role === "tool")).toBe(false);
+  });
+
+  test("custom_tool_call joins to custom_tool_call_output on call_id", () => {
+    const raw = [
+      {
+        timestamp: "2026-08-18T01:21:00.000Z",
+        type: "response_item",
+        payload: { type: "custom_tool_call", call_id: "call_patch_1", name: "apply_patch", input: "*** Begin Patch" },
+      },
+      {
+        timestamp: "2026-08-18T01:21:02.000Z",
+        type: "response_item",
+        payload: { type: "custom_tool_call_output", call_id: "call_patch_1", output: "applied 1 file" },
+      },
+    ].map((row) => JSON.stringify(row)).join("\n");
+    const lines = transcriptLines(codex, raw);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ role: "tool", at: "2026-08-18T01:21:00.000Z" });
+    expect(lines[0]?.text).toContain("apply_patch");
+    expect(lines[0]?.text).toContain("Call: call_patch_1");
+    expect(lines[0]?.text).toContain("applied 1 file");
+  });
+});

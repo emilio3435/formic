@@ -95,6 +95,33 @@ describe("human-facing recency remains separate from provider activity", () => {
     expect(agent?.lastAgentChatBody).toBe(body);
     expect(agent?.lastUserChatBody).toBe("List the steps.");
   });
+
+  test("Claude last-close ignores thinking and tool guts from the inspector fixture", () => {
+    const agent = parseClaudeJsonl(fixture("claude-thoughts-tools-session.jsonl"), {
+      nowMs: Date.parse("2026-08-18T01:00:07.000Z"),
+    });
+    expect(agent?.lastAgentClosing).toBe("The mapper keeps spoken text and drops thinking plus tool_use.");
+    expect(agent?.lastAgentMessage).toBe("The mapper keeps spoken text and drops thinking plus tool_use.");
+    expect(agent?.lastHumanMessage).toBe("The mapper keeps spoken text and drops thinking plus tool_use.");
+    expect(agent?.lastUserMessage).toBe("Inspect the collector mapping.");
+    expect(JSON.stringify(agent)).not.toContain("ciphertext-must-not-leak");
+    expect(agent?.lastAgentClosing).not.toContain("The inspector already paints Thought rows");
+    expect(agent?.lastAgentClosing).not.toContain("transcriptCandidate");
+    expect(agent?.lastUserMessage).not.toContain("transcriptCandidate");
+  });
+
+  test("Codex last-close ignores reasoning and function-call guts from the inspector fixture", () => {
+    const agent = parseCodexJsonl(fixture("codex-thoughts-tools-session.jsonl"), {
+      nowMs: Date.parse("2026-08-18T01:10:07.000Z"),
+    });
+    expect(agent?.lastAgentClosing).toContain("The mapper emits speech and tool output");
+    expect(agent?.lastAgentClosing).not.toContain("oai-mem-citation");
+    expect(agent?.lastAgentClosing).not.toContain("MEMORY.md");
+    expect(agent?.lastAgentClosing).not.toContain("function_call");
+    expect(agent?.lastAgentClosing).not.toContain("transcriptCandidate");
+    expect(agent?.lastUserMessage).toBe("Inspect the Codex transcript mapping.");
+    expect(JSON.stringify(agent)).not.toContain("ciphertext-must-not-leak");
+  });
 });
 
 describe("collector identity and usage truth", () => {

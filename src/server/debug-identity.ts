@@ -154,34 +154,12 @@ function transcriptCandidate(
   agent: AgentSnapshot,
   row: Record<string, any>,
 ): { at: unknown; role: unknown; content: unknown } | undefined {
-  if (agent.provider === "codex") {
-    const payload = row.payload ?? row;
-    if (row.type === "event_msg" && payload.type === "user_message") {
-      return { at: row.timestamp, role: "user", content: payload.message };
-    }
-    if (row.type !== "response_item") return undefined;
-    if (payload.type === "message") {
-      return { at: row.timestamp, role: payload.role, content: payload.content };
-    }
-    if (payload.type === "function_call_output" || payload.type === "custom_tool_call_output") {
-      return { at: row.timestamp, role: "tool", content: payload.output };
-    }
-    return undefined;
-  }
   if (agent.provider === "omp") {
     if (row.type !== "message") return undefined;
     return {
       at: row.timestamp ?? row.message?.timestamp,
       role: row.message?.role,
       content: row.message?.content,
-    };
-  }
-  if (agent.provider === "claude") {
-    if (!["user", "assistant", "system"].includes(String(row.type))) return undefined;
-    return {
-      at: row.timestamp ?? row.message?.timestamp,
-      role: row.message?.role ?? row.type,
-      content: row.message?.content ?? row.content,
     };
   }
   if (row.message?.content === undefined && row.content === undefined) return undefined;
@@ -219,7 +197,7 @@ type GrokSpeechDraft = {
   kind: "speech";
   at: unknown;
   role: "user" | "assistant" | "system";
-  content: string;
+  content: unknown;
 };
 
 type GrokToolDraft = {
@@ -306,7 +284,7 @@ function pushGrokSpeech(
   at: unknown,
 ): void {
   const previous = drafts.at(-1);
-  if (previous?.kind === "speech" && previous.role === role) {
+  if (previous?.kind === "speech" && previous.role === role && typeof previous.content === "string") {
     previous.content += content;
     return;
   }
@@ -385,12 +363,244 @@ function grokToolLine(tool: GrokToolDraft): TranscriptLine {
   const output = tool.historyOutput ?? tool.output;
   const text = [
     tool.title ?? "Tool call",
-    `Call: ${tool.callId}`,
+    ...(tool.callId ? [`Call: ${tool.callId}`] : []),
     ...(tool.status ? [`Status: ${tool.status}`] : []),
     ...(duration ? [`Duration: ${duration}`] : []),
     ...(output ? [`Output:\n${output}`] : []),
   ].join("\n");
   return { at: transcriptTimestamp(tool.at), role: "tool", text };
+}
+
+function speechRole(value: unknown): GrokSpeechDraft["role"] | undefined {
+  return value === "user" || value === "assistant" || value === "system" ? value : undefined;
+}
+
+function pushSpeechDraft(
+  drafts: GrokTranscriptDraft[],
+  role: unknown,
+  content: unknown,
+  at: unknown,
+): void {
+  const next = speechRole(role);
+  if (!next || content === undefined) return;
+  drafts.push({ kind: "speech", at, role: next, content });
+}
+
+function pushThoughtDraft(drafts: GrokTranscriptDraft[], text: string, at: unknown): void {
+  if (!text.trim()) return;
+  drafts.push({ kind: "speech", at, role: "system", content: `Thought\n${text}` });
+}
+
+function attestedText(value: unknown): string | undefined {
+  if (typeof value === "string") return value.trim() ? value : undefined;
+  if (!Array.isArray(value)) return undefined;
+  const parts = value.flatMap((item) => {
+    if (typeof item === "string" && item.trim()) return [item];
+    const rec = object(item);
+    if (!rec) return [];
+    if (typeof rec.text === "string" && rec.text.trim()) return [rec.text];
+    if (typeof rec.content === "string" && rec.content.trim()) return [rec.content];
+    return [];
+  });
+  return parts.length > 0 ? parts.join("\n") : undefined;
+}
+
+function emitTranscriptDrafts(
+  drafts: GrokTranscriptDraft[],
+  provider: AgentSnapshot["provider"],
+): TranscriptLine[] {
+  const lines: TranscriptLine[] = [];
+  for (const draft of drafts) {
+    if (draft.kind === "tool") {
+      if (!draft.title && !draft.callId && !draft.output && !draft.historyOutput) continue;
+      if (!draft.title && !draft.callId && draft.output) {
+        pushTranscriptLine(lines, "tool", draft.output, draft.at, provider);
+        continue;
+      }
+      lines.push(grokToolLine(draft));
+      continue;
+    }
+    pushTranscriptLine(
+      lines,
+      draft.role,
+      draft.content,
+      draft.at,
+      provider,
+    );
+  }
+  return lines;
+}
+
+function upsertToolDraft(
+  drafts: GrokTranscriptDraft[],
+  tools: Map<string, GrokToolDraft>,
+  input: {
+    at: unknown;
+    callId?: string;
+    title?: string;
+    status?: string;
+    output?: string;
+  },
+): GrokToolDraft | undefined {
+  const callId = input.callId?.trim() ?? "";
+  const title = input.title?.trim() || undefined;
+  const output = input.output;
+  if (!callId && !title && !output) return undefined;
+  const atMs = timestampMillis(input.at);
+  let tool = callId ? tools.get(callId) : undefined;
+  if (!tool) {
+    tool = {
+      kind: "tool",
+      at: input.at,
+      callId,
+      title,
+      status: input.status,
+      output,
+      startedMs: atMs,
+    };
+    if (callId) tools.set(callId, tool);
+    drafts.push(tool);
+    return tool;
+  }
+  tool.title ??= title;
+  if (input.status) tool.status = input.status;
+  if (output) tool.output = output;
+  if (atMs !== undefined) tool.endedMs = atMs;
+  return tool;
+}
+
+function claudeThinkingText(part: Record<string, any>): string | undefined {
+  if (part.type === "redacted_thinking") return "[redacted]";
+  if (part.type !== "thinking") return undefined;
+  if (typeof part.thinking === "string") return part.thinking.trim() ? part.thinking : undefined;
+  if (typeof part.text === "string") return part.text.trim() ? part.text : undefined;
+  return undefined;
+}
+
+function claudeTranscriptLines(agent: AgentSnapshot, contents: string): TranscriptLine[] {
+  const drafts: GrokTranscriptDraft[] = [];
+  const tools = new Map<string, GrokToolDraft>();
+  for (const raw of contents.split("\n")) {
+    if (!raw.trim()) continue;
+    let row: Record<string, any> | undefined;
+    try {
+      row = object(JSON.parse(raw));
+    } catch {
+      continue;
+    }
+    if (!row || !["user", "assistant", "system"].includes(String(row.type))) continue;
+    const at = row.timestamp ?? row.message?.timestamp;
+    const role = row.message?.role ?? row.type;
+    const content = row.message?.content ?? row.content;
+    if (typeof content === "string") {
+      pushSpeechDraft(drafts, role, content, at);
+      continue;
+    }
+    if (!Array.isArray(content)) continue;
+    for (const part of content) {
+      if (typeof part === "string") {
+        pushSpeechDraft(drafts, role, part, at);
+        continue;
+      }
+      const item = object(part);
+      if (!item) continue;
+      const thought = claudeThinkingText(item);
+      if (thought !== undefined) {
+        pushThoughtDraft(drafts, thought, at);
+        continue;
+      }
+      if (item.type === "tool_use") {
+        upsertToolDraft(drafts, tools, {
+          at,
+          callId: typeof item.id === "string" ? item.id : undefined,
+          title: typeof item.name === "string" ? item.name : undefined,
+          status: "running",
+        });
+        continue;
+      }
+      if (item.type === "tool_result") {
+        const output = attestedText(item.content);
+        upsertToolDraft(drafts, tools, {
+          at,
+          callId: typeof item.tool_use_id === "string" ? item.tool_use_id : undefined,
+          output,
+          status: item.is_error === true ? "failed" : output || item.tool_use_id ? "completed" : undefined,
+        });
+        continue;
+      }
+      if (item.type === "text" || item.type === undefined) {
+        if (typeof item.text === "string") pushSpeechDraft(drafts, role, item.text, at);
+      }
+    }
+  }
+  return emitTranscriptDrafts(drafts, agent.provider);
+}
+
+function codexReasoningSummary(payload: Record<string, any>): string | undefined {
+  const from = (value: unknown): string | undefined => {
+    if (typeof value === "string") return value.trim() ? value : undefined;
+    if (!Array.isArray(value)) return undefined;
+    const parts = value.flatMap((item) => {
+      if (typeof item === "string" && item.trim()) return [item];
+      const rec = object(item);
+      if (!rec) return [];
+      if (rec.type && rec.type !== "summary_text" && rec.type !== "summary") return [];
+      return typeof rec.text === "string" && rec.text.trim() ? [rec.text] : [];
+    });
+    return parts.length > 0 ? parts.join("\n") : undefined;
+  };
+  return from(payload.summary);
+}
+
+function codexTranscriptLines(agent: AgentSnapshot, contents: string): TranscriptLine[] {
+  const drafts: GrokTranscriptDraft[] = [];
+  const tools = new Map<string, GrokToolDraft>();
+  for (const raw of contents.split("\n")) {
+    if (!raw.trim()) continue;
+    let row: Record<string, any> | undefined;
+    try {
+      row = object(JSON.parse(raw));
+    } catch {
+      continue;
+    }
+    if (!row) continue;
+    const payload = object(row.payload) ?? row;
+    if (row.type === "event_msg" && payload.type === "user_message") {
+      pushSpeechDraft(drafts, "user", payload.message, row.timestamp);
+      continue;
+    }
+    if (row.type !== "response_item") continue;
+    if (payload.type === "message") {
+      /* Pass the attested content array through so readableChatBody still
+         strips citation trailers the same way the collector close path does. */
+      pushSpeechDraft(drafts, payload.role, payload.content, row.timestamp);
+      continue;
+    }
+    if (payload.type === "reasoning") {
+      const summary = codexReasoningSummary(payload);
+      if (summary) pushThoughtDraft(drafts, summary, row.timestamp);
+      continue;
+    }
+    if (payload.type === "function_call" || payload.type === "custom_tool_call") {
+      upsertToolDraft(drafts, tools, {
+        at: row.timestamp,
+        callId: typeof payload.call_id === "string" ? payload.call_id : undefined,
+        title: typeof payload.name === "string" ? payload.name : undefined,
+        status: "running",
+      });
+      continue;
+    }
+    if (payload.type === "function_call_output" || payload.type === "custom_tool_call_output") {
+      const output = typeof payload.output === "string" && payload.output.trim() ? payload.output : undefined;
+      upsertToolDraft(drafts, tools, {
+        at: row.timestamp,
+        callId: typeof payload.call_id === "string" ? payload.call_id : undefined,
+        output,
+        status: output ? "completed" : undefined,
+      });
+    }
+  }
+  return emitTranscriptDrafts(drafts, agent.provider);
 }
 
 function grokTranscriptLines(
@@ -475,6 +685,11 @@ export function transcriptLines(
      newlines leaves the root object (no content/message) and an empty feed. */
   if (isReplicaBlob(contents)) return replicaTranscriptLines(agent, contents);
   if (agent.provider === "grok") return grokTranscriptLines(agent, contents, historyContents);
+  /* Claude and Codex thoughts/tools use the same inspector wire as Grok:
+     system text `Thought\n…` and role `tool` cards. spoken-text helpers stay
+     on text/output_text only so last-close cannot leak thinking or tool guts. */
+  if (agent.provider === "claude") return claudeTranscriptLines(agent, contents);
+  if (agent.provider === "codex") return codexTranscriptLines(agent, contents);
 
   const lines: TranscriptLine[] = [];
   for (const raw of contents.split("\n")) {
