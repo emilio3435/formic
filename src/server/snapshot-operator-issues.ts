@@ -240,11 +240,12 @@ export function buildOperatorIssues(
 
   for (const agent of agents) {
     if (!agent.outcome || agent.outcome === "healthy" || agent.activity === "ended") continue;
+    const name = agent.identity?.name?.trim() || agent.displayName;
     issues.push({
       id: `agent:${agent.id}`,
       kind: "agent",
       severity: agent.outcome === "failed" ? "error" : "warning",
-      title: agent.outcome === "failed" ? `${agent.displayName} failed` : `${agent.displayName} needs review`,
+      title: agent.outcome === "failed" ? `${name} failed` : `${name} needs review`,
       summary: agent.statusReason,
       affectedAgentIds: [agent.id],
     });

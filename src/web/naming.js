@@ -113,14 +113,22 @@ export function resolveAgentName(evidence, homeDir) {
   }
 
   // Tier 3 — whoever launched the agent named it.
+  // launch-env is leftover from launch or the first naming pass; a later task
+  // on a resumed pane is the work happening now.
   const authored = usableName(evidence.authored && evidence.authored.name);
-  if (authored) {
+  const laterTask = evidence.authored && evidence.authored.by === "launch-env"
+    ? usableName(evidence.taskName)
+    : undefined;
+  if (authored && !laterTask) {
     return {
       name: capped(authored),
       base: capped(authored),
       source: "authored",
       authoredBy: evidence.authored.by,
     };
+  }
+  if (laterTask) {
+    return { name: capped(laterTask), base: capped(laterTask), source: "task" };
   }
 
   // Tier 4 — nobody named it, so say what it is and where it began.

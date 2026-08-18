@@ -8017,6 +8017,57 @@ describe("FE-B: harness-backed client behavior", () => {
       });
     });
 
+    test("two live Claude twins stay distinct on the row, inspector, search, and attention list", async () => {
+      /* #16: two cooper-scheduler Claudes painted as one name. The server now
+         publishes a unique identity.name; every surface that names the session
+         has to read that identity rather than the shared displayName. */
+      const one = agent({
+        id: "claude:09958d2e-5c72-4111-a5c7-95a0fdb767c0",
+        sourceSessionId: "09958d2e-5c72-4111-a5c7-95a0fdb767c0",
+        provider: "claude", programId: "p",
+        displayName: "Claude · cooper-scheduler",
+        identity: {
+          name: "Claude · cooper-scheduler #fdb767c0",
+          base: "Claude · cooper-scheduler",
+          source: "origin-cwd",
+          disambiguator: "fdb767c0",
+        },
+        status: "attention", outcome: "needs-you", lifecycle: "waiting",
+      });
+      const two = agent({
+        id: "claude:e2fc869c-02dd-46fb-836b-4c4e14d9b744",
+        sourceSessionId: "e2fc869c-02dd-46fb-836b-4c4e14d9b744",
+        provider: "claude", programId: "p",
+        displayName: "Claude · cooper-scheduler",
+        identity: {
+          name: "Claude · cooper-scheduler #14d9b744",
+          base: "Claude · cooper-scheduler",
+          source: "origin-cwd",
+          disambiguator: "14d9b744",
+        },
+        status: "attention", outcome: "needs-you", lifecycle: "waiting",
+      });
+      const prog = groupOf(one, two);
+      await withState({ ...noLabels(), snap: { schemaVersion: 1, programs: [prog] } }, () => {
+        const board = M.boardIndex(M.state);
+        const opts = { ambiguousNames: board.ambiguous, sharedNames: board.sharedNames };
+        const rowOne = withDom(() => M.renderAgentRow(one, prog, opts));
+        const rowTwo = withDom(() => M.renderAgentRow(two, prog, opts));
+        expect(textOf(byClass(rowOne, "agent-name-wrap"))).toContain("fdb767c0");
+        expect(textOf(byClass(rowTwo, "agent-name-wrap"))).toContain("14d9b744");
+        expect(textOf(byClass(drawerFor(one, prog), "inspector-title")))
+          .toBe(textOf(byClass(rowOne, "agent-name-wrap")));
+        expect(textOf(byClass(drawerFor(two, prog), "inspector-title")))
+          .toBe(textOf(byClass(rowTwo, "agent-name-wrap")));
+        expect(M.matchesQuery(one, prog, "fdb767c0")).toBe(true);
+        expect(M.matchesQuery(two, prog, "14d9b744")).toBe(true);
+        const titles = M.issuesOf({ programs: [prog] }).map((issue: { title: string }) => issue.title);
+        expect(new Set(titles).size).toBe(2);
+        expect(titles).toContain("Claude · cooper-scheduler #fdb767c0 needs review");
+        expect(titles).toContain("Claude · cooper-scheduler #14d9b744 needs review");
+      });
+    });
+
     test("the row and the drawer print one name for one session", async () => {
       /* The whole point of T7a, stated as an equality rather than as two
          separate expectations: whatever the rule turns out to be, the two

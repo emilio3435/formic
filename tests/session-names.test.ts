@@ -380,6 +380,37 @@ describe("an authored title reaches the board and outranks the folder", () => {
     expect(names).toEqual(["Close the PR 387 races"]);
   });
 
+  test("a later task outranks a stale launch-env title on a resumed pane", () => {
+    /* Live :4701 2026-08-16: claude:09958d2e kept "System Cleanup and
+       Initialization" from launch-env while the pane's current task was
+       today's work. Write-once naming froze the leftover; the overlay then
+       published it as identity.name, so search and the inspector showed the
+       weeks-old title beside the current deploy. */
+    const resumed = {
+      ...agent("claude:09958d2e-5c72-4111-a5c7-95a0fdb767c0", "Claude · cooper-scheduler"),
+      provider: "claude" as const,
+      originCwd: "/Users/ant/Developer/cooper-scheduler",
+      cwd: "/Users/ant/Developer/cooper-scheduler",
+      task: "Ship the current cooper-scheduler review",
+    };
+    const published = buildSnapshot({
+      agents: [resumed],
+      sessionNames: () => ({
+        name: "System Cleanup and Initialization",
+        by: "launch-env",
+        at: "2026-07-01T00:00:00.000Z",
+      }),
+      surfaces: [],
+      archiveStore,
+      now: new Date(NOW),
+    }).programs.flatMap((program) => program.agents)[0];
+
+    expect(published?.identity?.name).toBe("Ship the current cooper-scheduler review");
+    expect(published?.identity?.source).toBe("task");
+    expect(published?.identity?.authoredBy).toBeUndefined();
+    expect(published?.identity?.name).not.toContain("System Cleanup");
+  });
+
   test("sessions the namer has not reached yet keep working alongside ones it has", () => {
     /* Naming is out of band, so a board mid-pass has both. Neither may break. */
     const names = namesOf({
