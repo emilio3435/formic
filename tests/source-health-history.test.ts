@@ -30,6 +30,7 @@ const runner: CommandRunner = {
 };
 
 const EMPTY: CollectionResult<CollectedAgent[]> = { value: [], errors: [] };
+const ABSENT: CollectionResult<CollectedAgent[]> = { value: [], errors: [], absent: true };
 const FAILING: CollectionResult<CollectedAgent[]> = {
   value: [],
   errors: ["claude /Users/me/.claude/projects: EACCES: permission denied"],
@@ -131,6 +132,37 @@ describe("byProvider carries history, which one snapshot cannot", () => {
     for (const provider of ["omp", "codex", "cursor"] as const) {
       expect(byProvider![provider].healthy, `${provider} was dragged down with claude`).toBe(true);
     }
+  });
+
+  test("a missing home is absent across refreshes, not a green empty collector", async () => {
+    /* Issue #14. Muse (and any other unrun collector) reported absent: true
+       with no errors. The table treated "no errors" as healthy: true, so the
+       rail said missing while the breakdown said green. Healthy-empty is the
+       other state: home exists, zero sessions, still healthy. */
+    const state = stateWith([{ muse: ABSENT }, { muse: ABSENT, claude: FAILING }]);
+    await state.refresh();
+    expect(await providerHealth(state, "muse")).toEqual({
+      healthy: false,
+      absent: true,
+      lastHealthyAt: null,
+    });
+    expect(state.get().totals.sourceHealth).toMatchObject({
+      healthy: PROVIDERS.length - 1,
+      degraded: 0,
+      absent: 1,
+      total: PROVIDERS.length,
+    });
+
+    await state.refresh();
+    expect(await providerHealth(state, "muse")).toMatchObject({
+      healthy: false,
+      absent: true,
+      lastHealthyAt: null,
+    });
+    expect(await providerHealth(state, "claude")).toMatchObject({ healthy: false });
+    expect((await providerHealth(state, "claude"))?.absent).not.toBe(true);
+    expect(Object.keys(state.get().totals.sourceHealth?.byProvider ?? {}).sort())
+      .toEqual([...PROVIDERS].sort());
   });
 
   test("every provider the union declares appears on the wire", async () => {

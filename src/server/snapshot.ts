@@ -839,19 +839,24 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
   const degradedSources = collectorProviders.filter((provider) =>
     (input.sourceErrors?.[provider]?.length ?? 0) > 0,
   ).length;
-  /* The ratio counts collectors that EXIST on this machine, and cmux is not one
-     of them. `collectSessions` returns one result for every shared provider;
-     cmux is the control plane: it has its own
-     `controlHealth.cmuxReachable`, its errors become operator issues, and it is
-     rendered separately. Counting it here made an unreachable control plane
-     print as a broken *collector* — the same fault under two labels, on a board
-     whose whole complaint about itself was repeated information.
+  /* The census is every collector, and cmux is not one of them.
+     `collectSessions` returns one result for every shared provider; cmux is
+     the control plane: it has its own `controlHealth.cmuxReachable`, its
+     errors become operator issues, and it is rendered separately. Counting
+     it here made an unreachable control plane print as a broken *collector*
+     — the same fault under two labels, on a board whose whole complaint
+     about itself was repeated information.
 
-     The literal 4 that used to sit here was right by arithmetic accident. This
-     block dropped omp (-1) and added cmux (+1), and the two cancelled, so the
-     published ratio stayed plausible while its membership was wrong. */
+     The literal 4 that used to sit here was right by arithmetic accident.
+     This block dropped omp (-1) and added cmux (+1), and the two cancelled,
+     so the published ratio stayed plausible while its membership was wrong.
+     Absence is a third category on this same set, not a subtraction. */
   const knownCollectors = collectorProviders.length;
-  const sourceTotal = Math.max(0, knownCollectors - absentSources);
+  /* The known set is the denominator. Subtracting absent here made
+     healthy + degraded + absent disagree with total and with byProvider.length
+     the moment a stubbed collector had no home — the rail said missing while
+     the table still listed every key. Absence is a category on that set. */
+  const sourceTotal = knownCollectors;
   const scanWindowHours = input.scanWindowHours;
   const snapshot: FormicHubSnapshot = {
     schemaVersion: 1,
@@ -916,11 +921,10 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
       tokenEligible: workingAgents.length,
       tokenMedian,
       sourceHealth: {
-        healthy: Math.max(0, sourceTotal - degradedSources),
+        healthy: Math.max(0, sourceTotal - degradedSources - absentSources),
         degraded: Math.min(sourceTotal, degradedSources),
-        /* Reported so a card can say "Cursor is not installed" rather than
-           implying we are watching something that is not there. healthy +
-           degraded === total, and total + absent === the four known kinds. */
+        /* A category on the known set, not a subtraction from it.
+           healthy + degraded + absent === total === the collectors we have. */
         absent: Math.min(knownCollectors, absentSources),
         total: sourceTotal,
       },

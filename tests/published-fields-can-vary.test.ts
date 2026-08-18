@@ -76,10 +76,15 @@ const DELIBERATELY_CONSTANT: Record<string, string> = {
     "Constant here because every state reports at the same instant relative to the tracker's start. Its real "
     + "behaviour is covered by tests/pulse-window-honesty.test.ts, which drives the clock forward and asserts "
     + "the window never exceeds the time actually watched.",
-  /* totals.sourceHealth.total and .absent were registered here on the grounds
-     that no fixture could move them. The "a collector that cannot read its
-     files" state moves both, so the entries were stale and are gone — which is
-     what this register is supposed to do to itself. */
+  /* totals.sourceHealth.absent used to sit here too. The "a collector that
+     cannot read its files" state still moves absent / healthy / degraded.
+     total does not: it is the known collector set, and subtracting absent
+     from it was the #14 mismatch with byProvider.length. */
+  "totals.sourceHealth.total":
+    "Structural: always PROVIDERS.length. Absence is a category on that set, not a "
+    + "reason to shrink it. Covered by tests/source-health-census.test.ts and "
+    + "tests/collector-absence.test.ts, which assert healthy + degraded + absent === total "
+    + "=== byProvider.length and that a missing Muse does not drop the key.",
 };
 
 function agent(overrides: Partial<CollectedAgent> = {}): CollectedAgent {
