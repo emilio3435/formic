@@ -5,6 +5,7 @@
    are not live even if the process is still running. processAlive is meta. */
 
 import { AGENT_IDLE_GAP_MS } from "./types";
+import { completedCloseStillHolds } from "./completed-close";
 import { hookInputWantsHuman, taskStateWantsHuman } from "./task-state";
 import type { AgentSnapshot, LifecycleState } from "../shared/types";
 
@@ -23,7 +24,9 @@ function isTerminalAgent(agent: AgentSnapshot): boolean {
 }
 
 export function isDeclaredDone(agent: AgentSnapshot): boolean {
-  return agent.taskState === "done" && !hookInputWantsHuman(agent);
+  if (hookInputWantsHuman(agent)) return false;
+  if (agent.taskState === "done") return true;
+  return completedCloseStillHolds(agent);
 }
 
 export function isAlerting(agent: AgentSnapshot): boolean {

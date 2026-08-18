@@ -30,6 +30,7 @@
    clay is what made an unverifiable session LOOK finished before it was called
    finished"). Unverified is its own state, and it is not an ending. */
 import { declaredQuiet, isTerminal } from "./agent-model.js";
+import { taskStateWantsHuman } from "./task-state.js";
 import { fmtElapsed } from "./text-formatters.js";
 import {
   agentName,
@@ -92,6 +93,7 @@ export function attentionClassOf(agent) {
      thing that reopens it is a needsInput hook strictly newer than the
      declaration, which declaredQuiet already tests. */
   if (declaredQuiet(agent)) return null;
+  if (!taskStateWantsHuman(agent)) return null;
   const declared = agent.attentionClass;
   if (declared === "blocking" || declared === "noticed") return declared;
   const kind = agent.attentionSignal && agent.attentionSignal.kind;

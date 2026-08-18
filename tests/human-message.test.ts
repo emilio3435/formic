@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   extractChatBodyByRole,
   extractClosingByRole,
+  extractLastFacingAtByRole,
   extractLastHumanFacingAt,
   extractLastHumanMessage,
   extractLastMessageByRole,
@@ -28,6 +29,16 @@ describe("extractLastHumanFacingAt — readable prose with an honest source cloc
       { role: "user", content: "A real request with no source time." },
       { role: "assistant", content: "A real reply with no source time.", timestamp: 1786456800000 },
     ])).toBeUndefined();
+  });
+
+  test("extractLastFacingAtByRole keeps the user clock distinct from the assistant close", () => {
+    const messages: HumanMessageCandidate[] = [
+      { role: "user", content: "Parse the grok-bot transcript.", timestamp: "2026-08-16T04:00:00.000Z" },
+      { role: "assistant", content: "Done.", timestamp: "2026-08-16T05:00:10.000Z" },
+      { role: "user", content: "Start the next pass.", timestamp: "2026-08-16T16:38:00.000Z" },
+    ];
+    expect(extractLastFacingAtByRole("codex", messages, "user")).toBe("2026-08-16T16:38:00.000Z");
+    expect(extractLastFacingAtByRole("codex", messages, "assistant")).toBe("2026-08-16T05:00:10.000Z");
   });
 });
 

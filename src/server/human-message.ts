@@ -238,6 +238,22 @@ export function extractLastHumanFacingAt(
   return latest;
 }
 
+export function extractLastFacingAtByRole(
+  provider: Provider,
+  candidates: readonly HumanMessageCandidate[],
+  role: "assistant" | "user",
+): string | undefined {
+  let latest: string | undefined;
+  for (const candidate of candidates) {
+    if (candidate.isMeta || candidate.role !== role) continue;
+    if (!readableHumanMessage(provider, candidate.content)) continue;
+    if (typeof candidate.timestamp !== "string" || !Number.isFinite(Date.parse(candidate.timestamp))) continue;
+    const timestamp = new Date(candidate.timestamp).toISOString();
+    if (!latest || timestamp > latest) latest = timestamp;
+  }
+  return latest;
+}
+
 export function extractLastHumanMessage(
   provider: Provider,
   candidates: readonly HumanMessageCandidate[],

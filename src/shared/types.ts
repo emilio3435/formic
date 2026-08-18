@@ -496,6 +496,10 @@ export interface AgentSnapshot {
   surfaceTitle?: string;
   /** Latest readable user/assistant prose with a directly associated source timestamp. */
   lastHumanFacingAt?: string;
+  /** Latest readable USER prose timestamp. Used to revive a completed-close. */
+  lastUserFacingAt?: string;
+  /** When a Completed-in toast closed this lane; recomputed every snapshot. */
+  completedCloseAt?: string;
   /** First time the current alertFingerprint was seen. Absent when not alerting. */
   alertSince?: string;
   /** Newest user / assistant / tool / system transcript event. Not collector bookkeeping. */
