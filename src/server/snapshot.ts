@@ -40,6 +40,7 @@ import {
   classifyIdentityConflicts,
   controlDebrisFor,
 } from "./snapshot-operator-issues";
+import { completedCloseAtFor, isCompletedNotification } from "./completed-close";
 import { isLive } from "./live";
 import { agentSortRank, programFor, rollupFor, type ProgramHint } from "./snapshot-programs";
 import { agentIsStripAlerting } from "./strip-alerting";
@@ -389,9 +390,16 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
           ...(sidebarMatchesRepo && sidebar?.branch ? { branch: sidebar.branch } : {}),
         }
       : undefined;
+    const completedCloseAt = !lastKnown
+      ? completedCloseAtFor(target.surfaceId, source.startedAt, [
+          ...(input.notifications ?? []),
+          ...(input.cmuxNotifications ?? []),
+        ])
+      : undefined;
     const notification = !lastKnown && target.surfaceId
       ? [...(input.notifications ?? [])]
           .filter((candidate) => {
+            if (isCompletedNotification(candidate)) return false;
             if (candidate.surfaceId !== target.surfaceId) return false;
             const startedAtMs = source.startedAt ? Date.parse(source.startedAt) : Number.NaN;
             if (!Number.isFinite(startedAtMs)) return true;
@@ -651,6 +659,8 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
          own defaults must not arrive on the board wearing a rename's authority. */
       surfaceTitle: paneRename(surface?.title, surface?.cwd),
       lastHumanFacingAt: source.lastHumanFacingAt,
+      lastUserFacingAt: source.lastUserFacingAt,
+      ...(completedCloseAt ? { completedCloseAt } : {}),
       lastThreadAt: source.lastThreadAt,
       workingSince: source.workingSince,
       lastUserMessage: source.lastUserMessage,

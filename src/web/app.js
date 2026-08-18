@@ -2017,7 +2017,7 @@ function repoScopedReadings(program) {
   const agents = Array.isArray(program.agents) ? program.agents : [];
   const working = agents.filter((a) => a.lifecycle === "working").length;
   const blocked = agents.filter((a) => a.outcome === "blocked").length;
-  const needsYou = agents.filter((a) => a.attentionSignal && a.lifecycle !== "finished").length;
+  const needsYou = agents.filter((a) => stripAlerting(a)).length;
   const pcts = agents.map((a) => agentContextPct(a)).filter((n) => Number.isFinite(n));
   const avgCtx = pcts.length ? Math.round(pcts.reduce((sum, n) => sum + n, 0) / pcts.length) : null;
   const pressure = avgCtx == null ? "" : contextPressureOf(avgCtx);

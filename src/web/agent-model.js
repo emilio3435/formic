@@ -16,6 +16,7 @@
 import { fmtTok } from "./text-formatters.js";
 import { DEFAULT_LOOKBACK_HOURS } from "./client-catalogs.js";
 import { deriveLifecycle } from "./lifecycle.js";
+import { completedCloseStillHolds } from "./completed-close.js";
 import { hookInputWantsHuman, taskStateWantsHuman } from "./task-state.js";
 
 /* ---------- derivations (narrow fallbacks for the transitional schema) ----------
@@ -439,7 +440,9 @@ export function declaredQuiet(agent) {
    flight. Same re-alert escape as declaredQuiet: a done lane that asks a
    question is asking, and comes back. */
 export function declaredDone(agent) {
-  return Boolean(agent) && agent.taskState === "done" && !hookInputWantsHuman(agent);
+  if (!agent || hookInputWantsHuman(agent)) return false;
+  if (agent.taskState === "done") return true;
+  return completedCloseStillHolds(agent);
 }
 
 export function alerting(agent) {

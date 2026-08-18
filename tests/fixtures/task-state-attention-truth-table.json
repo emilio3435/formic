@@ -164,6 +164,41 @@
       },
       "expectedHook": false,
       "expected": false
+    },
+    {
+      "name": "a fresh working offer-question is not a human ask",
+      "evidence": {
+        "lifecycle": "working",
+        "attentionSignal": {
+          "kind": "question-pending"
+        }
+      },
+      "expectedHook": false,
+      "expected": false
+    },
+    {
+      "name": "a last-known working offer-question still counts",
+      "evidence": {
+        "lifecycle": "working",
+        "sourceFreshness": "last-known",
+        "attentionSignal": {
+          "kind": "question-pending"
+        }
+      },
+      "expectedHook": false,
+      "expected": true
+    },
+    {
+      "name": "needs-input still asks while a working row also has an offer-question",
+      "evidence": {
+        "lifecycle": "working",
+        "hookLifecycle": "needsInput",
+        "hookLifecycleAt": "2026-08-05T12:00:01.000Z",
+        "attentionSignal": {
+          "kind": "question-pending"
+        }
+      },
+      "expected": true
     }
   ]
 }
