@@ -16,7 +16,7 @@
    requests: it decides WHAT to say, never where it lands on screen.  */
 
 import { fmtElapsed, providerLabel, PROVIDER_LABELS } from "./text-formatters.js";
-import { alerting, deriveActivity, deriveControlState, deriveOutcome, isGrokBotAgent, isTerminal, livenessState, provenanceOf } from "./agent-model.js";
+import { alerting, deriveActivity, deriveControlState, deriveOutcome, isClaudeDesktopAgent, isCodexAppAgent, isConsumerChatGptAgent, isGrokBotAgent, isTerminal, livenessState, provenanceOf } from "./agent-model.js";
 import { state } from "./client-state.js";
 import { ROLE_ALIASES, ROLE_LABELS } from "./client-catalogs.js";
 
@@ -30,6 +30,7 @@ export const IDENTITY_TIER_LABELS = {
   session: "Session ID on a terminal",
   cwd: "Working folder",
   gateway: "Grok Bot gateway",
+  "app-server": "Codex app-server",
 };
 
 export const IDENTITY_OUTCOME_LABELS = {
@@ -79,6 +80,26 @@ export const IDENTITY_CAUSES = {
   "shared-host": {
     why: "One terminal is hosting several chats at once, so there is no single session on that pane to type into.",
     next: "Give this chat its own pane if you need Send here; Focus still works, and nothing is broken.",
+  },
+  "no-attested-write": {
+    why: "This surface has no attested write.",
+    next: "Formic will not Send here until an official write exists. Prefill is not Send.",
+  },
+  "chatgpt-consumer": {
+    why: "Consumer ChatGPT chats have no official continue-chat write.",
+    next: "Formic will not Send into a consumer ChatGPT thread.",
+  },
+  "codex-app-no-thread": {
+    why: "This Codex desktop thread is not in the local Codex store.",
+    next: "Formic can Send only after that rollout UUID exists on disk.",
+  },
+  "codex-app-resume-rejected": {
+    why: "Codex app-server did not accept thread/resume for this rollout.",
+    next: "Open the thread in ChatGPT.app / Codex desktop and retry. An open app-server FD is not Send.",
+  },
+  "codex-app-unreachable": {
+    why: "Codex app-server is not reachable for this desktop thread.",
+    next: "Start ChatGPT.app so Formic can use the official app-server socket.",
   },
   /* A quarantine whose step-by-step trace is not on this snapshot — which, on
      the live board, is EVERY quarantined row: `identityTrace` is a
@@ -324,6 +345,22 @@ export function controlUnavailableText(controlState, agent = null) {
     }
     return "Controls are unavailable — this instance's box is unreachable from this Mac.";
   }
+  if (isClaudeDesktopAgent(agent) && controlState !== "unproven" && controlState !== "quarantined") {
+    return "Controls are unavailable — this Claude Desktop surface has no attested write.";
+  }
+  if (isConsumerChatGptAgent(agent) && controlState !== "unproven" && controlState !== "quarantined") {
+    return "Controls are unavailable — consumer ChatGPT chats have no official continue-chat write.";
+  }
+  if (isCodexAppAgent(agent) && controlState !== "unproven" && controlState !== "quarantined") {
+    const miss = agent && agent.target && agent.target.appServerMiss;
+    if (miss === "no-thread") {
+      return "Controls are unavailable — this Codex desktop thread is not in the local Codex store.";
+    }
+    if (miss === "unreachable") {
+      return "Controls are unavailable — Codex app-server is not reachable for this desktop thread.";
+    }
+    return "Controls are unavailable — Codex app-server did not accept thread/resume for this rollout.";
+  }
   /* D5. The server knows WHY routing refused and says so in one sentence; the
      client used to throw that away and print a single generic line for every
      refusal. On the live board that line read "Conflicting identity evidence"
@@ -408,6 +445,16 @@ export function identityCause(view, agent) {
     if (miss === "no-token") return "gateway-no-token";
     if (miss === "probe-rejected") return "gateway-probe-rejected";
     return "unreachable-box";
+  }
+  if (isClaudeDesktopAgent(agent)) return "no-attested-write";
+  if (isConsumerChatGptAgent(agent)) return "chatgpt-consumer";
+  if (isCodexAppAgent(agent)
+    || (view && view.matchedTier === "app-server")
+    || (view && Array.isArray(view.steps) && view.steps.some((step) => step.tier === "app-server"))) {
+    const miss = agent && agent.target && agent.target.appServerMiss;
+    if (miss === "no-thread") return "codex-app-no-thread";
+    if (miss === "unreachable") return "codex-app-unreachable";
+    return "codex-app-resume-rejected";
   }
   /* Checked before the tier walk. A shared host refuses at the session tier the
      same way a contested terminal does, and reading the tier alone would give

@@ -10,6 +10,22 @@ import type {
 import { SHARED_HOST_REASON } from "../shared/identity-copy";
 import { hookRecordFor } from "./cmux-hook-sessions";
 import {
+  CHATGPT_CONSUMER_COPY,
+  isCodexAppAgent,
+  isCodexAppTarget,
+  isConsumerChatGptAgent,
+  isConsumerChatGptTarget,
+  resolveChatGptConsumerTarget,
+  resolveCodexAppControlTarget,
+  codexAppCopy,
+} from "./codex-app";
+import {
+  CLAUDE_DESKTOP_COPY,
+  isClaudeDesktopAgent,
+  isClaudeDesktopTarget,
+  resolveClaudeDesktopControlTarget,
+} from "./claude-desktop";
+import {
   grokBotGatewayCopy,
   isGrokBotAgent,
   isGrokBotTarget,
@@ -178,6 +194,21 @@ function resolveAgentTargetInternal(
 
   if (isGrokBotAgent(agent)) {
     const resolved = resolveGrokBotControlTarget(agent);
+    if (steps) steps.push(...resolved.trace.steps);
+    return finish(resolved.target, resolved.trace.matchedTier);
+  }
+  if (isConsumerChatGptAgent(agent)) {
+    const resolved = resolveChatGptConsumerTarget();
+    if (steps) steps.push(...resolved.trace.steps);
+    return finish(resolved.target, resolved.trace.matchedTier);
+  }
+  if (isClaudeDesktopAgent(agent)) {
+    const resolved = resolveClaudeDesktopControlTarget(agent);
+    if (steps) steps.push(...resolved.trace.steps);
+    return finish(resolved.target, resolved.trace.matchedTier);
+  }
+  if (isCodexAppAgent(agent)) {
+    const resolved = resolveCodexAppControlTarget(agent);
     if (steps) steps.push(...resolved.trace.steps);
     return finish(resolved.target, resolved.trace.matchedTier);
   }
@@ -437,17 +468,19 @@ function resolveAgentTargetInternal(
    types nothing and going to look is how an operator resolves the ambiguity.
    Named rather than written inline so the two questions - may we ADDRESS this
    pane, may we ACT on it - stop sharing one unlabelled array literal. */
-export function canAddressTarget<T extends Pick<CmuxTarget, "surfaceId" | "resolution" | "kind" | "instanceId">>(
+export function canAddressTarget<T extends Pick<CmuxTarget, "surfaceId" | "resolution" | "kind" | "instanceId" | "threadId">>(
   target: T,
 ): boolean {
   if (isGrokBotTarget(target)) return Boolean(target.instanceId);
+  if (isCodexAppTarget(target)) return Boolean(target.threadId);
+  if (isClaudeDesktopTarget(target) || isConsumerChatGptTarget(target)) return true;
   return Boolean(target.surfaceId)
     && (target.resolution === "exact" || target.resolution === "unique-cwd");
 }
 
 export function canWriteToTarget<T extends Pick<
   CmuxTarget,
-  "surfaceId" | "resolution" | "attestation" | "kind" | "agentId" | "instanceId" | "gatewayReady" | "gatewayMiss"
+  "surfaceId" | "resolution" | "attestation" | "kind" | "agentId" | "instanceId" | "gatewayReady" | "gatewayMiss" | "threadId" | "appServerReady" | "appServerMiss"
 >>(
   target: T,
 ): boolean {
@@ -455,6 +488,12 @@ export function canWriteToTarget<T extends Pick<
     return Boolean(target.agentId)
       && Boolean(target.instanceId)
       && target.gatewayReady === true;
+  }
+  if (isCodexAppTarget(target)) {
+    return Boolean(target.threadId) && target.appServerReady === true;
+  }
+  if (isClaudeDesktopTarget(target) || isConsumerChatGptTarget(target)) {
+    return false;
   }
   return Boolean(target.surfaceId)
     && target.resolution === "exact"
@@ -565,7 +604,7 @@ export function routingSurfaceObservations(
 export function transmitRefusal(agent: {
   target: Pick<
     CmuxTarget,
-    "surfaceId" | "resolution" | "attestation" | "reason" | "kind" | "agentId" | "instanceId" | "gatewayReady" | "gatewayMiss"
+    "surfaceId" | "resolution" | "attestation" | "reason" | "kind" | "agentId" | "instanceId" | "gatewayReady" | "gatewayMiss" | "threadId" | "appServerReady" | "appServerMiss"
   >;
   processState?: ProcessState;
   archived?: boolean;
@@ -605,6 +644,30 @@ export function transmitRefusal(agent: {
       return refuse("UNSAFE_TARGET", copy.cause, copy.remedy, routingEvidence);
     }
     /* Grok Bot has no process identity. "unknown" must not disable Send. */
+    return null;
+  }
+  if (isConsumerChatGptTarget(agent.target)) {
+    return refuse(
+      "UNSAFE_TARGET",
+      CHATGPT_CONSUMER_COPY.cause,
+      CHATGPT_CONSUMER_COPY.remedy,
+      routingEvidence,
+    );
+  }
+  if (isClaudeDesktopTarget(agent.target)) {
+    return refuse(
+      "UNSAFE_TARGET",
+      CLAUDE_DESKTOP_COPY.cause,
+      CLAUDE_DESKTOP_COPY.remedy,
+      routingEvidence,
+    );
+  }
+  if (isCodexAppTarget(agent.target)) {
+    if (!canWriteToTarget(agent.target)) {
+      const copy = codexAppCopy(agent.target.appServerMiss ?? "unreachable");
+      return refuse("UNSAFE_TARGET", copy.cause, copy.remedy, routingEvidence);
+    }
+    /* App-server FDs do not prove this thread is live. "unknown" must not disable Send. */
     return null;
   }
   if (!canAddressTarget(agent.target)) {

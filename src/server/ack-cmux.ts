@@ -12,7 +12,10 @@ export interface CmuxClearWarning {
 
 export function attestedSurfaceId(agent: AgentSnapshot): string | undefined {
   const target = agent.target;
-  if (target.kind === "grok-bot") return undefined;
+  if (target.kind === "grok-bot" || target.kind === "codex-app"
+    || target.kind === "claude-desktop" || target.kind === "chatgpt") {
+    return undefined;
+  }
   if (!canWriteToTarget(target) || !target.surfaceId) return undefined;
   return target.surfaceId;
 }

@@ -153,10 +153,12 @@ export interface AgentLineage {
 
 export type LineageAgreement = "corroborated" | "contradicted" | "unobserved";
 export type AgentSpecialty = "frontend" | "backend";
-export type ControlSurfaceKind = "cmux" | "grok-bot";
-export type TargetResolution = "exact" | "unique-cwd" | "ambiguous" | "missing" | "gateway" | "shared-host";
+export type ControlSurfaceKind = "cmux" | "grok-bot" | "codex-app" | "claude-desktop" | "chatgpt";
+export type TargetResolution = "exact" | "unique-cwd" | "ambiguous" | "missing" | "gateway" | "shared-host" | "app-server";
 /* Why a Grok Bot row cannot Send. Snapshot may carry this enum — never the token. */
 export type GrokBotGatewayMiss = "no-token" | "unreachable-box" | "probe-rejected";
+/* Why a Codex desktop row cannot Send. Snapshot may carry this enum — never a socket path. */
+export type CodexAppMiss = "no-thread" | "resume-rejected" | "unreachable";
 /* `unarchive` is net-new. The board has told operators "Un-archive it from
    History if you filed it early" since the archive shipped, and there was no
    store method, no endpoint and no button behind that sentence — `#agentIds`
@@ -227,12 +229,20 @@ export interface CostUsage {
 }
 
 export interface CmuxTarget {
-  /* Absent means cmux. Do not put a Bot chat on a fake surfaceId — that would
-     type into a tty. Grok Bot / Grok Bot 2 are `kind: "grok-bot"` plus the
-     roster agentId and the instance that owns the gateway token. */
+  /* Absent means cmux. Do not put a Bot chat or a desktop thread on a fake
+     surfaceId — that would type into a tty. Grok Bot is `kind: "grok-bot"`.
+     Codex desktop / ChatGPT.app Codex threads are `kind: "codex-app"`.
+     Claude Desktop GUI rows are `kind: "claude-desktop"` and have no write.
+     Consumer ChatGPT chats are `kind: "chatgpt"` and have no write. */
   kind?: ControlSurfaceKind;
   /** Roster UUID for a Grok Bot chat — not the Formic row id. */
   agentId?: string;
+  /** Codex desktop rollout / thread UUID. Same value Formic already parses. */
+  threadId?: string;
+  /** True only after app-server accepted thread/resume for this threadId. */
+  appServerReady?: boolean;
+  /** Why Codex desktop Send is off. Enum only. */
+  appServerMiss?: CodexAppMiss;
   /** Collector instance, e.g. grok-bot:grok-bot vs grok-bot:grok-bot-2. */
   instanceId?: string;
   instanceLabel?: string;
@@ -262,13 +272,14 @@ export interface CmuxTarget {
 
      Both produce `resolution: "exact"`, so the write gate could not tell "cmux
      says the session is there" from "we wrote that down some time ago".
-     Grok Bot never uses these: its write gate is `kind` + `gatewayReady`. */
+     Grok Bot never uses these: its write gate is `kind` + `gatewayReady`.
+     Codex desktop never uses these: its write gate is `kind` + `appServerReady`. */
   attestation?: "hook-store" | "live" | "remembered";
   resolution: TargetResolution;
   reason?: string;
 }
 
-export type IdentityTraceTier = "hook-store" | "recorded" | "session" | "cwd" | "gateway";
+export type IdentityTraceTier = "hook-store" | "recorded" | "session" | "cwd" | "gateway" | "app-server";
 
 export interface IdentityTraceStep {
   tier: IdentityTraceTier;

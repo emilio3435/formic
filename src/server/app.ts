@@ -1089,7 +1089,12 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
          two paths. Clearing another agent's request for a human is quieter than
          a misrouted instruction and worse in one respect: the signal that
          someone needed help is gone and nothing reports that it was. */
-      const attentionSurfaceId = agent.target.kind === "grok-bot" ? undefined : agent.target.surfaceId;
+      const attentionSurfaceId = agent.target.kind === "grok-bot"
+        || agent.target.kind === "codex-app"
+        || agent.target.kind === "claude-desktop"
+        || agent.target.kind === "chatgpt"
+        ? undefined
+        : agent.target.surfaceId;
       if (!canWriteToTarget(agent.target) || !attentionSurfaceId) {
         return responseError(
           409,

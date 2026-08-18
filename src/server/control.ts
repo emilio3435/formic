@@ -7,6 +7,23 @@ import type {
 } from "../shared/types";
 import { cmuxCommand, DEFAULT_CMUX_EXECUTABLE } from "./cmux";
 import {
+  CLAUDE_DESKTOP_COPY,
+  CLAUDE_DESKTOP_FOCUS_APP,
+  CLAUDE_DESKTOP_INTERRUPT_REASON,
+} from "./claude-desktop";
+import {
+  assessCodexAppWrite,
+  CHATGPT_CONSUMER_COPY,
+  CODEX_APP_INTERRUPT_REASON,
+  codexAppThreadId,
+  createProductionCodexAppOps,
+  declineCodexAppApprovals,
+  initializeParams,
+  recordCodexAppResumeResult,
+  threadIsGenerating,
+  type CodexAppOps,
+} from "./codex-app";
+import {
   assessGrokBotWrite,
   controlSurfaceKind,
   GROK_BOT_GATEWAY_COPY,
@@ -32,6 +49,7 @@ export interface ControlDependencies {
   archiveStore: ArchiveStore;
   cmuxExecutable?: string;
   grokBot?: GrokBotGatewayOps;
+  codexApp?: CodexAppOps;
 }
 
 function failure(
@@ -147,11 +165,20 @@ export async function executeControl(
     return { status: 200, response: { ok: true, action: request.action, agentId: request.agentId } };
   }
 
-  /* Dispatch by surface kind. After this branch a Bot row must never reach
-     cmuxRpc — that would type into a tty. Later chatbot surfaces (#134/#135)
-     fill the same switch; they are not implemented here. */
-  if (controlSurfaceKind(agent.target) === "grok-bot") {
+  /* Dispatch by surface kind. After this branch a non-cmux row must never
+     reach cmuxRpc — that would type into a tty. */
+  const surfaceKind = controlSurfaceKind(agent.target);
+  if (surfaceKind === "grok-bot") {
     return executeGrokBotControl(request, agent, dependencies);
+  }
+  if (surfaceKind === "codex-app") {
+    return executeCodexAppControl(request, agent, dependencies);
+  }
+  if (surfaceKind === "claude-desktop") {
+    return executeClaudeDesktopControl(request, agent, dependencies);
+  }
+  if (surfaceKind === "chatgpt") {
+    return executeChatGptConsumerControl(request, agent, dependencies);
   }
 
   if (!canAddressTarget(agent.target)) {
@@ -354,6 +381,170 @@ async function executeGrokBotControl(
     rememberAcceptedNonce(instanceId, rosterId, clientNonce);
     return { status: 200, response: { ok: true, action: request.action, agentId: request.agentId } };
   });
+}
+
+async function executeCodexAppControl(
+  request: ControlRequest,
+  agent: AgentSnapshot,
+  dependencies: ControlDependencies,
+): Promise<ControlExecution> {
+  const ops = dependencies.codexApp ?? {};
+  const assessed = assessCodexAppWrite(agent, ops);
+  const freshTarget = {
+    ...agent.target,
+    kind: "codex-app" as const,
+    threadId: assessed.threadId || agent.target.threadId,
+    appServerReady: assessed.ready,
+    ...(assessed.ready || !assessed.miss ? {} : { appServerMiss: assessed.miss }),
+    resolution: assessed.ready ? "app-server" as const : "missing" as const,
+    reason: assessed.reason,
+  };
+  const writesInput = request.action === "instruct" || request.action === "interrupt";
+  const refusal = writesInput
+    ? transmitRefusal({
+        target: freshTarget,
+        processState: agent.processState,
+        identityTrace: agent.identityTrace,
+      })
+    : null;
+  if (refusal) return failure(request, 409, refusal.code, refusal.message);
+
+  if (request.action === "interrupt") {
+    return failure(request, 409, "CONTROL_DISABLED", CODEX_APP_INTERRUPT_REASON);
+  }
+
+  const threadId = assessed.threadId || codexAppThreadId(agent);
+  if (request.action === "focus") {
+    if (!threadId) {
+      return failure(request, 409, "UNSAFE_TARGET", assessed.reason);
+    }
+    const result = await dependencies.runner.run(["open", `codex://threads/${threadId}`]);
+    if (result.timedOut) return failure(request, 504, "FOCUS_TIMEOUT", "Opening the Codex thread timed out.", result);
+    if (result.exitCode !== 0) {
+      return failure(request, 502, "FOCUS_FAILED", "Could not open the Codex desktop thread.", result);
+    }
+    return { status: 200, response: { ok: true, action: request.action, agentId: request.agentId } };
+  }
+
+  if (request.action !== "instruct") {
+    return failure(request, 400, "INVALID_ACTION", `Unsupported control action: ${request.action}`);
+  }
+
+  const instruction = request.instruction?.trim();
+  if (!instruction) return failure(request, 400, "INSTRUCTION_REQUIRED", "A non-empty instruction is required.");
+  if (/[\r\n]/.test(instruction)) {
+    return failure(
+      request,
+      400,
+      "INVALID_INSTRUCTION",
+      "Instruction must not contain carriage returns or newlines.",
+    );
+  }
+  const owned = ops.rpc ? undefined : createProductionCodexAppOps();
+  const session = ops.rpc ? ops : owned;
+  if (!threadId || !session?.rpc) {
+    owned?.close();
+    return failure(request, 409, "UNSAFE_TARGET", assessed.reason);
+  }
+
+  try {
+    const initialized = await session.rpc("initialize", initializeParams());
+    if (!initialized.ok) {
+      return failure(request, 409, "UNSAFE_TARGET", "Codex app-server initialize failed.");
+    }
+    const resumed = await session.rpc("thread/resume", { threadId });
+    recordCodexAppResumeResult(threadId, resumed.ok);
+    if (!resumed.ok) {
+      return failure(request, 409, "UNSAFE_TARGET", "Codex app-server did not accept thread/resume for this rollout.");
+    }
+
+    const generating = threadIsGenerating(resumed);
+    const sent = generating
+      ? await session.rpc("turn/steer", {
+          threadId,
+          input: [{ type: "text", text: instruction }],
+          ...(resumed.turnId ? { expectedTurnId: resumed.turnId } : {}),
+        })
+      : await session.rpc("turn/start", {
+          threadId,
+          input: [{ type: "text", text: instruction }],
+        });
+    if (!sent.ok) {
+      return failure(
+        request,
+        502,
+        "CODEX_APP_SEND_FAILED",
+        sent.error ?? "Codex app-server did not accept the turn.",
+      );
+    }
+    await declineCodexAppApprovals(sent.approvals, session);
+    return { status: 200, response: { ok: true, action: request.action, agentId: request.agentId } };
+  } finally {
+    owned?.close();
+  }
+}
+
+async function executeClaudeDesktopControl(
+  request: ControlRequest,
+  agent: AgentSnapshot,
+  dependencies: ControlDependencies,
+): Promise<ControlExecution> {
+  const writesInput = request.action === "instruct" || request.action === "interrupt";
+  const refusal = writesInput
+    ? transmitRefusal({
+        target: { ...agent.target, kind: "claude-desktop" },
+        processState: agent.processState,
+        identityTrace: agent.identityTrace,
+      })
+    : null;
+  if (refusal) return failure(request, 409, refusal.code, refusal.message);
+  if (request.action === "interrupt") {
+    return failure(request, 409, "CONTROL_DISABLED", CLAUDE_DESKTOP_INTERRUPT_REASON);
+  }
+  if (request.action === "focus") {
+    const result = await dependencies.runner.run(["open", "-a", CLAUDE_DESKTOP_FOCUS_APP]);
+    if (result.timedOut) return failure(request, 504, "FOCUS_TIMEOUT", "Opening Claude Desktop timed out.", result);
+    if (result.exitCode !== 0) {
+      return failure(request, 502, "FOCUS_FAILED", "Could not open Claude Desktop.", result);
+    }
+    return { status: 200, response: { ok: true, action: request.action, agentId: request.agentId } };
+  }
+  return failure(
+    request,
+    409,
+    "UNSAFE_TARGET",
+    `${CLAUDE_DESKTOP_COPY.cause} ${CLAUDE_DESKTOP_COPY.remedy}`,
+  );
+}
+
+async function executeChatGptConsumerControl(
+  request: ControlRequest,
+  agent: AgentSnapshot,
+  dependencies: ControlDependencies,
+): Promise<ControlExecution> {
+  const writesInput = request.action === "instruct" || request.action === "interrupt";
+  const refusal = writesInput
+    ? transmitRefusal({
+        target: { ...agent.target, kind: "chatgpt" },
+        processState: agent.processState,
+        identityTrace: agent.identityTrace,
+      })
+    : null;
+  if (refusal) return failure(request, 409, refusal.code, refusal.message);
+  if (request.action === "focus") {
+    const result = await dependencies.runner.run(["open", "-a", "ChatGPT"]);
+    if (result.timedOut) return failure(request, 504, "FOCUS_TIMEOUT", "Opening ChatGPT timed out.", result);
+    if (result.exitCode !== 0) {
+      return failure(request, 502, "FOCUS_FAILED", "Could not open ChatGPT.", result);
+    }
+    return { status: 200, response: { ok: true, action: request.action, agentId: request.agentId } };
+  }
+  return failure(
+    request,
+    409,
+    "UNSAFE_TARGET",
+    `${CHATGPT_CONSUMER_COPY.cause} ${CHATGPT_CONSUMER_COPY.remedy}`,
+  );
 }
 
 export const CONTROL_ACTIONS: readonly ControlAction[] = ["focus", "instruct", "interrupt", "archive", "unarchive"];
