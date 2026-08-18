@@ -241,6 +241,38 @@ describe("readableClosing — the end of a message, not its beginning", () => {
     expect(extractLastMessageByRole("codex", [{ role: "assistant", content: spoken }], "assistant"))
       .toBe(spoken);
   });
+
+  test("thinking and tool guts never become last-close or human-message spoken text", () => {
+    const claudeBlocks = [
+      { type: "thinking", thinking: "SECRET PLAN inspect the mapper internals" },
+      { type: "redacted_thinking", data: "ciphertext-must-not-leak" },
+      { type: "tool_use", id: "toolu_01InspectMap", name: "Read", input: { file_path: "debug-identity.ts" } },
+      { type: "text", text: "The mapper is the gap." },
+    ];
+    const claudeResult = [
+      { type: "tool_result", tool_use_id: "toolu_01InspectMap", content: "function transcriptCandidate" },
+    ];
+    expect(readableClosing("claude", claudeBlocks)).toBe("The mapper is the gap.");
+    expect(readableHumanMessage("claude", claudeBlocks)).toBe("The mapper is the gap.");
+    expect(readableChatBody("claude", claudeBlocks)).toBe("The mapper is the gap.");
+    expect(readableClosing("claude", claudeResult)).toBeUndefined();
+    expect(readableHumanMessage("claude", claudeResult)).toBeUndefined();
+    expect(extractClosingByRole("claude", [
+      { role: "assistant", content: claudeBlocks },
+      { role: "user", content: claudeResult },
+    ], "assistant")).toBe("The mapper is the gap.");
+    expect(extractLastMessageByRole("claude", [
+      { role: "user", content: "Inspect the collector mapping." },
+      { role: "assistant", content: claudeBlocks },
+      { role: "user", content: claudeResult },
+    ], "user")).toBe("Inspect the collector mapping.");
+
+    const codexBlocks = [
+      { type: "output_text", text: "Identity routing is covered by exact-ID tests." },
+    ];
+    expect(readableClosing("codex", [{ type: "reasoning", text: "internal plan" }])).toBeUndefined();
+    expect(readableClosing("codex", codexBlocks)).toBe("Identity routing is covered by exact-ID tests.");
+  });
 });
 
 /* Chat must keep the CLI's line breaks. The row one-liner still joins; this
