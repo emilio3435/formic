@@ -195,7 +195,7 @@ describe("healthy-empty is not absent; absence has history", () => {
   test("a collector that was healthy and then goes missing keeps lastHealthyAt and is not green", async () => {
     const state = stateWith([{}, { muse: ABSENT }]);
     await state.refresh();
-    const healthyAt = state.get().totals.sourceHealth?.byProvider?.muse.lastHealthyAt;
+    const healthyAt = state.get().totals.sourceHealth?.byProvider?.muse.lastHealthyAt ?? null;
     expect(healthyAt).toBeTruthy();
 
     await state.refresh();
