@@ -546,7 +546,7 @@ describe("Grok Bot replica transcript lines", () => {
   const NOW = Date.parse("2026-08-16T12:00:00.000Z");
   const grok = { provider: "grok" } as AgentSnapshot;
 
-  test("T-replica-untouched: a schemaVersion 1 replica still yields user and assistant lines", () => {
+  test("a schemaVersion 1 replica omits untyped send-message lines", () => {
     const raw = JSON.stringify({
       schemaVersion: 1,
       value: {
@@ -578,19 +578,15 @@ describe("Grok Bot replica transcript lines", () => {
     });
 
     const lines = transcriptLines(grok, raw);
-    expect(lines).toHaveLength(4);
-    expect(lines.map((line) => line.role)).toEqual(["user", "assistant", "user", "assistant"]);
+    expect(lines).toHaveLength(2);
+    expect(lines.map((line) => line.role)).toEqual(["user", "user"]);
     expect(lines.map((line) => line.text)).toEqual([
       "Please parse the persisted conversation.",
-      "Parsed the Grok Bot transcript.",
       "Ship the closer next.",
-      "Shipped the closer from send-message.",
     ]);
     expect(lines.map((line) => line.at)).toEqual([
       new Date(NOW - 4_000).toISOString(),
-      new Date(NOW - 3_000).toISOString(),
       new Date(NOW - 2_000).toISOString(),
-      new Date(NOW - 1_000).toISOString(),
     ]);
   });
 
@@ -621,11 +617,6 @@ describe("Grok Bot replica transcript lines", () => {
         at: new Date(NOW - 6_000).toISOString(),
         role: "user",
         text: "Look at this file.",
-      },
-      {
-        at: new Date(NOW - 3_000).toISOString(),
-        role: "assistant",
-        text: "Here is the close after the cards.",
       },
     ]);
   });

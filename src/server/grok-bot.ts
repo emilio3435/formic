@@ -62,7 +62,7 @@ function timestamp(value: number | undefined): string | undefined {
 
 function lastEntryText(value: unknown): string | undefined {
   const entry = record(value);
-  /* Live roster lastEntry is `{ kind: "text", text }`, the agent close. */
+  /* Live roster lastEntry is `{ kind: "text", text }`, without an author. */
   return text(value) ?? text(entry?.text) ?? text(entry?.content) ?? text(entry?.message);
 }
 
@@ -181,10 +181,10 @@ export function parseReplica(value: unknown): ParsedGrokBotReplica {
 
     const kind = text(entry.kind);
     const role = text(entry.role);
-    /* Live schemaVersion 1: send-message is agent → user. kind:message
-       role:assistant is an inter-agent copy (toAgent), not the row close.
-       The inverted test fixture treated string send-message as the operator
-       — do not implement that. */
+    /* Live schemaVersion 1 does not tag send-message with an author. Preserve
+       its text as a raw tail and turn boundary, but do not promote it to a
+       user or assistant message. kind:message role:assistant is an inter-agent
+       copy (toAgent), not evidence of a human-facing assistant turn. */
     if (kind === "user-attachment") continue;
     if (kind === "message" && role === "assistant") continue;
 
@@ -193,13 +193,8 @@ export function parseReplica(value: unknown): ParsedGrokBotReplica {
 
     const at = timestamp(millis(entry.timestampMs));
     if (kind === "send-message") {
-      clock.observe(at, "assistant", { endsTurn: true });
+      clock.observe(at, "system", { endsTurn: true });
       transcriptTail = content;
-      humanMessages.push({
-        role: "assistant",
-        content,
-        timestamp: at,
-      });
       continue;
     }
 
