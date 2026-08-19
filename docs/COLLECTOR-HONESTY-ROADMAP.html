@@ -1,0 +1,1095 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Formic collector accomplishments, evidence boundaries, and future direction after PR #29.">
+  <title>Formic — Collector honesty roadmap</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;family=Syne:wght@700;800&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="design/formic/formic-tokens.css">
+  <style>
+    * { box-sizing: border-box; }
+
+    html {
+      scroll-behavior: smooth;
+      scroll-padding-top: 84px;
+    }
+
+    body {
+      margin: 0;
+      color: var(--color-text-primary);
+      background: var(--color-surface-canvas);
+      font-family: var(--font-ui);
+      font-size: 16px;
+      line-height: 1.6;
+      text-rendering: optimizeLegibility;
+    }
+
+    a {
+      color: var(--color-text-link);
+      text-underline-offset: 3px;
+      text-decoration-thickness: 1px;
+    }
+
+    a:hover { color: var(--color-brand-secondary-hover); }
+
+    a:focus-visible,
+    summary:focus-visible {
+      outline: none;
+      box-shadow: var(--color-focus-ring);
+      border-radius: var(--radius-sm);
+    }
+
+    code {
+      padding: .08rem .3rem;
+      border-radius: 4px;
+      color: var(--gray-700);
+      background: var(--color-surface-subtle);
+      font-family: var(--font-mono);
+      font-size: .82em;
+    }
+
+    .shell {
+      width: min(1180px, calc(100% - 40px));
+      margin: 0 auto;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      border-bottom: 1px solid rgba(226, 229, 233, .9);
+      background: rgba(255, 255, 255, .94);
+      backdrop-filter: blur(14px);
+    }
+
+    .topbar-inner {
+      min-height: 68px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-6);
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--color-text-primary);
+      text-decoration: none;
+    }
+
+    .brand img {
+      width: 30px;
+      height: 30px;
+    }
+
+    .brand-word {
+      font-family: var(--font-display);
+      font-size: 1.25rem;
+      font-weight: 800;
+      letter-spacing: -.035em;
+    }
+
+    .brand-note {
+      padding-left: 11px;
+      border-left: 1px solid var(--color-border-default);
+      color: var(--color-text-tertiary);
+      font-family: var(--font-mono);
+      font-size: .7rem;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+
+    .nav {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .nav a {
+      padding: 7px 10px;
+      border-radius: var(--radius-sm);
+      color: var(--color-text-secondary);
+      font-size: .78rem;
+      font-weight: 600;
+      text-decoration: none;
+    }
+
+    .nav a:hover {
+      color: var(--color-text-primary);
+      background: var(--color-surface-subtle);
+    }
+
+    main { overflow: hidden; }
+
+    .hero {
+      padding: clamp(74px, 9vw, 122px) 0 64px;
+      border-bottom: 1px solid var(--color-border-default);
+    }
+
+    .hero-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(320px, .65fr);
+      gap: clamp(44px, 7vw, 88px);
+      align-items: center;
+    }
+
+    .eyebrow {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 0 0 18px;
+      color: var(--color-brand-primary);
+      font-family: var(--font-mono);
+      font-size: .72rem;
+      font-weight: 600;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+
+    .eyebrow::before {
+      width: 28px;
+      height: 2px;
+      background: var(--color-brand-primary);
+      content: "";
+    }
+
+    h1,
+    h2,
+    h3,
+    p { margin-top: 0; }
+
+    h1 {
+      max-width: 780px;
+      margin-bottom: 24px;
+      font-family: var(--font-display);
+      font-size: clamp(3.2rem, 7.4vw, 6.9rem);
+      font-weight: 800;
+      letter-spacing: -.065em;
+      line-height: .93;
+    }
+
+    .hero-lede {
+      max-width: 700px;
+      margin-bottom: 30px;
+      color: var(--color-text-secondary);
+      font-size: clamp(1.05rem, 2vw, 1.3rem);
+      line-height: 1.58;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .button {
+      display: inline-flex;
+      min-height: 44px;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 16px;
+      border: 1px solid var(--color-border-default);
+      border-radius: var(--radius-md);
+      color: var(--color-text-primary);
+      background: var(--color-surface-card);
+      box-shadow: var(--shadow-sm);
+      font-size: .86rem;
+      font-weight: 600;
+      text-decoration: none;
+    }
+
+    .button.primary {
+      border-color: var(--color-brand-primary);
+      color: var(--color-text-on-brand);
+      background: var(--color-brand-primary);
+    }
+
+    .button:hover {
+      border-color: var(--color-brand-secondary);
+      color: var(--color-text-primary);
+    }
+
+    .button.primary:hover {
+      border-color: var(--color-brand-primary-hover);
+      color: var(--color-text-on-brand);
+      background: var(--color-brand-primary-hover);
+    }
+
+    .contract {
+      position: relative;
+      padding: 28px;
+      border: 1px solid var(--color-border-default);
+      border-radius: var(--radius-lg);
+      background: var(--color-surface-card);
+      box-shadow: var(--shadow-lg);
+    }
+
+    .contract::before {
+      position: absolute;
+      top: 0;
+      right: 28px;
+      left: 28px;
+      height: 4px;
+      border-radius: 0 0 4px 4px;
+      background: var(--color-brand-primary);
+      content: "";
+    }
+
+    .contract-label {
+      margin-bottom: 22px;
+      color: var(--color-text-tertiary);
+      font-family: var(--font-mono);
+      font-size: .68rem;
+      font-weight: 600;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .contract-row {
+      display: grid;
+      grid-template-columns: 32px 1fr;
+      gap: 13px;
+      padding: 16px 0;
+      border-top: 1px solid var(--color-border-subtle);
+    }
+
+    .contract-row:first-of-type {
+      padding-top: 0;
+      border-top: 0;
+    }
+
+    .contract-index {
+      color: var(--color-brand-secondary);
+      font-family: var(--font-mono);
+      font-size: .76rem;
+      font-weight: 600;
+    }
+
+    .contract-row strong {
+      display: block;
+      margin-bottom: 2px;
+      font-size: .92rem;
+    }
+
+    .contract-row span:last-child {
+      color: var(--color-text-secondary);
+      font-size: .84rem;
+    }
+
+    .report-meta {
+      margin: 20px 0 0;
+      color: var(--color-text-tertiary);
+      font-family: var(--font-mono);
+      font-size: .68rem;
+      line-height: 1.7;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      margin-top: -1px;
+      border-right: 1px solid var(--color-border-default);
+      border-bottom: 1px solid var(--color-border-default);
+      border-left: 1px solid var(--color-border-default);
+      border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+      background: var(--color-surface-card);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .metric {
+      min-height: 126px;
+      padding: 23px 22px;
+      border-right: 1px solid var(--color-border-subtle);
+    }
+
+    .metric:last-child { border-right: 0; }
+
+    .metric strong {
+      display: block;
+      margin-bottom: 7px;
+      font-family: var(--font-mono);
+      font-size: clamp(1.65rem, 3vw, 2.25rem);
+      font-weight: 500;
+      letter-spacing: -.04em;
+      line-height: 1;
+    }
+
+    .metric span {
+      color: var(--color-text-secondary);
+      font-size: .78rem;
+      line-height: 1.35;
+    }
+
+    .metric.format strong { color: var(--color-status-info); }
+    .metric.guard strong { color: var(--color-brand-secondary); }
+    .metric.evidence strong { color: var(--color-status-warning); }
+    .metric.clean strong { color: var(--color-status-success); }
+
+    .section {
+      padding: clamp(76px, 9vw, 116px) 0;
+      border-bottom: 1px solid var(--color-border-default);
+    }
+
+    .section.soft { background: var(--color-surface-sunken); }
+
+    .section-head {
+      display: grid;
+      grid-template-columns: minmax(0, .55fr) minmax(360px, .45fr);
+      gap: 50px;
+      align-items: end;
+      margin-bottom: 42px;
+    }
+
+    .section-kicker {
+      margin-bottom: 10px;
+      color: var(--color-brand-primary);
+      font-family: var(--font-mono);
+      font-size: .7rem;
+      font-weight: 600;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+
+    h2 {
+      margin-bottom: 0;
+      font-family: var(--font-display);
+      font-size: clamp(2.25rem, 5vw, 4.4rem);
+      letter-spacing: -.055em;
+      line-height: 1;
+    }
+
+    .section-copy {
+      margin-bottom: 2px;
+      color: var(--color-text-secondary);
+      font-size: 1rem;
+    }
+
+    .accomplishments {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+    }
+
+    .accomplishment {
+      min-height: 248px;
+      padding: 25px;
+      border: 1px solid var(--color-border-default);
+      border-radius: var(--radius-lg);
+      background: var(--color-surface-card);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .card-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 30px;
+    }
+
+    .card-number {
+      color: var(--color-text-tertiary);
+      font-family: var(--font-mono);
+      font-size: .72rem;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 9px;
+      border-radius: var(--radius-pill);
+      font-size: .64rem;
+      font-weight: 700;
+      letter-spacing: .055em;
+      line-height: 1.4;
+      text-transform: uppercase;
+    }
+
+    .pill::before {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+      content: "";
+    }
+
+    .pill.landed {
+      color: var(--color-status-success);
+      background: var(--color-status-success-tint);
+    }
+
+    .pill.format {
+      color: var(--color-status-info);
+      background: var(--color-status-info-tint);
+    }
+
+    .pill.guard {
+      color: var(--tag-indigo-fg);
+      background: var(--tag-indigo-bg);
+    }
+
+    .pill.evidence {
+      color: var(--color-status-warning);
+      background: var(--color-status-warning-tint);
+    }
+
+    .accomplishment h3,
+    .gap-card h3,
+    .move h3 {
+      margin-bottom: 10px;
+      font-size: 1.05rem;
+      letter-spacing: -.02em;
+      line-height: 1.35;
+    }
+
+    .accomplishment p {
+      margin-bottom: 20px;
+      color: var(--color-text-secondary);
+      font-size: .88rem;
+    }
+
+    .evidence-link {
+      color: var(--color-text-link);
+      font-family: var(--font-mono);
+      font-size: .68rem;
+      font-weight: 500;
+      text-decoration: none;
+    }
+
+    .evidence-link:hover { text-decoration: underline; }
+
+    .roadmap-intro {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+      margin-bottom: 56px;
+    }
+
+    .lane-summary {
+      padding: 24px;
+      border: 1px solid var(--color-border-default);
+      border-radius: var(--radius-lg);
+      background: var(--color-surface-card);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .lane-summary .count {
+      display: block;
+      margin-bottom: 18px;
+      font-family: var(--font-mono);
+      font-size: 2.35rem;
+      font-weight: 500;
+      letter-spacing: -.05em;
+      line-height: 1;
+    }
+
+    .lane-summary.format .count { color: var(--color-status-info); }
+    .lane-summary.guard .count { color: var(--color-brand-secondary); }
+    .lane-summary.evidence .count { color: var(--color-status-warning); }
+
+    .lane-summary h3 {
+      margin-bottom: 6px;
+      font-size: .98rem;
+    }
+
+    .lane-summary p {
+      margin-bottom: 0;
+      color: var(--color-text-secondary);
+      font-size: .82rem;
+    }
+
+    .roadmap-lane + .roadmap-lane { margin-top: 74px; }
+
+    .lane-head {
+      display: grid;
+      grid-template-columns: minmax(220px, .34fr) minmax(0, .66fr);
+      gap: 36px;
+      align-items: start;
+      margin-bottom: 24px;
+      padding-top: 25px;
+      border-top: 1px solid var(--color-border-default);
+    }
+
+    .lane-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .lane-title h3 {
+      margin: 0;
+      font-family: var(--font-display);
+      font-size: 1.55rem;
+      letter-spacing: -.035em;
+    }
+
+    .lane-head p {
+      max-width: 680px;
+      margin-bottom: 0;
+      color: var(--color-text-secondary);
+      font-size: .9rem;
+    }
+
+    .gap-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+
+    .gap-card {
+      display: flex;
+      min-height: 294px;
+      flex-direction: column;
+      padding: 22px;
+      border: 1px solid var(--color-border-default);
+      border-radius: var(--radius-md);
+      background: var(--color-surface-card);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .gap-id {
+      color: var(--color-text-tertiary);
+      font-family: var(--font-mono);
+      font-size: .7rem;
+      font-weight: 600;
+      letter-spacing: .04em;
+    }
+
+    .gap-card h3 { margin-top: 18px; }
+
+    .field {
+      margin-bottom: 19px;
+      color: var(--color-text-tertiary);
+      font-family: var(--font-mono);
+      font-size: .66rem;
+      line-height: 1.5;
+    }
+
+    .truth,
+    .exit {
+      margin-bottom: 12px;
+      color: var(--color-text-secondary);
+      font-size: .8rem;
+    }
+
+    .truth strong,
+    .exit strong {
+      display: block;
+      margin-bottom: 2px;
+      color: var(--color-text-primary);
+      font-size: .66rem;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+
+    .gap-card .evidence-link { margin-top: auto; }
+
+    .moves {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 1px;
+      overflow: hidden;
+      border: 1px solid var(--color-border-default);
+      border-radius: var(--radius-lg);
+      background: var(--color-border-default);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .move {
+      min-height: 254px;
+      padding: 25px;
+      background: var(--color-surface-card);
+    }
+
+    .move-index {
+      display: block;
+      margin-bottom: 38px;
+      color: var(--color-brand-primary);
+      font-family: var(--font-mono);
+      font-size: .72rem;
+      font-weight: 600;
+    }
+
+    .move p {
+      margin-bottom: 0;
+      color: var(--color-text-secondary);
+      font-size: .84rem;
+    }
+
+    .callout {
+      display: grid;
+      grid-template-columns: 42px 1fr;
+      gap: 18px;
+      margin-top: 28px;
+      padding: 22px 24px;
+      border: 1px solid var(--color-border-default);
+      border-left: 4px solid var(--color-status-success);
+      border-radius: var(--radius-md);
+      background: var(--color-surface-card);
+    }
+
+    .callout-mark {
+      color: var(--color-status-success);
+      font-family: var(--font-mono);
+      font-size: 1.15rem;
+      font-weight: 600;
+    }
+
+    .callout strong {
+      display: block;
+      margin-bottom: 3px;
+    }
+
+    .callout p {
+      margin-bottom: 0;
+      color: var(--color-text-secondary);
+      font-size: .86rem;
+    }
+
+    footer {
+      padding: 34px 0 48px;
+      color: var(--color-text-tertiary);
+      font-size: .76rem;
+    }
+
+    .footer-inner {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 28px;
+    }
+
+    footer p { margin-bottom: 0; }
+
+    .footer-links {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 16px;
+    }
+
+    @media (max-width: 980px) {
+      .hero-grid,
+      .section-head {
+        grid-template-columns: 1fr;
+      }
+
+      .contract { max-width: 680px; }
+      .metrics { grid-template-columns: repeat(3, 1fr); }
+      .metric:nth-child(3) { border-right: 0; }
+      .metric:nth-child(-n + 3) { border-bottom: 1px solid var(--color-border-subtle); }
+      .accomplishments,
+      .gap-grid { grid-template-columns: repeat(2, 1fr); }
+      .moves { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 720px) {
+      .shell { width: min(100% - 28px, 1180px); }
+      .topbar-inner { min-height: 60px; }
+      .brand-note,
+      .nav { display: none; }
+      .hero { padding-top: 66px; }
+      h1 { font-size: clamp(3rem, 17vw, 4.8rem); }
+      .metrics { grid-template-columns: repeat(2, 1fr); }
+      .metric { border-bottom: 1px solid var(--color-border-subtle); }
+      .metric:nth-child(2n) { border-right: 0; }
+      .metric:nth-child(3) { border-right: 1px solid var(--color-border-subtle); }
+      .metric:last-child {
+        grid-column: 1 / -1;
+        border-bottom: 0;
+      }
+      .section { padding: 72px 0; }
+      .section-head { gap: 22px; }
+      .accomplishments,
+      .roadmap-intro,
+      .gap-grid,
+      .moves { grid-template-columns: 1fr; }
+      .lane-head { grid-template-columns: 1fr; gap: 12px; }
+      .gap-card { min-height: 0; }
+      .footer-inner { flex-direction: column; }
+      .footer-links { justify-content: flex-start; }
+    }
+
+    @media print {
+      .topbar { position: static; }
+      .nav,
+      .actions { display: none; }
+      .hero { padding-top: 34px; }
+      .section { break-before: page; }
+      .accomplishment,
+      .gap-card,
+      .move { break-inside: avoid; }
+      .section.soft { background: white; }
+      a { color: inherit; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="shell topbar-inner">
+      <a class="brand" href="#top" aria-label="Formic collector honesty report home">
+        <img src="design/formic/formic-mark.svg" alt="">
+        <span class="brand-word">Formic</span>
+        <span class="brand-note">collector truth report</span>
+      </a>
+      <nav class="nav" aria-label="Report sections">
+        <a href="#accomplishments">Accomplishments</a>
+        <a href="#remaining">Remaining map</a>
+        <a href="#direction">Next moves</a>
+        <a href="PARITY.md#known-collector-field-incompatibilities">Ledger ↗</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="top">
+    <section class="hero">
+      <div class="shell hero-grid">
+        <div>
+          <p class="eyebrow">After PR #29 · 19 August 2026</p>
+          <h1>Unknown is an honest answer.</h1>
+          <p class="hero-lede">Formic now has an executable boundary between what a collector observed, what a source format cannot provide, and what the product must refuse to infer. This report celebrates the line we held and turns every remaining gap into a concrete evidence gate.</p>
+          <div class="actions">
+            <a class="button primary" href="#remaining">Explore the remaining map</a>
+            <a class="button" href="PARITY.md#known-collector-field-incompatibilities">Read the canonical ledger</a>
+            <a class="button" href="https://github.com/emilio3435/formic/pull/29">Merged PR #29 ↗</a>
+          </div>
+        </div>
+
+        <aside class="contract" aria-labelledby="contract-title">
+          <p class="contract-label" id="contract-title">The collector contract</p>
+          <div class="contract-row">
+            <span class="contract-index">01</span>
+            <span><strong>If the source says it</strong><span>Publish the observed field with its provenance.</span></span>
+          </div>
+          <div class="contract-row">
+            <span class="contract-index">02</span>
+            <span><strong>If the source is silent</strong><span>Leave the field absent or <code>null</code>. Never substitute a related signal.</span></span>
+          </div>
+          <div class="contract-row">
+            <span class="contract-index">03</span>
+            <span><strong>If the format changes</strong><span>Land the fixture, parser, failing-on-fake test, and ledger update together.</span></span>
+          </div>
+          <p class="report-meta">Audited against merge <code>3cf79ae</code><br>Canonical source: <code>docs/PARITY.md</code></p>
+        </aside>
+      </div>
+    </section>
+
+    <div class="shell metrics" aria-label="Ledger summary">
+      <div class="metric"><strong>15</strong><span>standing field boundaries</span></div>
+      <div class="metric format"><strong>9</strong><span>await a direct source-format change</span></div>
+      <div class="metric guard"><strong>4</strong><span>guardrails to preserve</span></div>
+      <div class="metric evidence"><strong>2</strong><span>bounded evidence probes</span></div>
+      <div class="metric clean"><strong>0</strong><span>heuristic fills accepted</span></div>
+    </div>
+
+    <section class="section" id="accomplishments">
+      <div class="shell">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">01 · Accomplishments</p>
+            <h2>The truth layer landed.</h2>
+          </div>
+          <p class="section-copy">The win is not a fuller dashboard at any cost. It is a dashboard whose fields mean what they say, whose unsafe controls refuse honestly, and whose tests turn invented certainty red.</p>
+        </div>
+
+        <div class="accomplishments">
+          <article class="accomplishment">
+            <div class="card-top"><span class="card-number">A-01</span><span class="pill landed">landed</span></div>
+            <h3>Grok Bot authorship is no longer guessed</h3>
+            <p>Untyped <code>send-message</code> text remains available as a raw transcript tail while assistant-only closing fields stay <code>null</code>.</p>
+            <a class="evidence-link" href="../src/server/grok-bot.ts">parseReplica · source evidence ↗</a>
+          </article>
+
+          <article class="accomplishment">
+            <div class="card-top"><span class="card-number">A-02</span><span class="pill landed">landed</span></div>
+            <h3>Fake fields now fail in CI</h3>
+            <p>The regression test failed against the old parser when one unattributed line populated <code>lastAgentMessage</code>, <code>lastAgentClosing</code>, and <code>lastAgentChatBody</code>.</p>
+            <a class="evidence-link" href="../tests/grok-bot.test.ts">failing-on-fake regression ↗</a>
+          </article>
+
+          <article class="accomplishment">
+            <div class="card-top"><span class="card-number">A-03</span><span class="pill landed">landed</span></div>
+            <h3>Claude Desktop Send tells the truth</h3>
+            <p>Claude Code in cmux stays writable. Claude.app refuses Send because official links open or prefill; they do not attest submission into the active GUI thread.</p>
+            <a class="evidence-link" href="CLAUDE-DESKTOP-SEND-EVIDENCE.md">Desktop write-surface evidence ↗</a>
+          </article>
+
+          <article class="accomplishment">
+            <div class="card-top"><span class="card-number">A-04</span><span class="pill landed">landed</span></div>
+            <h3>A percent stays a percent</h3>
+            <p>Cursor's own <code>contextUsagePercent</code> may fill <code>occupancyPct</code>. It never becomes a token total through <code>% × window</code>.</p>
+            <a class="evidence-link" href="../src/server/cursor.ts">fillCursorOccupancy · native meter ↗</a>
+          </article>
+
+          <article class="accomplishment">
+            <div class="card-top"><span class="card-number">A-05</span><span class="pill landed">landed</span></div>
+            <h3>Parity advanced without cosmetic coverage</h3>
+            <p>Muse and Copilot attach windows only from known models; Antigravity keeps tokens unknown; the model catalog records what is known and omits unstable prices.</p>
+            <a class="evidence-link" href="PARITY.md#work-order-field-parity-then-new-harnesses">completed parity work ↗</a>
+          </article>
+
+          <article class="accomplishment">
+            <div class="card-top"><span class="card-number">A-06</span><span class="pill landed">landed</span></div>
+            <h3>Missing evidence no longer masquerades as zero</h3>
+            <p>No per-call series is absent, not <code>[]</code>. Missing stores are absent, not empty sessions. Unpriced usage is unknown, never a receipt-like <code>$0</code>.</p>
+            <a class="evidence-link" href="../src/server/session-calls.ts">absence contract · session calls ↗</a>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section soft" id="remaining">
+      <div class="shell">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">02 · Remaining map</p>
+            <h2>Three honest kinds of “not yet.”</h2>
+          </div>
+          <p class="section-copy">A ledger row is not automatically a feature request. Some rows wait on upstream evidence, some defend a safety boundary, and two ask us to gather a bounded fixture before deciding anything.</p>
+        </div>
+
+        <div class="roadmap-intro" aria-label="Roadmap lanes">
+          <div class="lane-summary format">
+            <span class="count">9</span>
+            <h3>Await format</h3>
+            <p>Do not code ahead of the source. Watch for a directly attributable field, then fixture it.</p>
+          </div>
+          <div class="lane-summary guard">
+            <span class="count">4</span>
+            <h3>Preserve guardrail</h3>
+            <p>These refusals protect identity, cost, and source boundaries. “Fixing” them today would reduce trust.</p>
+          </div>
+          <div class="lane-summary evidence">
+            <span class="count">2</span>
+            <h3>Gather evidence</h3>
+            <p>Run a bounded observation or obtain a representative fixture before choosing an implementation.</p>
+          </div>
+        </div>
+
+        <section class="roadmap-lane" aria-labelledby="format-title">
+          <div class="lane-head">
+            <div class="lane-title"><span class="pill format">await format</span><h3 id="format-title">Watch upstream</h3></div>
+            <p>Nine fields are unavailable because the source does not publish the required authorship, accounting, identity, timing, or title evidence. The next action is observation, not approximation.</p>
+          </div>
+          <div class="gap-grid">
+            <article class="gap-card" id="i-100">
+              <span class="gap-id">I-100</span>
+              <h3>Grok Bot · assistant closing fields</h3>
+              <p class="field">lastAgentMessage · lastAgentClosing · lastAgentChatBody</p>
+              <p class="truth"><strong>Current truth</strong>Untyped output stays only in <code>transcriptTail</code>.</p>
+              <p class="exit"><strong>Exit gate</strong>An author-tagged, human-facing assistant event lands in the replica format and the parser test consumes it.</p>
+              <a class="evidence-link" href="../src/server/grok-bot.ts">parseReplica ↗</a>
+            </article>
+
+            <article class="gap-card" id="i-101">
+              <span class="gap-id">I-101</span>
+              <h3>Cursor · session token total</h3>
+              <p class="field">tokens.sessionTotal</p>
+              <p class="truth"><strong>Current truth</strong>Observed latest-turn totals and Cursor's native occupancy percent remain different units.</p>
+              <p class="exit"><strong>Exit gate</strong>Cursor persists an explicit cumulative session total. Occupancy never substitutes for it.</p>
+              <a class="evidence-link" href="../src/server/cursor.ts">fillCursorOccupancy ↗</a>
+            </article>
+
+            <article class="gap-card" id="i-102">
+              <span class="gap-id">I-102</span>
+              <h3>Grok Build · session token total</h3>
+              <p class="field">tokens.sessionTotal</p>
+              <p class="truth"><strong>Current truth</strong><code>contextTokensUsed</code> is latest-turn occupancy, not cumulative accounting.</p>
+              <p class="exit"><strong>Exit gate</strong>Grok emits a cumulative total with defined semantics. Per-agent dollars remain a separate guardrail.</p>
+              <a class="evidence-link" href="../src/server/grok.ts">tokenUsage ↗</a>
+            </article>
+
+            <article class="gap-card" id="i-103">
+              <span class="gap-id">I-103</span>
+              <h3>Codex + Cursor · per-call series</h3>
+              <p class="field">callSizes</p>
+              <p class="truth"><strong>Current truth</strong>The API returns unavailable, never an empty series that would assert zero calls.</p>
+              <p class="exit"><strong>Exit gate</strong>The source records call-level usage boundaries that can be re-derived and prefix-matched.</p>
+              <a class="evidence-link" href="../src/server/session-calls.ts">NO_PER_CALL_REPORTING ↗</a>
+            </article>
+
+            <article class="gap-card" id="i-105">
+              <span class="gap-id">I-105</span>
+              <h3>Grok Bot · process identity</h3>
+              <p class="field">processIds · processAlive</p>
+              <p class="truth"><strong>Current truth</strong>A Mac process roster cannot prove a Bot chat exists or disappeared.</p>
+              <p class="exit"><strong>Exit gate</strong>A source path or command carries exact Bot session identity and joins to a process.</p>
+              <a class="evidence-link" href="../src/server/snapshot.ts">roster exclusion ↗</a>
+            </article>
+
+            <article class="gap-card" id="i-106">
+              <span class="gap-id">I-106</span>
+              <h3>Hermes · per-turn timestamps</h3>
+              <p class="field">updatedAt after header</p>
+              <p class="truth"><strong>Current truth</strong>The header timestamp and transcript mtime are the only observed clocks.</p>
+              <p class="exit"><strong>Exit gate</strong>Later turns carry direct source timestamps and parser tests adopt them locally.</p>
+              <a class="evidence-link" href="../src/server/hermes.ts">createHermesParser ↗</a>
+            </article>
+
+            <article class="gap-card" id="i-107">
+              <span class="gap-id">I-107</span>
+              <h3>Prime · authored title</h3>
+              <p class="field">displayName</p>
+              <p class="truth"><strong>Current truth</strong><code>Prime · id</code> is an explicit placeholder, not a claimed source title.</p>
+              <p class="exit"><strong>Exit gate</strong>Prime writes an authored title field; retain the placeholder only as fallback.</p>
+              <a class="evidence-link" href="../src/server/prime.ts">parsePrimeJsonl ↗</a>
+            </article>
+
+            <article class="gap-card" id="i-108">
+              <span class="gap-id">I-108</span>
+              <h3>Cursor children · start time</h3>
+              <p class="field">startedAt</p>
+              <p class="truth"><strong>Current truth</strong>The child transcript has an update time but no creation time.</p>
+              <p class="exit"><strong>Exit gate</strong>The child source writes its own creation timestamp. Parent and mtime substitutes stay forbidden.</p>
+              <a class="evidence-link" href="../src/server/cursor.ts">parseCursorChildSession ↗</a>
+            </article>
+
+            <article class="gap-card" id="i-111">
+              <span class="gap-id">I-111</span>
+              <h3>Antigravity v1 · token usage</h3>
+              <p class="field">tokens</p>
+              <p class="truth"><strong>Current truth</strong>A model can attach a catalog window while usage remains explicitly unknown.</p>
+              <p class="exit"><strong>Exit gate</strong>A JSON field or documented, fixture-backed decoder yields observed usage and tests pin it.</p>
+              <a class="evidence-link" href="../src/server/antigravity.ts">UNKNOWN_TOKENS ↗</a>
+            </article>
+          </div>
+        </section>
+
+        <section class="roadmap-lane" aria-labelledby="guard-title">
+          <div class="lane-head">
+            <div class="lane-title"><span class="pill guard">guardrail</span><h3 id="guard-title">Protect the boundary</h3></div>
+            <p>Four rows are already doing the right thing. Revisit them only when a new, exact contract exists. Until then, they prevent wrong routing, invented receipts, and settings files masquerading as sessions.</p>
+          </div>
+          <div class="gap-grid">
+            <article class="gap-card" id="i-104">
+              <span class="gap-id">I-104</span>
+              <h3>Cursor · hook lifecycle</h3>
+              <p class="field">hook facts · process facts</p>
+              <p class="truth"><strong>Current truth</strong>Cursor bypasses native hook attachment because GUI pids are not session hooks.</p>
+              <p class="exit"><strong>Revisit only when</strong>Cursor supplies session-specific pid, start, and lifecycle evidence or a supported hook contract.</p>
+              <a class="evidence-link" href="../src/server/collectors.ts">finalizeSessionProviders ↗</a>
+            </article>
+
+            <article class="gap-card" id="i-109">
+              <span class="gap-id">I-109</span>
+              <h3>GUI surfaces · Send identity</h3>
+              <p class="field">allowCwdFallback</p>
+              <p class="truth"><strong>Current truth</strong>Cursor GUI and Antigravity IDE reject cwd-only routing.</p>
+              <p class="exit"><strong>Revisit only when</strong>The source exposes an exact writable surface/session binding. A shared home cwd never qualifies.</p>
+              <a class="evidence-link" href="../src/server/cursor.ts">cwd fallback refusal ↗</a>
+            </article>
+
+            <article class="gap-card" id="i-110">
+              <span class="gap-id">I-110</span>
+              <h3>All collectors · per-agent dollars</h3>
+              <p class="field">cost</p>
+              <p class="truth"><strong>Current truth</strong>BurnBar owns fleet dollar evidence; missing or unpriced data stays unknown.</p>
+              <p class="exit"><strong>Revisit only when</strong>An approved collector contract supplies authoritative per-session cost. Estimates do not qualify.</p>
+              <a class="evidence-link" href="../src/server/collectors.ts">makeAgent contract ↗</a>
+            </article>
+
+            <article class="gap-card" id="i-114">
+              <span class="gap-id">I-114</span>
+              <h3>Gemini leftovers · session discovery</h3>
+              <p class="field">~/.gemini/settings.json</p>
+              <p class="truth"><strong>Current truth</strong>Hook settings alone produce zero session rows.</p>
+              <p class="exit"><strong>Revisit only when</strong>A real Gemini session store appears under a distinct root. Parent settings remain excluded.</p>
+              <a class="evidence-link" href="../tests/antigravity.test.ts">zero-row regression ↗</a>
+            </article>
+          </div>
+        </section>
+
+        <section class="roadmap-lane" aria-labelledby="evidence-title">
+          <div class="lane-head">
+            <div class="lane-title"><span class="pill evidence">needs evidence</span><h3 id="evidence-title">Probe before building</h3></div>
+            <p>These are the two bounded next investigations. Each begins with a representative artifact or real local run and stops if the evidence cannot support a deterministic parser.</p>
+          </div>
+          <div class="gap-grid">
+            <article class="gap-card" id="i-112">
+              <span class="gap-id">I-112</span>
+              <h3>Antigravity legacy · protobuf conversations</h3>
+              <p class="field">*.pb conversations</p>
+              <p class="truth"><strong>Current truth</strong>The scanner enumerates proven <code>*.db</code> conversations only.</p>
+              <p class="exit"><strong>Evidence needed</strong>A representative, shareable fixture and a decoder that can emit an honest row without guessing unknown tags.</p>
+              <a class="evidence-link" href="../src/server/antigravity.ts">collectSurface ↗</a>
+            </article>
+
+            <article class="gap-card" id="i-113">
+              <span class="gap-id">I-113</span>
+              <h3>Muse · first local store</h3>
+              <p class="field">sessions when store is absent</p>
+              <p class="truth"><strong>Current truth</strong>A missing Muse root returns honest source absence and synthesizes no sessions.</p>
+              <p class="exit"><strong>Evidence needed</strong>Run Muse locally once, compare the written store with fixtures, and update only from the observed schema.</p>
+              <a class="evidence-link" href="../src/server/muse.ts">collectMuseSessions ↗</a>
+            </article>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section class="section" id="direction">
+      <div class="shell">
+        <div class="section-head">
+          <div>
+            <p class="section-kicker">03 · Future direction</p>
+            <h2>Evidence first. Then expand.</h2>
+          </div>
+          <p class="section-copy">The next chapter is not “fill every cell.” It is to shorten the distance between a new source fact and a verified collector while keeping every fail-closed boundary intact.</p>
+        </div>
+
+        <div class="moves">
+          <article class="move">
+            <span class="move-index">01 / observe</span>
+            <h3>Run the two bounded probes</h3>
+            <p>Capture a representative Antigravity legacy fixture and one real local Muse store. If either format cannot support a deterministic parser, record that and stop.</p>
+          </article>
+          <article class="move">
+            <span class="move-index">02 / monitor</span>
+            <h3>Watch source formats, not symptoms</h3>
+            <p>Look for authored roles, cumulative totals, call boundaries, exact process identity, per-turn clocks, authored titles, and child creation times.</p>
+          </article>
+          <article class="move">
+            <span class="move-index">03 / ship</span>
+            <h3>Take the ready work</h3>
+            <p>Replace the Hermes Formic-mark stand-in with the official Nous Research mark. Add Cline, OpenCode, or Amp only when each can meet the full parity bar.</p>
+          </article>
+          <article class="move">
+            <span class="move-index">04 / defend</span>
+            <h3>Keep the contract executable</h3>
+            <p>Every format change lands with a fixture, collector update, failing-on-fake test, and same-commit ledger revision. No heuristic gets a grace period.</p>
+          </article>
+        </div>
+
+        <div class="callout">
+          <span class="callout-mark" aria-hidden="true">✓</span>
+          <div>
+            <strong>Success is a smaller honest ledger, not a fuller-looking board.</strong>
+            <p>Strike a row only when direct evidence fills it. Preserve guardrails when the correct answer is still refusal, absence, or unknown.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="shell footer-inner">
+      <p>Formic collector honesty report · documentation snapshot · 2026-08-19</p>
+      <div class="footer-links">
+        <a href="PARITY.md#known-collector-field-incompatibilities">Canonical ledger</a>
+        <a href="CLAUDE-DESKTOP-SEND-EVIDENCE.md">Claude Desktop evidence</a>
+        <a href="https://github.com/emilio3435/formic/issues/21">Standing issue #21 ↗</a>
+      </div>
+    </div>
+  </footer>
+</body>
+</html>

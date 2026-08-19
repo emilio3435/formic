@@ -30,7 +30,7 @@ Bar, from `makeAgent` / `CollectedAgent` on `main`:
 
 Cost is fleet BurnBar, not per-row USD. `CollectedAgent.cost` is almost never set. Missing source reads `unavailable`, never `$0`.
 
-Audited on `emilio3435/the-ant-hill` after the field-level window pass, the Copilot CLI collector, and official harness marks. Update this file when a collector, mark, or `config/models.json` changes.
+Originally audited on `emilio3435/the-ant-hill`; the standing ledger below was re-audited against `emilio3435/formic` at merge `3cf79ae` on 2026-08-19. Update this file when a collector, mark, or `config/models.json` changes.
 
 ## Harness marks
 
@@ -66,23 +66,25 @@ Hermes still uses `formic-mark.svg` — that is a pre-existing gap, not this pas
 
 This is the standing ledger from the collectors and their tests. An unsupported field stays absent or `null`; a related timestamp, percentage, path, or text tail is not a substitute. Close a row only when the source format supplies direct evidence and the collector plus tests consume that evidence.
 
-| ID | Source | Field boundary | Code-backed behavior |
-|---|---|---|---|
-| I-100 | Grok Bot | `lastAgentMessage`, `lastAgentClosing`, `lastAgentChatBody` | `parseReplica` admits only explicit `role:user` records to `humanMessages`. Untyped `send-message` text remains only in `transcriptTail`; `tests/grok-bot.test.ts` fails if it reaches assistant-only fields. |
-| I-101 | Cursor | `tokens.sessionTotal` | `cursorTokensFromDatabase` can publish an observed latest-turn `total`. Otherwise `fillCursorOccupancy` copies Cursor's own `contextUsagePercent` to `occupancyPct` only; it does not manufacture `total` or `sessionTotal`. |
-| I-102 | Grok Build CLI | `tokens.sessionTotal` and per-row cost | `tokenUsage` maps `signals.contextTokensUsed` to latest-turn `total` and optional `contextWindow`; it emits no cumulative session total or collector cost. |
-| I-103 | Codex and Cursor | `callSizes` | `session-calls.ts` names both sources in `NO_PER_CALL_REPORTING`. The field is absent, never `[]`, because an empty series would falsely assert zero calls. |
-| I-104 | Cursor | hook lifecycle and process facts | `finalizeSessionProviders` returns Cursor unchanged and runs `attachHookFacts` only for other providers. Cursor GUI processes are not treated as native session hooks. |
-| I-105 | Grok Bot | process identity and process liveness | `collectGrokBotSessions` emits no process ids. `snapshot.ts` excludes Bot rows from complete-roster inference, so roster age never becomes process absence. |
-| I-106 | Hermes | per-turn timestamps after the header | `createHermesParser` uses the JSONL header timestamp and the transcript mtime, choosing the later value for `updatedAt`; it does not invent timestamps for individual later turns. |
-| I-107 | Prime | authored title | `parsePrimeJsonl` has no source title and keeps `displayName` as `Prime · ${sessionId.slice(0, 8)}`. That placeholder is not an authored name. |
-| I-108 | Cursor child agents | `startedAt` | `parseCursorChildSession` publishes the observed transcript `updatedAt` but no `startedAt`; elapsed lifetime is therefore unavailable. |
-| I-109 | Cursor GUI and Antigravity IDE | cwd-only Send identity | Both collectors set `allowCwdFallback: false`. A shared home-directory cwd cannot become a unique writable target. |
-| I-110 | All collectors | per-agent USD cost | `makeAgent` has no collector cost input. Cursor explicitly publishes `cost: null`; fleet dollar handling is isolated to BurnBar, where missing or unpriced data remains unknown rather than `$0`. |
-| I-111 | Antigravity v1 | token usage | `UNKNOWN_TOKENS` remains `{ scope: "unknown", provenance: "unknown" }`. A catalog match may attach `contextWindow`, but the protobuf usage blobs are not decoded into token totals. |
-| I-112 | Antigravity legacy | `*.pb` conversations | `collectSurface` enumerates conversation `*.db` files only. Legacy protobuf conversations remain unparsed; the current scanner does not claim a per-file parsed row for them. |
-| I-113 | Muse | sessions when the local store is absent | `collectMuseSessions` returns `{ value: [], errors: [], absent: true }` when the Muse root is missing. No session row is synthesized. |
-| I-114 | Gemini leftovers | parent `~/.gemini` settings | `defaultAntigravityTrees` names only `antigravity-cli`, `antigravity`, and `antigravity-ide`. `tests/antigravity.test.ts` pins `~/.gemini/settings.json` alone to zero rows. |
+State names the next honest action, not a delivery percentage: **await format** means the source must change or expose direct evidence; **guardrail** means the current refusal is correct behavior to preserve; **needs evidence** means a bounded fixture or local observation must precede code. See the [collector honesty report](COLLECTOR-HONESTY-ROADMAP.html) for the visual accomplishments and roadmap view.
+
+| ID | State | Source | Field boundary | Code-backed behavior | Close or revisit only when |
+|---|---|---|---|---|---|
+| I-100 | await format | Grok Bot | `lastAgentMessage`, `lastAgentClosing`, `lastAgentChatBody` | `parseReplica` admits only explicit `role:user` records to `humanMessages`. Untyped `send-message` text remains only in `transcriptTail`; `tests/grok-bot.test.ts` fails if it reaches assistant-only fields. | A replica supplies an author-tagged, human-facing assistant event; the parser and regression consume that event. |
+| I-101 | await format | Cursor | `tokens.sessionTotal` | `cursorTokensFromDatabase` can publish an observed latest-turn `total`. Otherwise `fillCursorOccupancy` copies Cursor's own `contextUsagePercent` to `occupancyPct` only; it does not manufacture `total` or `sessionTotal`. | Cursor persists an explicit cumulative session total. `contextUsagePercent` remains occupancy only. |
+| I-102 | await format | Grok Build CLI | `tokens.sessionTotal` | `tokenUsage` maps `signals.contextTokensUsed` to latest-turn `total` and optional `contextWindow`; it emits no cumulative session total. Per-agent dollars remain covered by I-110. | Grok emits an explicit cumulative session total with defined accounting semantics. |
+| I-103 | await format | Codex and Cursor | `callSizes` | `session-calls.ts` names both sources in `NO_PER_CALL_REPORTING`. The field is absent, never `[]`, because an empty series would falsely assert zero calls. | The source records call-level usage boundaries that can be re-derived and prefix-matched. |
+| I-104 | guardrail | Cursor | hook lifecycle and process facts | `finalizeSessionProviders` returns Cursor unchanged and runs `attachHookFacts` only for other providers. Cursor GUI processes are not treated as native session hooks. | Cursor supplies session-specific pid/start/lifecycle evidence or a supported hook contract; until then keep the skip. |
+| I-105 | await format | Grok Bot | process identity and process liveness | `collectGrokBotSessions` emits no process ids. `snapshot.ts` excludes Bot rows from complete-roster inference, so roster age never becomes process absence. | A source path or command carries exact Bot session identity and joins to a process. Roster age alone never qualifies. |
+| I-106 | await format | Hermes | per-turn timestamps after the header | `createHermesParser` uses the JSONL header timestamp and the transcript mtime, choosing the later value for `updatedAt`; it does not invent timestamps for individual later turns. | Later Hermes turns carry their own source timestamps; parser tests adopt them without spreading mtime semantics to other collectors. |
+| I-107 | await format | Prime | authored title | `parsePrimeJsonl` has no source title and keeps `displayName` as `Prime · ${sessionId.slice(0, 8)}`. That placeholder is not an authored name. | Prime writes an authored title field; use it and retain the placeholder only as fallback. |
+| I-108 | await format | Cursor child agents | `startedAt` | `parseCursorChildSession` publishes the observed transcript `updatedAt` but no `startedAt`; elapsed lifetime is therefore unavailable. | A child source writes its own creation timestamp. Never copy the parent or substitute mtime. |
+| I-109 | guardrail | Cursor GUI and Antigravity IDE | cwd-only Send identity | Both collectors set `allowCwdFallback: false`. A shared home-directory cwd cannot become a unique writable target. | The GUI source exposes an exact writable surface/session binding. cwd alone stays disabled. |
+| I-110 | guardrail | All collectors | per-agent USD cost | `makeAgent` has no collector cost input. Cursor explicitly publishes `cost: null`; fleet dollar handling is isolated to BurnBar, where missing or unpriced data remains unknown rather than `$0`. | An approved collector contract supplies authoritative per-session cost. Estimates or catalog multiplication do not qualify. |
+| I-111 | await format | Antigravity v1 | token usage | `UNKNOWN_TOKENS` remains `{ scope: "unknown", provenance: "unknown" }`. A catalog match may attach `contextWindow`, but the protobuf usage blobs are not decoded into token totals. | A JSON column or documented, fixture-backed decoder yields observed usage and tests pin it. |
+| I-112 | needs evidence | Antigravity legacy | `*.pb` conversations | `collectSurface` enumerates conversation `*.db` files only. Legacy protobuf conversations remain unparsed; the current scanner does not claim a per-file parsed row for them. | A representative, shareable `*.pb` fixture plus a decoder can emit an honest row; enumerate only that proven format. |
+| I-113 | needs evidence | Muse | sessions when the local store is absent | `collectMuseSessions` returns `{ value: [], errors: [], absent: true }` when the Muse root is missing. No session row is synthesized. | A real local Muse run writes a store that can be compared with fixtures; update from the observed schema only. |
+| I-114 | guardrail | Gemini leftovers | parent `~/.gemini` settings | `defaultAntigravityTrees` names only `antigravity-cli`, `antigravity`, and `antigravity-ide`. `tests/antigravity.test.ts` pins `~/.gemini/settings.json` alone to zero rows. | A real Gemini session store appears under a distinct root. Parent settings remain excluded. |
 
 Not modelled (discover / `needs-parser` or absent): Cline, OpenCode, Amp, Kiro, Devin Desktop / Windsurf, Goose, OpenHands, Aider. Cloud-only (Jules, Bolt, v0, Codex/Claude web with no local dir): out.
 
@@ -112,7 +114,7 @@ Not modelled (discover / `needs-parser` or absent): Cline, OpenCode, Amp, Kiro, 
 2. Copilot: attach a window when the model is known; keep live-session tokens unknown until shutdown (honest). **Done.**
 3. Antigravity: parse usage if the sqlite actually has it; if not, keep unknown and add Gemini 3.7/3.6/3.1 to `models.json` so a model string can still get a window. **Done** — schema has no usage fields; Gemini labels + windows added; prices omitted (unconfirmed as a single catalog rate).
 4. Catalog: Opus 5 label + price (cited), Terra window left missing (API 1.05M ≠ Codex occupancy), drop Prime's 131k grok fallback. **Done.**
-5. Hermes / Factory / Prime: end-evidence only when the file has a real close. Do not invent one. Replace the Hermes Formic-mark stand-in with Nous Research's official mark. Same-commit PARITY.md.
-6. New watchers (Cline, OpenCode, Amp) must ship at this bar, not watch-only. Official mark each time. Same-commit PARITY.md.
+5. Hermes / Factory / Prime: end-evidence only when the file has a real close. **Guardrail active.** Replacing the Hermes Formic-mark stand-in with Nous Research's official mark remains open; ship it with the same-commit `PARITY.md` update.
+6. New watchers (Cline, OpenCode, Amp) must ship at this bar, not watch-only. Official mark each time. Same-commit `PARITY.md`. **Open, bar-gated.**
 
 Do not add a Llama provider. Do not treat Composer 2.5 or SWE-1.7 as US-origin weights.
