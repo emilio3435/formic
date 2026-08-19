@@ -259,7 +259,7 @@ describe("GET /api/transcript", () => {
     fetch.dispose();
   });
 
-  test("parses a schemaVersion 1 Grok Bot replica envelope into user and send-message lines", async () => {
+  test("parses only role-attributed Grok Bot replica lines", async () => {
     const directory = await mkdtemp(join(tmpdir(), "anthill-grok-bot-transcript-"));
     const path = join(directory, "replica.blob");
     const t1 = Date.parse("2026-08-16T12:00:01.000Z");
@@ -326,7 +326,6 @@ describe("GET /api/transcript", () => {
       };
       expect(body.ok).toBe(true);
       expect(body.source).toBe(path);
-      expect(body.lines.length).toBeGreaterThan(2);
       expect(body.lines).toEqual([
         {
           at: "2026-08-16T12:00:01.000Z",
@@ -334,19 +333,9 @@ describe("GET /api/transcript", () => {
           text: "Please parse the persisted conversation.",
         },
         {
-          at: "2026-08-16T12:00:02.000Z",
-          role: "assistant",
-          text: "Parsed the Grok Bot transcript.",
-        },
-        {
           at: "2026-08-16T12:00:03.000Z",
           role: "user",
           text: "Ship the closer next.",
-        },
-        {
-          at: "2026-08-16T12:00:04.000Z",
-          role: "assistant",
-          text: "Shipped the closer from send-message.",
         },
       ]);
     } finally {

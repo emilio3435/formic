@@ -56,11 +56,33 @@ Hermes still uses `formic-mark.svg` — that is a pre-existing gap, not this pas
 | prime | yes | yes | yes | yes, **defaults `"prime"`** | yes | observed when usage present | needle table (grok = catalog 500k) | **none** | cmux-exact | Invented model label when the transcript omits one. |
 | omp | yes | yes | yes | yes | yes | observed; corrupt → estimated | needle table | session-exit | cmux-exact | Legacy. |
 | grok (Build CLI) | yes | yes | yes | yes | yes | occupancy `total`, not billed in/out | signals only | turn-complete | cmux-exact | Catalog 500k unused if signals omit window. Inspector already paints Thought rows and tool cards from ACP thought/tool_call updates. Watch is not coverage. |
-| grok-bot | extra root only | yes | yes | **never** | instance home | **never** | **never** | **never** | gateway send; focus opens app; interrupt off | Not a `Provider`. No source-health slot. |
+| grok-bot | extra root only | yes | raw tail only; author unknown | **never** | instance home | **never** | **never** | **never** | gateway send; focus opens app; interrupt off | Untyped `send-message` text stays available as `transcriptTail` but never fills assistant-only fields. Not a `Provider`. No source-health slot. |
 | hermes | yes | yes | yes | yes | yes | **never** | **never** | **none** | cmux-exact | Session tokens never. Cron is spend-only. |
 | muse | yes | yes | yes | yes | yes | observed on `model_completed` | catalog needle when the model matches | session-exit / turn-complete | cmux-exact | Session-scope counts only — no latest-turn `total`, so `contextPct` stays blank even with a window. Unknown model → no window. Missing usage → unknown tokens, never `$0`. |
 | antigravity | yes | yes | yes | sqlite `last_selected_agent_model` if that column is present | yes | **never** | catalog needle when that model matches | **none** | cmux-exact | Inspected schema (collector + fixtures + live conversation DBs): `trajectory_meta` has id/type/source only; usage/window live in protobuf blobs. No decoder. Transcript JSONL has no usage fields. Leftover `~/.gemini` (non-antigravity) is not a session source. |
 | copilot | yes | yes | yes | model_change / shutdown | yes | **only on shutdown** `modelMetrics` | catalog needle when the model matches | session-exit | cmux-exact | Live sessions stay unknown-tokens (honest). Window can still attach from `session.model_change`. Terra matches no window (see catalog). Local CLI only — not the VS Code extension. |
+
+## Known collector field incompatibilities
+
+This is the standing ledger from the collectors and their tests. An unsupported field stays absent or `null`; a related timestamp, percentage, path, or text tail is not a substitute. Close a row only when the source format supplies direct evidence and the collector plus tests consume that evidence.
+
+| ID | Source | Field boundary | Code-backed behavior |
+|---|---|---|---|
+| I-100 | Grok Bot | `lastAgentMessage`, `lastAgentClosing`, `lastAgentChatBody` | `parseReplica` admits only explicit `role:user` records to `humanMessages`. Untyped `send-message` text remains only in `transcriptTail`; `tests/grok-bot.test.ts` fails if it reaches assistant-only fields. |
+| I-101 | Cursor | `tokens.sessionTotal` | `cursorTokensFromDatabase` can publish an observed latest-turn `total`. Otherwise `fillCursorOccupancy` copies Cursor's own `contextUsagePercent` to `occupancyPct` only; it does not manufacture `total` or `sessionTotal`. |
+| I-102 | Grok Build CLI | `tokens.sessionTotal` and per-row cost | `tokenUsage` maps `signals.contextTokensUsed` to latest-turn `total` and optional `contextWindow`; it emits no cumulative session total or collector cost. |
+| I-103 | Codex and Cursor | `callSizes` | `session-calls.ts` names both sources in `NO_PER_CALL_REPORTING`. The field is absent, never `[]`, because an empty series would falsely assert zero calls. |
+| I-104 | Cursor | hook lifecycle and process facts | `finalizeSessionProviders` returns Cursor unchanged and runs `attachHookFacts` only for other providers. Cursor GUI processes are not treated as native session hooks. |
+| I-105 | Grok Bot | process identity and process liveness | `collectGrokBotSessions` emits no process ids. `snapshot.ts` excludes Bot rows from complete-roster inference, so roster age never becomes process absence. |
+| I-106 | Hermes | per-turn timestamps after the header | `createHermesParser` uses the JSONL header timestamp and the transcript mtime, choosing the later value for `updatedAt`; it does not invent timestamps for individual later turns. |
+| I-107 | Prime | authored title | `parsePrimeJsonl` has no source title and keeps `displayName` as `Prime · ${sessionId.slice(0, 8)}`. That placeholder is not an authored name. |
+| I-108 | Cursor child agents | `startedAt` | `parseCursorChildSession` publishes the observed transcript `updatedAt` but no `startedAt`; elapsed lifetime is therefore unavailable. |
+| I-109 | Cursor GUI and Antigravity IDE | cwd-only Send identity | Both collectors set `allowCwdFallback: false`. A shared home-directory cwd cannot become a unique writable target. |
+| I-110 | All collectors | per-agent USD cost | `makeAgent` has no collector cost input. Cursor explicitly publishes `cost: null`; fleet dollar handling is isolated to BurnBar, where missing or unpriced data remains unknown rather than `$0`. |
+| I-111 | Antigravity v1 | token usage | `UNKNOWN_TOKENS` remains `{ scope: "unknown", provenance: "unknown" }`. A catalog match may attach `contextWindow`, but the protobuf usage blobs are not decoded into token totals. |
+| I-112 | Antigravity legacy | `*.pb` conversations | `collectSurface` enumerates conversation `*.db` files only. Legacy protobuf conversations remain unparsed; the current scanner does not claim a per-file parsed row for them. |
+| I-113 | Muse | sessions when the local store is absent | `collectMuseSessions` returns `{ value: [], errors: [], absent: true }` when the Muse root is missing. No session row is synthesized. |
+| I-114 | Gemini leftovers | parent `~/.gemini` settings | `defaultAntigravityTrees` names only `antigravity-cli`, `antigravity`, and `antigravity-ide`. `tests/antigravity.test.ts` pins `~/.gemini/settings.json` alone to zero rows. |
 
 Not modelled (discover / `needs-parser` or absent): Cline, OpenCode, Amp, Kiro, Devin Desktop / Windsurf, Goose, OpenHands, Aider. Cloud-only (Jules, Bolt, v0, Codex/Claude web with no local dir): out.
 
