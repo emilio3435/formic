@@ -341,10 +341,11 @@ function resolveAgentTargetInternal(
   steps?.push({ tier: "session", outcome: "no-match", detail: "Source session ID is not present on any ready cmux surface this scan." });
 
   if (agent.allowCwdFallback === false) {
-    steps?.push({ tier: "cwd", outcome: "rejected", detail: "Cursor GUI agents require exact cmux identity; cwd fallback is disabled." });
+    const reason = "This harness requires exact cmux identity; cwd fallback is disabled.";
+    steps?.push({ tier: "cwd", outcome: "rejected", detail: reason });
     return finish({
       resolution: "missing",
-      reason: "Cursor GUI agents require exact cmux identity; cwd fallback is disabled.",
+      reason,
     });
   }
 
@@ -671,17 +672,17 @@ export function transmitRefusal(agent: {
     return null;
   }
   if (!canAddressTarget(agent.target)) {
-    const cursorRequiresExact = agent.identityTrace?.steps.some(
-      ({ detail }) => detail === "Cursor GUI agents require exact cmux identity; cwd fallback is disabled.",
+    const sourceRequiresExact = agent.identityTrace?.steps.some(
+      ({ detail }) => detail === "This harness requires exact cmux identity; cwd fallback is disabled.",
     ) ?? false;
     return refuse(
       "UNSAFE_TARGET",
-      cursorRequiresExact
+      sourceRequiresExact
         ? "No safe cmux target is linked to this session."
         : agent.target.reason ?? "No safe cmux surface target is available.",
       agent.target.resolution === "ambiguous"
         ? "Inspect the routing evidence, then remove the conflicting claim so one exact session identity remains."
-        : cursorRequiresExact
+        : sourceRequiresExact
           ? "Open it in a cmux pane (or start the agent from one); the next scan binds it."
           : "Open or start the agent in a cmux pane; the next scan links it when cmux reports the session.",
       routingEvidence,

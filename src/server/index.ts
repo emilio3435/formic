@@ -72,6 +72,7 @@ const state = new HubState(runner, archiveStore, programHints, {
   botRootsReader: () => onboardedSessionRoots(collectorInstanceStore).extraGrokBotRoots,
   grokCliRootsReader: () => onboardedSessionRoots(collectorInstanceStore).extraGrokCliRoots,
   copilotRootsReader: () => onboardedSessionRoots(collectorInstanceStore).extraCopilotRoots,
+  geminiRootsReader: () => onboardedSessionRoots(collectorInstanceStore).extraGeminiCliRoots,
   triageReader: () => triageStore.list(),
   cmuxExecutable,
   bindingStore: identityBindingStore,

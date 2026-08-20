@@ -109,6 +109,7 @@ const emptySessions = () => ({
   muse: { value: [], errors: [] },
   antigravity: { value: [], errors: [] },
   copilot: { value: [], errors: [] },
+  gemini: { value: [], errors: [] },
 });
 
 async function eventually(assertion: () => void): Promise<void> {

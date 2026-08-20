@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, join, normalize } from "node:path";
+import { basename, dirname, join, normalize, resolve } from "node:path";
 import { PROVIDERS, type Provider } from "../shared/types";
 import type { SettingsFileOperations } from "./settings";
 
@@ -10,13 +11,14 @@ export type CollectorKind =
   | "cursor-gui" | "cursor-cli" | "codex" | "claude" | "factory"
   | "prime" | "omp" | "grok-cli" | "hermes" | "grok-bot"
   | "muse" | "antigravity-cli" | "antigravity-desktop" | "antigravity-ide"
-  | "copilot" | "burnbar" | "cmux-hooks" | "unknown";
+  | "copilot" | "gemini-cli" | "burnbar" | "cmux-hooks" | "unknown";
 
 export const SUPPORTED_ALTERNATE_HOME_KINDS = [
   "cursor-gui",
   "grok-cli",
   "grok-bot",
   "copilot",
+  "gemini-cli",
 ] as const satisfies readonly CollectorKind[];
 
 const SUPPORTED_ALTERNATE_HOME_KIND_SET = new Set<CollectorKind>(SUPPORTED_ALTERNATE_HOME_KINDS);
@@ -57,6 +59,7 @@ const PROVIDER_FOR = {
   "antigravity-desktop": "antigravity",
   "antigravity-ide": "antigravity",
   "copilot": "copilot",
+  "gemini-cli": "gemini",
   "grok-bot": null,
   "burnbar": null,
   "cmux-hooks": null,
@@ -81,6 +84,7 @@ export function defaultHomes(home: string): ReadonlyArray<{ kind: CollectorKind;
     { kind: "hermes", dataDir: join(home, ".hermes") },
     { kind: "muse", dataDir: join(home, ".local/share/muse") },
     { kind: "copilot", dataDir: join(home, ".copilot") },
+    { kind: "gemini-cli", dataDir: join(home, ".gemini") },
     { kind: "antigravity-cli", dataDir: join(home, ".gemini/antigravity-cli") },
     { kind: "antigravity-desktop", dataDir: join(home, ".gemini/antigravity") },
     { kind: "antigravity-ide", dataDir: join(home, ".gemini/antigravity-ide") },
@@ -91,7 +95,14 @@ export function defaultHomes(home: string): ReadonlyArray<{ kind: CollectorKind;
 
 export function instanceIdFor(kind: CollectorKind, dataDir: string): string {
   const base = basename(dataDir).replace(/^\./, "dot-").toLowerCase().replace(/[^a-z0-9]+/g, "-");
-  return `${kind}:${base || "home"}`;
+  const identityPath = normalizePath(resolve(dataDir));
+  const digest = createHash("sha256")
+    .update(kind)
+    .update("\0")
+    .update(identityPath)
+    .digest("hex")
+    .slice(0, 16);
+  return `${kind}:${base || "home"}--${digest}`;
 }
 
 /* Adapters must not slurp binaries. Open, read at most maxBytes, close. */
@@ -328,6 +339,12 @@ export function classifyDataDir(dataDir: string, fs: ScanFs, deadline?: number):
     )
   ) {
     return candidate("copilot", dataDir, fs);
+  }
+  if (
+    isDotFamily(base, "gemini")
+    && (fs.isDirectory(join(dataDir, "tmp")) || fs.exists(join(dataDir, "settings.json")))
+  ) {
+    return candidate("gemini-cli", dataDir, fs);
   }
   if (base === "antigravity-cli" || dataDir.endsWith("/.gemini/antigravity-cli")) {
     return candidate("antigravity-cli", dataDir, fs);
@@ -651,8 +668,15 @@ export class JsonCollectorInstanceStore {
   mergeScan(found: CollectorCandidate[], nowIso: string): CollectorInstance[] {
     for (const candidate of found) {
       const id = instanceIdFor(candidate.kind, candidate.dataDir);
-      const existing = this.#instances.find((row) => row.id === id);
+      const candidatePath = normalizePath(resolve(candidate.dataDir));
+      const existing = this.#instances.find((row) => row.id === id)
+        ?? this.#instances.find((row) => row.kind === candidate.kind
+          && normalizePath(resolve(row.dataDir)) === candidatePath);
       if (existing) {
+        /* Version-1 stores originally keyed instances by basename only. The
+           exact kind+path match migrates that row in place so operator state
+           survives while same-basename roots gain distinct identities. */
+        existing.id = id;
         existing.kind = candidate.kind;
         existing.provider = candidate.provider;
         existing.dataDir = candidate.dataDir;
@@ -732,6 +756,7 @@ export interface OnboardedSessionRoots {
   extraGrokCliRoots: string[];
   extraGrokBotRoots: string[];
   extraCopilotRoots: string[];
+  extraGeminiCliRoots: string[];
 }
 
 export function onboardedSessionRoots(store: JsonCollectorInstanceStore): OnboardedSessionRoots {
@@ -740,6 +765,7 @@ export function onboardedSessionRoots(store: JsonCollectorInstanceStore): Onboar
     extraGrokCliRoots: store.onboardedRoots("grok-cli").filter((root) => !isGrokBotProductCache(root)),
     extraGrokBotRoots: store.onboardedRoots("grok-bot"),
     extraCopilotRoots: store.onboardedRoots("copilot"),
+    extraGeminiCliRoots: store.onboardedRoots("gemini-cli"),
   };
 }
 

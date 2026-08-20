@@ -52,6 +52,58 @@ const surface: CmuxSurface = {
 };
 
 describe("TTY and open-session identity evidence", () => {
+  test("a Gemini main-file prefix resolves only through that row's exact transcript path", async () => {
+    const prefix = "abcd1234";
+    const activeId = `${prefix}-1111-4111-8111-111111111111`;
+    const heldId = `${prefix}-2222-4222-8222-222222222222`;
+    const activePath = `/Users/me/.gemini/tmp/demo/chats/session-2026-08-19T12-00-${prefix}.jsonl`;
+    const heldPath = `/Users/me/.gemini-alt/tmp/demo/chats/session-2026-08-19T13-00-${prefix}.jsonl`;
+    const active: CollectedAgent = {
+      ...agent,
+      id: `gemini:${activeId}`,
+      provider: "gemini",
+      sourceSessionId: activeId,
+      status: "running",
+      artifacts: [{ kind: "transcript", label: "GEMINI transcript", path: activePath }],
+    };
+    const held: CollectedAgent = {
+      ...active,
+      id: `gemini:${heldId}`,
+      sourceSessionId: heldId,
+      status: "stale",
+      artifacts: [{ kind: "transcript", label: "GEMINI transcript", path: heldPath }],
+    };
+    const runner = new SequenceRunner([
+      {
+        exitCode: 0,
+        stdout: "202 ttys033 /Users/me/.local/bin/gemini",
+        stderr: "",
+        timedOut: false,
+      },
+      {
+        exitCode: 0,
+        stdout: ["p202", `n${heldPath}`].join("\n"),
+        stderr: "",
+        timedOut: false,
+      },
+    ]);
+
+    const enriched = await enrichCmuxIdentity([surface], [active, held], runner);
+
+    expect(enriched.errors).toEqual([]);
+    expect(enriched.value[0]?.sourceSessionClaims).toEqual([
+      { provider: "gemini", sessionId: heldId },
+    ]);
+    expect(enriched.value[0]?.identityTrace?.openFileMatches).toEqual([{
+      pid: 202,
+      path: heldPath,
+      provider: "gemini",
+      sessionId: heldId,
+    }]);
+    expect(active.processIds).toBeUndefined();
+    expect(held.processIds).toEqual([202]);
+  });
+
   test("the process table is read with start times, in a locale that renders them predictably", async () => {
     const runner = new SequenceRunner([
       { exitCode: 0, stdout: "", stderr: "", timedOut: false },

@@ -8,8 +8,8 @@
    without adding it here fails the build rather than quietly under-counting.
    Every runtime consumer imports this list so a provider cannot be taught to
    one subsystem while remaining invisible to another. */
-export type Provider = "codex" | "omp" | "claude" | "cursor" | "factory" | "prime" | "grok" | "hermes" | "muse" | "antigravity" | "copilot";
-export const PROVIDERS = ["codex", "omp", "claude", "cursor", "factory", "prime", "grok", "hermes", "muse", "antigravity", "copilot"] as const satisfies readonly Provider[];
+export type Provider = "codex" | "omp" | "claude" | "cursor" | "factory" | "prime" | "grok" | "hermes" | "muse" | "antigravity" | "copilot" | "gemini";
+export const PROVIDERS = ["codex", "omp", "claude", "cursor", "factory", "prime", "grok", "hermes", "muse", "antigravity", "copilot", "gemini"] as const satisfies readonly Provider[];
 /* Exhaustiveness in the other direction: `satisfies` proves every entry is a
    Provider, and this proves every Provider is an entry. Adding one to the union
    without adding it to the list fails the build here rather than quietly
@@ -50,6 +50,7 @@ export type AuthoredNameSource =
   | "muse-title"
   | "antigravity-title"
   | "copilot-title"
+  | "gemini-title"
   | "launch-env"
   | "manifest";
 /* What a session is called, decided once by src/server/naming.ts.
@@ -243,7 +244,7 @@ export interface CmuxTarget {
   appServerReady?: boolean;
   /** Why Codex desktop Send is off. Enum only. */
   appServerMiss?: CodexAppMiss;
-  /** Collector instance, e.g. grok-bot:grok-bot vs grok-bot:grok-bot-2. */
+  /** Path-qualified collector instance, e.g. grok-bot:grok-bot-2--<16 hex>. */
   instanceId?: string;
   instanceLabel?: string;
   /** Mac replica cache for this Bot instance. Not the token home. */

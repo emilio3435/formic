@@ -42,6 +42,7 @@ const empty = (): SessionsResult => ({
   muse: { value: [], errors: [] },
   antigravity: { value: [], errors: [] },
   copilot: { value: [], errors: [] },
+  gemini: { value: [], errors: [] },
 });
 
 /** A hub whose collectors behave exactly as described, with a 60ms deadline. */
@@ -160,6 +161,8 @@ describe("when collection runs out of time the board says so", () => {
 
     const degraded = (snapshot.issues ?? []).filter((issue) => issue.id.endsWith("-collector"));
     expect(degraded.length).toBeGreaterThan(0);
+    expect(degraded.some((issue) => issue.id.includes("gemini")), "Gemini must not disappear at the deadline")
+      .toBeTrue();
     for (const issue of degraded) {
       expect(issue.technicalDetails?.[0], `${issue.id} still leads with another component's fault`)
         .toMatch(/exceeded 60ms deadline/);

@@ -120,6 +120,45 @@ describe("durable agent focus links", () => {
     expect(runner.commands).toHaveLength(0);
   });
 
+  test("a Gemini missing exact target cannot Focus through unique-cwd", async () => {
+    const runner = new StubRunner();
+    const agent = snapshotAgent({
+      id: "gemini:abcd1234-e5f6-7890-abcd-ef1234567890",
+      provider: "gemini",
+      sourceSessionId: "abcd1234-e5f6-7890-abcd-ef1234567890",
+      cwd: "/tmp/agent-links-project",
+      target: {
+        resolution: "missing",
+        reason: "This harness requires exact cmux identity; cwd fallback is disabled.",
+      },
+      controls: [{
+        action: "focus",
+        enabled: false,
+        reason: "This harness requires exact cmux identity; cwd fallback is disabled.",
+      }],
+    });
+    const fetch = createAgentLinkFetch(
+      () => new Response("fallback", { status: 418 }),
+      {
+        getSnapshot: () => snapshot(agent),
+        surfaces: () => [surface("SURFACE-CWD-ONLY")],
+        runner,
+        archiveStore,
+        cmuxExecutable: "cmux",
+      },
+    );
+
+    const response = await fetch(new Request(
+      `http://127.0.0.1:4701/agent/${encodeURIComponent(agent.id)}/focus`,
+    ));
+
+    expect(response.status).toBe(409);
+    const body = await response.json();
+    expect(body).toMatchObject({ error: { code: "CONTROL_DISABLED" } });
+    expect(body.error.message).toMatch(/exact cmux identity/);
+    expect(runner.commands).toHaveLength(0);
+  });
+
   test("an exact agent URL re-resolves through the hook-store tier and focuses that surface", async () => {
     loadHookStore({ sessionId: "live-session", lifecycle: "running" });
     const runner = new StubRunner();

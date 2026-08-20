@@ -221,6 +221,7 @@ describe("agent message provenance", () => {
         muse: { value: [], errors: [] },
         antigravity: { value: [], errors: [] },
         copilot: { value: [], errors: [] },
+        gemini: { value: [], errors: [] },
       });
       const collectors: HubCollectors = {
         sessions: async () => sessions(),

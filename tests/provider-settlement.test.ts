@@ -196,6 +196,72 @@ describe("provider settlement", () => {
     expect(slowCalls).toBe(2);
   });
 
+  test("watchdog discard prevents an abandoned scan from being reused or staged", async () => {
+    const coordinator = new ProviderSettlementCoordinator<"p", string>(() => true);
+    const abandoned = deferred<string>();
+    const cutoff = controlledCutoff();
+    let scans = 0;
+    const first = coordinator.settle(["p"], async () => {
+      scans += 1;
+      return abandoned.promise;
+    }, { waitMs: 7_500, wait: cutoff.wait });
+    await flushSettlements();
+
+    coordinator.discardInFlight();
+    const replacement = await coordinator.settle(["p"], async () => {
+      scans += 1;
+      return "replacement";
+    }, { waitMs: 7_500 });
+    cutoff.release();
+    expect(await first).toMatchObject({ current: {}, timedOut: ["p"] });
+    expect(replacement).toMatchObject({ current: { p: "replacement" }, timedOut: [] });
+    expect(scans).toBe(2);
+
+    abandoned.resolve("abandoned-late");
+    await flushSettlements();
+    const next = await coordinator.settle(["p"], async () => "next", { waitMs: 7_500 });
+    expect(next.current.p).toBe("next");
+  });
+
+  test("watchdog discard keeps abandoned late success out of last-known after a replacement timeout", async () => {
+    const coordinator = new ProviderSettlementCoordinator<"p", string>(() => true);
+    await coordinator.settle(["p"], async () => "prior", { waitMs: 7_500 });
+
+    const abandoned = deferred<string>();
+    const abandonedCutoff = controlledCutoff();
+    const first = coordinator.settle(["p"], () => abandoned.promise, {
+      waitMs: 7_500,
+      wait: abandonedCutoff.wait,
+    });
+    await flushSettlements();
+    coordinator.discardInFlight();
+    abandonedCutoff.release();
+    expect(await first).toMatchObject({
+      current: {},
+      lastKnown: { p: "prior" },
+      timedOut: ["p"],
+    });
+
+    const replacementScan = deferred<string>();
+    const replacementCutoff = controlledCutoff();
+    const replacement = coordinator.settle(["p"], () => replacementScan.promise, {
+      waitMs: 7_500,
+      wait: replacementCutoff.wait,
+    });
+    await flushSettlements();
+
+    abandoned.resolve("abandoned-late");
+    await flushSettlements();
+    replacementCutoff.release();
+
+    expect(await replacement).toEqual({
+      current: {},
+      settledAtMs: {},
+      lastKnown: { p: "prior" },
+      timedOut: ["p"],
+    });
+  });
+
   test("extra Cursor GUI roots change the collection config key", () => {
     const windowMs = 36 * 3600_000;
     const thresholds = { freshMs: 5 * 60_000, quietMs: 30 * 60_000 };

@@ -75,6 +75,10 @@ const SAMPLES: Record<Provider, { path?: string; command: string }> = {
     path: `/Users/me/.copilot/session-state/${ID}/events.jsonl`,
     command: `copilot --resume ${ID}`,
   },
+  gemini: {
+    path: `/Users/me/.gemini/tmp/demo-project/chats/11111111-2222-4333-8444-555555555555/${ID}.jsonl`,
+    command: `gemini --resume ${ID}`,
+  },
 };
 
 describe("every provider is visible to the process scanner", () => {
@@ -172,6 +176,33 @@ describe("Copilot CLI specifics", () => {
     ]);
     expect(identitiesFromCommand("copilot --continue")).toEqual([]);
     expect(isRecognizedAgentProcess("copilot --continue")).toBeTrue();
+  });
+});
+
+describe("Gemini CLI specifics", () => {
+  test("main paths expose the filename prefix while nested subagents expose their full id", () => {
+    expect(identityFromSessionPath(
+      `/Users/me/.gemini/tmp/demo-project/chats/session-2026-08-19T12-00-${ID.slice(0, 8)}.jsonl`,
+    )).toEqual({ provider: "gemini", value: ID.slice(0, 8), full: false });
+    expect(identityFromSessionPath(
+      `/Users/me/.gemini/antigravity/conversations/${ID}.db`,
+    )).toEqual({ provider: "antigravity", value: ID, full: true });
+  });
+
+  test("only a full UUID resume argument becomes Gemini session identity", () => {
+    expect(identitiesFromCommand(`gemini --resume ${ID}`)).toEqual([
+      { provider: "gemini", value: ID, full: true },
+    ]);
+    expect(identitiesFromCommand(`gemini -r ${ID}`)).toEqual([
+      { provider: "gemini", value: ID, full: true },
+    ]);
+    expect(identitiesFromCommand(`/private/tmp/cmux-agent-resume/gemini-${ID}.zsh`)).toEqual([
+      { provider: "gemini", value: ID, full: true },
+    ]);
+    expect(identitiesFromCommand("/private/tmp/cmux-agent-resume/gemini-abcd1234.zsh"))
+      .toEqual([]);
+    expect(identitiesFromCommand("gemini --resume latest")).toEqual([]);
+    expect(isRecognizedAgentProcess("gemini --resume latest")).toBeTrue();
   });
 });
 

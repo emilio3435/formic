@@ -126,6 +126,33 @@ describe("classifyDataDir", () => {
     expect(hit?.reason).toBeUndefined();
   });
 
+  test("settings-only ~/.gemini is Gemini CLI configuration presence, not a session row", () => {
+    const root = mkdtempSync(join(tmpdir(), "ah-scan-"));
+    const dataDir = join(root, ".gemini");
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, "settings.json"), "{}");
+    const hit = classifyDataDir(dataDir, memFs(root));
+    expect(hit).toMatchObject({
+      kind: "gemini-cli",
+      provider: "gemini",
+      default: true,
+    });
+    expect(hit?.reason).toBeUndefined();
+  });
+
+  test("extra ~/.gemini-2 with tmp is Gemini CLI and collectable", () => {
+    const root = mkdtempSync(join(tmpdir(), "ah-scan-"));
+    const dataDir = join(root, ".gemini-2");
+    mkdirSync(join(dataDir, "tmp/demo-project/chats"), { recursive: true });
+    const hit = classifyDataDir(dataDir, memFs(root));
+    expect(hit).toMatchObject({
+      kind: "gemini-cli",
+      provider: "gemini",
+      default: false,
+    });
+    expect(hit?.reason).toBeUndefined();
+  });
+
   test("default ~/.grok is default: true", () => {
     const root = mkdtempSync(join(tmpdir(), "ah-scan-"));
     const dataDir = join(root, ".grok");
@@ -339,6 +366,7 @@ describe("JsonCollectorInstanceStore", () => {
       "grok-cli",
       "grok-bot",
       "copilot",
+      "gemini-cli",
     ]);
   });
 
@@ -378,6 +406,62 @@ describe("JsonCollectorInstanceStore", () => {
     expect(store.onboardedGuiRoots()).toEqual([]);
   });
 
+  test("same-basename Gemini roots remain independently onboardable", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ah-collision-"));
+    const store = await JsonCollectorInstanceStore.open(join(dir, "collector-instances.json"));
+    const roots = [join(dir, "profile-a/.gemini"), join(dir, "profile-b/.gemini")];
+    const merged = store.mergeScan(roots.map((dataDir) => ({
+      kind: "gemini-cli" as const,
+      provider: "gemini" as const,
+      dataDir,
+      label: ".gemini",
+      default: false,
+    })), "2026-08-19T00:00:00.000Z");
+
+    expect(merged.map((row) => row.dataDir).sort()).toEqual([...roots].sort());
+    expect(new Set(merged.map((row) => row.id)).size).toBe(2);
+    await store.update({ ids: merged.map((row) => row.id), onboarded: true });
+    expect(store.onboardedRoots("gemini-cli").sort()).toEqual([...roots].sort());
+  });
+
+  test("legacy basename ids migrate by exact kind and path without losing operator state", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ah-migrate-id-"));
+    const path = join(dir, "collector-instances.json");
+    const dataDir = join(dir, "profile/.gemini");
+    writeFileSync(path, JSON.stringify({
+      version: 1,
+      instances: [{
+        id: "gemini-cli:dot-gemini",
+        kind: "gemini-cli",
+        provider: "gemini",
+        label: "My Gemini",
+        dataDir,
+        onboarded: true,
+        ignored: true,
+        default: false,
+        discoveredAt: "2026-08-16T00:00:00.000Z",
+        lastSeenAt: "2026-08-16T00:00:00.000Z",
+      }],
+    }));
+    const store = await JsonCollectorInstanceStore.open(path);
+    const [migrated] = store.mergeScan([{
+      kind: "gemini-cli", provider: "gemini", dataDir,
+      label: ".gemini", default: false,
+    }], "2026-08-19T00:00:00.000Z");
+
+    expect(migrated?.id).toBe(instanceIdFor("gemini-cli", dataDir));
+    expect(migrated?.id).not.toBe("gemini-cli:dot-gemini");
+    expect(migrated).toMatchObject({
+      label: "My Gemini",
+      onboarded: true,
+      ignored: true,
+      discoveredAt: "2026-08-16T00:00:00.000Z",
+    });
+    await store.persistLastSeen();
+    const reopened = await JsonCollectorInstanceStore.open(path);
+    expect(reopened.get()).toEqual(store.get());
+  });
+
   test("update onboarded persists across reopen", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ah-store-"));
     const path = join(dir, "collector-instances.json");
@@ -386,9 +470,10 @@ describe("JsonCollectorInstanceStore", () => {
       kind: "cursor-gui", provider: "cursor", dataDir: "/Users/me/Library/Application Support/Cursor-2",
       label: "Cursor-2", default: false,
     }], "2026-08-16T00:00:00.000Z");
-    await store.update({ ids: ["cursor-gui:cursor-2"], onboarded: true });
+    const id = instanceIdFor("cursor-gui", "/Users/me/Library/Application Support/Cursor-2");
+    await store.update({ ids: [id], onboarded: true });
     const again = await JsonCollectorInstanceStore.open(path);
-    expect(again.get().find((i) => i.id === "cursor-gui:cursor-2")?.onboarded).toBe(true);
+    expect(again.get().find((i) => i.id === id)?.onboarded).toBe(true);
     expect(again.onboardedGuiRoots()).toEqual(["/Users/me/Library/Application Support/Cursor-2"]);
     expect(again.onboardedRoots("cursor-gui")).toEqual(again.onboardedGuiRoots());
     expect(again.onboardedRoots("grok-bot")).toEqual([]);
@@ -401,6 +486,7 @@ describe("JsonCollectorInstanceStore", () => {
       { kind: "grok-cli" as const, provider: "grok" as const, dataDir: "/tmp/.grok-2", label: ".grok-2", default: false },
       { kind: "grok-bot" as const, provider: null, dataDir: "/tmp/Grok Bot 2", label: "Grok Bot 2", default: false },
       { kind: "copilot" as const, provider: "copilot" as const, dataDir: "/tmp/.copilot-2", label: ".copilot-2", default: false },
+      { kind: "gemini-cli" as const, provider: "gemini" as const, dataDir: "/tmp/.gemini-2", label: ".gemini-2", default: false },
     ];
     store.mergeScan(candidates, "2026-08-16T00:00:00.000Z");
     await store.update({ ids: candidates.map((candidate) => instanceIdFor(candidate.kind, candidate.dataDir)), onboarded: true });
@@ -410,6 +496,7 @@ describe("JsonCollectorInstanceStore", () => {
       extraGrokCliRoots: ["/tmp/.grok-2"],
       extraGrokBotRoots: ["/tmp/Grok Bot 2"],
       extraCopilotRoots: ["/tmp/.copilot-2"],
+      extraGeminiCliRoots: ["/tmp/.gemini-2"],
     });
   });
 
@@ -420,7 +507,7 @@ describe("JsonCollectorInstanceStore", () => {
       label: ".codex-2", default: false, reason: "needs-parser",
     }], "2026-08-16T00:00:00.000Z");
 
-    await expect(store.update({ ids: ["codex:dot-codex-2"], onboarded: true }))
+    await expect(store.update({ ids: [instanceIdFor("codex", "/tmp/.codex-2")], onboarded: true }))
       .rejects.toThrow(/parser/i);
     expect(store.onboardedRoots("codex")).toEqual([]);
   });
@@ -433,7 +520,10 @@ describe("JsonCollectorInstanceStore", () => {
       dataDir: "/Users/me/Library/Application Support/Cursor",
       label: "Cursor", default: true,
     }], "2026-08-16T00:00:00.000Z");
-    await expect(store.update({ ids: ["cursor-gui:cursor"], onboarded: false }))
+    await expect(store.update({
+      ids: [instanceIdFor("cursor-gui", "/Users/me/Library/Application Support/Cursor")],
+      onboarded: false,
+    }))
       .rejects.toThrow(/default/i);
   });
 
@@ -475,7 +565,9 @@ describe("JsonCollectorInstanceStore", () => {
       dataDir: "/Users/me/Library/Application Support/Cursor-2",
       label: "Cursor-2", default: false,
     }], "2026-08-16T00:00:00.000Z");
-    const updating = store.update({ ids: ["cursor-gui:cursor-2"], onboarded: true });
+    const cursorId = instanceIdFor("cursor-gui", "/Users/me/Library/Application Support/Cursor-2");
+    const codexId = instanceIdFor("codex", "/Users/me/.codex-2");
+    const updating = store.update({ ids: [cursorId], onboarded: true });
     await writeEntered;
     store.mergeScan([{
       kind: "codex", provider: "codex",
@@ -485,9 +577,9 @@ describe("JsonCollectorInstanceStore", () => {
     releaseWrite();
     await updating;
     const ids = store.get().map((row) => row.id);
-    expect(ids).toContain("cursor-gui:cursor-2");
-    expect(ids).toContain("codex:dot-codex-2");
-    expect(store.get().find((row) => row.id === "cursor-gui:cursor-2")?.onboarded).toBe(true);
+    expect(ids).toContain(cursorId);
+    expect(ids).toContain(codexId);
+    expect(store.get().find((row) => row.id === cursorId)?.onboarded).toBe(true);
   });
 });
 
@@ -509,11 +601,12 @@ describe("handleCollectorInstancesRequest", () => {
       dataDir: "/Users/me/Library/Application Support/Cursor-2",
       label: "Cursor-2", default: false,
     }], new Date().toISOString());
+    const id = instanceIdFor("cursor-gui", "/Users/me/Library/Application Support/Cursor-2");
     const res = await handleCollectorInstancesRequest(
       new Request("http://127.0.0.1/api/collector-instances", {
         method: "POST",
         headers: { origin: "http://127.0.0.1", "content-type": "application/json" },
-        body: JSON.stringify({ ids: ["cursor-gui:cursor-2"], onboarded: true }),
+        body: JSON.stringify({ ids: [id], onboarded: true }),
       }),
       store,
       { scan: () => [] },
@@ -532,7 +625,7 @@ describe("handleCollectorInstancesRequest", () => {
       new Request("http://127.0.0.1/api/collector-instances", {
         method: "POST",
         headers: { origin: "http://127.0.0.1", "content-type": "application/json" },
-        body: JSON.stringify({ id: "codex:dot-codex-2", onboarded: true }),
+        body: JSON.stringify({ id: instanceIdFor("codex", "/tmp/.codex-2"), onboarded: true }),
       }),
       store,
     );
@@ -612,7 +705,10 @@ describe("handleCollectorInstancesRequest", () => {
       new Request("http://127.0.0.1/api/collector-instances", {
         method: "POST",
         headers: { origin: "http://127.0.0.1", "content-type": "application/json" },
-        body: JSON.stringify({ id: "cursor-gui:cursor", onboarded: false }),
+        body: JSON.stringify({
+          id: instanceIdFor("cursor-gui", "/Users/me/Library/Application Support/Cursor"),
+          onboarded: false,
+        }),
       }),
       store,
       { scan: () => [] },
@@ -642,10 +738,11 @@ describe("handleCollectorInstancesRequest", () => {
     expect(res.status).toBe(200);
     const body = await res.json() as { ok: boolean; instances: { id: string; onboarded: boolean }[] };
     expect(body.ok).toBe(true);
-    expect(body.instances[0]?.id).toBe("cursor-gui:cursor-2");
+    const id = instanceIdFor("cursor-gui", "/Users/me/Library/Application Support/Cursor-2");
+    expect(body.instances[0]?.id).toBe(id);
     expect(body.instances[0]?.onboarded).toBe(false);
     const again = await JsonCollectorInstanceStore.open(path);
-    expect(again.get().find((row) => row.id === "cursor-gui:cursor-2")).toBeDefined();
+    expect(again.get().find((row) => row.id === id)).toBeDefined();
     expect(again.get()[0]?.onboarded).toBe(false);
   });
 });

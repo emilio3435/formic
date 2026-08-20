@@ -190,6 +190,7 @@ const HOME_MARK = {
   omp: "/icons/omp.svg",
   muse: "/icons/muse.svg",
   copilot: "/icons/copilot.svg",
+  "gemini-cli": "/icons/gemini-cli.svg",
   "antigravity-cli": "/icons/antigravity.png",
   "antigravity-desktop": "/icons/antigravity.png",
   "antigravity-ide": "/icons/antigravity.png",

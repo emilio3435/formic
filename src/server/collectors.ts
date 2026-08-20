@@ -31,6 +31,7 @@ import { createHermesParser, parseHermesJsonl } from "./hermes";
 import { collectMuseSessions } from "./muse";
 import { collectCopilotSessions } from "./copilot";
 import { collectAntigravitySessions, defaultAntigravityTrees } from "./antigravity";
+import { collectGeminiSessions } from "./gemini";
 import { readHookSessionStores, type HookSessionRecord } from "./cmux-hook-sessions";
 import { readProcessLineage, type ProcessLineageExec } from "./process-lineage";
 import { livenessOf, processAliveFrom } from "./process-liveness";
@@ -44,6 +45,7 @@ export interface CollectSessionsOptions {
   extraGrokBotRoots?: readonly string[];
   extraGrokCliRoots?: readonly string[];
   extraCopilotRoots?: readonly string[];
+  extraGeminiCliRoots?: readonly string[];
 }
 export type SessionProviderResult = CollectionResult<CollectedAgent[]>;
 export type SessionProviderResults = Record<Provider, SessionProviderResult>;
@@ -99,6 +101,7 @@ const PROVIDER_NAMES: Record<Provider, string> = {
   muse: "Muse",
   antigravity: "Antigravity",
   copilot: "Copilot",
+  gemini: "Gemini CLI",
 };
 
 const NON_TASK_PREFIXES = [
@@ -329,6 +332,7 @@ const AUTHORED_BY: Record<Provider, AuthoredNameSource> = {
   muse: "muse-title",
   antigravity: "antigravity-title",
   copilot: "copilot-title",
+  gemini: "gemini-title",
 };
 
 function statusFrom(
@@ -395,6 +399,8 @@ export function makeAgent(input: {
   model?: string;
   effort?: string;
   task?: string;
+  /** The source defines its first task as the display fallback ahead of cwd. */
+  taskBeforeOriginCwd?: boolean;
   startedAt?: string;
   updatedAt: string;
   tokens: TokenUsage;
@@ -442,6 +448,7 @@ export function makeAgent(input: {
      the other providers; keep the legacy displayName below for old clients. */
   const authoredName = usefulExplicitName ||
     (input.provider === "codex" ? input.nickname : undefined);
+  const taskName = taskDisplayName(input.task);
   const thread = input.thread ?? threadFromMessages(input.humanMessages, input.exited);
   const identity = resolveAgentName({
     provider: input.provider,
@@ -449,8 +456,8 @@ export function makeAgent(input: {
     authored: authoredName
       ? { name: authoredName, by: AUTHORED_BY[input.provider] }
       : undefined,
-    originCwd: input.originCwd ?? input.cwd,
-    taskName: taskDisplayName(input.task),
+    originCwd: input.taskBeforeOriginCwd ? undefined : input.originCwd ?? input.cwd,
+    taskName,
   });
   return {
     identity,
@@ -466,8 +473,7 @@ export function makeAgent(input: {
     // message lane — not as the agent/terminal name operators hunt for in cmux.
     displayName:
       usefulExplicitName ||
-      cwdIdentity ||
-      taskDisplayName(input.task) ||
+      (input.taskBeforeOriginCwd ? taskName : cwdIdentity || taskName) ||
       `${PROVIDER_NAMES[input.provider]} session`,
     cwd: input.cwd,
     model: input.model,
@@ -1340,6 +1346,7 @@ export async function collectSessionProvider(
   windowMs = DEFAULT_SESSION_WINDOW_MS,
   thresholds?: LifecycleThresholds,
   options: CollectSessionsOptions = {},
+  signal?: AbortSignal,
 ): Promise<SessionProviderResult> {
   switch (provider) {
     case "omp":
@@ -1407,6 +1414,17 @@ export async function collectSessionProvider(
         Date.now(),
         windowMs,
         thresholds,
+      );
+    }
+    case "gemini": {
+      const override = home === homedir() ? process.env.GEMINI_CLI_HOME?.trim() : undefined;
+      const geminiHome = override || home;
+      return collectGeminiSessions(
+        [join(geminiHome, ".gemini"), ...(options.extraGeminiCliRoots ?? [])],
+        windowMs,
+        thresholds,
+        Date.now(),
+        signal,
       );
     }
   }

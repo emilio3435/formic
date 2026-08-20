@@ -336,6 +336,10 @@ export function roleFor2(
 
 export function effortFor(agent: CollectedAgent): string | undefined {
   if (agent.effort) return agent.effort.toUpperCase();
+  /* Gemini CLI does not persist thinking level in its conversation records.
+     A raw model id containing words such as "high" is still only a model id;
+     inferring effort from it would violate the collector's explicit unknown. */
+  if (agent.provider === "gemini") return undefined;
   const model = agent.model?.toLowerCase();
   if (!model) return undefined;
   if (/(?:^|[-_])xhigh(?:$|[-_])/.test(model)) return "XHIGH";

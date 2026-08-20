@@ -8,6 +8,11 @@ import type {
   TargetResolution,
 } from "../shared/types";
 import { readableChatBody } from "./human-message";
+import {
+  readGeminiConversationFile,
+  replayGeminiText,
+  type GeminiConversation,
+} from "./gemini";
 import { isReplicaBlob, parseReplicaBlob } from "./grok-bot";
 import { routingSurfaceObservations, type RoutingSurfaceObservation } from "./targets";
 import type { CmuxSurface } from "./types";
@@ -603,6 +608,52 @@ function codexTranscriptLines(agent: AgentSnapshot, contents: string): Transcrip
   return emitTranscriptDrafts(drafts, agent.provider);
 }
 
+function geminiTranscriptLinesFromConversation(
+  agent: AgentSnapshot,
+  conversation: GeminiConversation,
+): TranscriptLine[] {
+  const drafts: GrokTranscriptDraft[] = [];
+  const tools = new Map<string, GrokToolDraft>();
+  for (const message of conversation.messages) {
+    const type = typeof message.type === "string" ? message.type : undefined;
+    const at = message.timestamp;
+    if (type === "user") {
+      pushSpeechDraft(drafts, "user", message.content, at);
+      continue;
+    }
+    if (type !== "gemini") continue;
+    if (Array.isArray(message.thoughts)) {
+      for (const value of message.thoughts) {
+        const thought = object(value);
+        if (!thought) continue;
+        const subject = typeof thought.subject === "string" ? thought.subject.trim() : "";
+        const description = typeof thought.description === "string" ? thought.description.trim() : "";
+        const body = [subject, description].filter(Boolean).join("\n");
+        if (body) pushThoughtDraft(drafts, body, thought.timestamp ?? at);
+      }
+    }
+    if (Array.isArray(message.toolCalls)) {
+      for (const value of message.toolCalls) {
+        const tool = object(value);
+        if (!tool) continue;
+        upsertToolDraft(drafts, tools, {
+          at: tool.timestamp ?? at,
+          callId: typeof tool.id === "string" ? tool.id : undefined,
+          title: typeof tool.name === "string" ? tool.name : undefined,
+          status: typeof tool.status === "string" ? tool.status : undefined,
+        });
+      }
+    }
+    pushSpeechDraft(drafts, "assistant", message.content, at);
+  }
+  return emitTranscriptDrafts(drafts, agent.provider);
+}
+
+function geminiTranscriptLines(agent: AgentSnapshot, contents: string): TranscriptLine[] {
+  const conversation = replayGeminiText(contents);
+  return conversation ? geminiTranscriptLinesFromConversation(agent, conversation) : [];
+}
+
 function grokTranscriptLines(
   agent: AgentSnapshot,
   contents: string,
@@ -690,6 +741,7 @@ export function transcriptLines(
      on text/output_text only so last-close cannot leak thinking or tool guts. */
   if (agent.provider === "claude") return claudeTranscriptLines(agent, contents);
   if (agent.provider === "codex") return codexTranscriptLines(agent, contents);
+  if (agent.provider === "gemini") return geminiTranscriptLines(agent, contents);
 
   const lines: TranscriptLine[] = [];
   for (const raw of contents.split("\n")) {
@@ -735,6 +787,23 @@ export async function transcriptResponse(
     );
   }
   try {
+    if (agent.provider === "gemini") {
+      const conversation = await readGeminiConversationFile(source);
+      const lines = conversation ? geminiTranscriptLinesFromConversation(agent, conversation) : [];
+      return Response.json(
+        {
+          ok: true,
+          agentId,
+          source,
+          truncated: Boolean(conversation?.partial) || lines.length > limit,
+          lines: lines.slice(-limit),
+          ...(conversation?.warnings?.length
+            ? { warning: conversation.warnings.join("; ") }
+            : {}),
+        },
+        { headers: responseHeaders },
+      );
+    }
     const contents = await readFile(source, "utf8");
     let historyContents: string | undefined;
     if (agent.provider === "grok") {

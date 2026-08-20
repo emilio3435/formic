@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { parseClaudeJsonl, parseCodexJsonl, parseOmpJsonl } from "./collectors";
+import { parseGeminiConversationFile } from "./gemini";
 import type { CollectedAgent } from "./types";
 import type { HubSnapshot } from "../shared/types";
 
@@ -49,8 +50,10 @@ export interface SessionCallsPayload {
     the published total. A second extraction written here would be a second
     derivation, and the whole value of the series is that it is the one the
     board actually added up. */
-function reparse(agent: { provider: string }, source: string, text: string): CollectedAgent | null {
+async function reparse(agent: { provider: string }, source: string): Promise<CollectedAgent | null> {
   const meta = { sourcePath: source };
+  if (agent.provider === "gemini") return parseGeminiConversationFile(source, meta);
+  const text = await readFile(source, "utf8");
   switch (agent.provider) {
     case "claude": return parseClaudeJsonl(text, meta);
     case "omp": return parseOmpJsonl(text, meta);
@@ -107,7 +110,7 @@ export async function sessionCallsResponse(
 
   let parsed: CollectedAgent | null;
   try {
-    parsed = reparse(agent, source, await readFile(source, "utf8"));
+    parsed = await reparse(agent, source);
   } catch (error) {
     /* Loud, not empty. A transcript that has rotated away is a reason the
        series is missing, and reporting [] would let a caller conclude the

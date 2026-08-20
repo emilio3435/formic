@@ -95,7 +95,7 @@ type Abortable<T extends (...args: any[]) => any> = (
 
 export interface HubCollectors {
   sessions: Abortable<typeof collectSessions>;
-  sessionProvider?: Abortable<typeof collectSessionProvider>;
+  sessionProvider?: typeof collectSessionProvider;
   finalizeSessions?: typeof finalizeSessionProviders;
   spendSources?: typeof collectHermesSpendSources;
   cmux: Abortable<typeof collectCmux>;
@@ -140,8 +140,9 @@ export function providerCollectionConfigKey(
   extraGrokBotRoots: readonly string[] = [],
   extraGrokCliRoots: readonly string[] = [],
   extraCopilotRoots: readonly string[] = [],
+  extraGeminiCliRoots: readonly string[] = [],
 ): string {
-  return `${windowMs}:${thresholds?.freshMs ?? "default"}:${thresholds?.quietMs ?? "default"}:${extraCursorGuiRoots.join(",")}:bot=${extraGrokBotRoots.join(",")}:cli=${extraGrokCliRoots.join(",")}:copilot=${extraCopilotRoots.join(",")}`;
+  return `${windowMs}:${thresholds?.freshMs ?? "default"}:${thresholds?.quietMs ?? "default"}:${extraCursorGuiRoots.join(",")}:bot=${extraGrokBotRoots.join(",")}:cli=${extraGrokCliRoots.join(",")}:copilot=${extraCopilotRoots.join(",")}:gemini=${extraGeminiCliRoots.join(",")}`;
 }
 
 function waitWithAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -229,6 +230,7 @@ export interface HubStateOptions {
   botRootsReader?: () => readonly string[];
   grokCliRootsReader?: () => readonly string[];
   copilotRootsReader?: () => readonly string[];
+  geminiRootsReader?: () => readonly string[];
   triageReader?: () => readonly TriageQueueSummary[];
   burnReader?: () => Promise<UsageSummary>;
   cmuxExecutable?: string;
@@ -307,6 +309,7 @@ export class HubState {
   private readonly botRootsReader?: () => readonly string[];
   private readonly grokCliRootsReader?: () => readonly string[];
   private readonly copilotRootsReader?: () => readonly string[];
+  private readonly geminiRootsReader?: () => readonly string[];
   private readonly triageReader?: () => readonly TriageQueueSummary[];
   private readonly burnReader?: () => Promise<UsageSummary>;
   private readonly cmuxExecutable: string;
@@ -334,6 +337,7 @@ export class HubState {
     this.botRootsReader = options.botRootsReader;
     this.grokCliRootsReader = options.grokCliRootsReader;
     this.copilotRootsReader = options.copilotRootsReader;
+    this.geminiRootsReader = options.geminiRootsReader;
     this.triageReader = options.triageReader;
     this.burnReader = options.burnReader;
     this.cmuxExecutable = options.cmuxExecutable ?? DEFAULT_CMUX_EXECUTABLE;
@@ -797,6 +801,7 @@ export class HubState {
       }
       console.error(`[HubState] refresh watchdog dropped a pass pending for ${pendingMs}ms`);
       this.#refreshAbort?.abort(new Error("refresh superseded by watchdog"));
+      this.#providerSettlement.discardInFlight();
       this.#refreshing = undefined;
       this.#refreshAbort = undefined;
       this.#refreshStartedAtMs = undefined;
@@ -901,6 +906,7 @@ export class HubState {
     const extraGrokBotRoots = this.botRootsReader?.() ?? [];
     const extraGrokCliRoots = this.grokCliRootsReader?.() ?? [];
     const extraCopilotRoots = this.copilotRootsReader?.() ?? [];
+    const extraGeminiCliRoots = this.geminiRootsReader?.() ?? [];
     type SessionsResult = Awaited<ReturnType<HubCollectors["sessions"]>>;
     type SpendSourcesResult = Awaited<ReturnType<typeof collectHermesSpendSources>>;
     type CmuxResult = Awaited<ReturnType<HubCollectors["cmux"]>>;
@@ -992,16 +998,17 @@ export class HubState {
     const providerCollection = (this.collectors.sessionProvider && this.collectors.finalizeSessions
       ? track("providers", (async () => {
           const configKey = providerCollectionConfigKey(
-            windowMs, thresholds, extraCursorGuiRoots, extraGrokBotRoots, extraGrokCliRoots, extraCopilotRoots,
+            windowMs, thresholds, extraCursorGuiRoots, extraGrokBotRoots, extraGrokCliRoots, extraCopilotRoots, extraGeminiCliRoots,
           );
           const selection = await this.#providerSettlement.settle(
             providers,
             async (provider) => {
               try {
                 return await this.collectors.sessionProvider!(
-                  provider, homedir(), windowMs, thresholds, { extraCursorGuiRoots, extraGrokBotRoots, extraGrokCliRoots, extraCopilotRoots }, signal,
+                  provider, homedir(), windowMs, thresholds, { extraCursorGuiRoots, extraGrokBotRoots, extraGrokCliRoots, extraCopilotRoots, extraGeminiCliRoots }, signal,
                 );
               } catch (error) {
+                if (signal.aborted) throw signal.reason ?? error;
                 return {
                   value: [],
                   errors: [`${provider} collection failed: ${error instanceof Error ? error.message : String(error)}`],
@@ -1032,7 +1039,7 @@ export class HubState {
             );
           }
         })())
-      : capture("session collection failed", this.collectors.sessions(homedir(), windowMs, thresholds, { extraCursorGuiRoots, extraGrokBotRoots, extraGrokCliRoots, extraCopilotRoots }, signal), (value) => {
+      : capture("session collection failed", this.collectors.sessions(homedir(), windowMs, thresholds, { extraCursorGuiRoots, extraGrokBotRoots, extraGrokCliRoots, extraCopilotRoots, extraGeminiCliRoots }, signal), (value) => {
           sessionsResult = value;
         })).catch((error) => {
           if (!signal.aborted) {

@@ -28,6 +28,7 @@ const emptySessions = () => ({
   muse: { value: [], errors: [] },
   antigravity: { value: [], errors: [] },
   copilot: { value: [], errors: [] },
+  gemini: { value: [], errors: [] },
 });
 
 const ROUTING_RACE_SESSION_ID = "routing-race-session";
@@ -1140,6 +1141,56 @@ describe("cmux collection time truth", () => {
     unsubscribe();
   });
 
+  test("a watchdog-aborted provider scan is retried without publishing the abort as source failure", async () => {
+    let nowMs = 1_000;
+    const now = spyOn(Date, "now").mockImplementation(() => nowMs);
+    const logged = spyOn(console, "error").mockImplementation(() => {});
+    let geminiCalls = 0;
+    const replacementGemini = routingRaceSource({
+      id: "gemini:11111111-1111-4111-8111-111111111111",
+      provider: "gemini",
+      sourceSessionId: "11111111-1111-4111-8111-111111111111",
+      displayName: "Gemini replacement row",
+      updatedAt: new Date(nowMs).toISOString(),
+    });
+    const collectors: HubCollectors = {
+      sessions: async () => emptySessions(),
+      sessionProvider: async (provider, _home, _windowMs, _thresholds, _options, signal) => {
+        if (provider !== "gemini") return { value: [], errors: [] };
+        geminiCalls += 1;
+        if (geminiCalls > 1) return { value: [replacementGemini], errors: [] };
+        return new Promise((resolve, reject) => {
+          if (signal?.aborted) {
+            reject(signal.reason);
+            return;
+          }
+          signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      },
+      finalizeSessions: (results) => results,
+      cmux: async () => ({ value: [], errors: [] }),
+      notifications: async () => ({ value: [], errors: [] }),
+      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+    };
+    const state = new HubState(recordingRunner([]), { has: () => false, archive: async () => {} }, [], {
+      collectors,
+      settingsReader: () => normalizeSettings(undefined),
+    });
+
+    const superseded = state.refresh();
+    while (geminiCalls === 0) await Promise.resolve();
+    nowMs += 20_000;
+    const replacement = await state.refresh();
+    await superseded;
+
+    expect(geminiCalls).toBe(2);
+    expect(replacement.controlHealth.errors.join(" ")).not.toContain("superseded by watchdog");
+    expect(replacement.totals.sourceHealth?.byProvider?.gemini.healthy).toBeTrue();
+    expect(replacement.programs.flatMap(({ agents }) => agents).map(({ id }) => id)).toContain(replacementGemini.id);
+    now.mockRestore();
+    logged.mockRestore();
+  });
+
   test("an empty prior success does not claim last-known rows after provider timeout", async () => {
     let pass = 0;
     const never = new Promise<never>(() => {});
@@ -1429,6 +1480,7 @@ describe("cmux collection time truth", () => {
           grokCli: options?.extraGrokCliRoots ?? [],
           grokBot: options?.extraGrokBotRoots ?? [],
           copilot: options?.extraCopilotRoots ?? [],
+          gemini: options?.extraGeminiCliRoots ?? [],
         });
         const errors = provider === "cursor"
           ? ["Cursor extra root /tmp/Cursor-2 is unreadable"]
@@ -1436,6 +1488,8 @@ describe("cmux collection time truth", () => {
             ? ["Grok extra root /tmp/.grok-2 is unreadable"]
             : provider === "copilot"
               ? ["Copilot extra root /tmp/.copilot-2 is unreadable"]
+              : provider === "gemini"
+                ? ["Gemini CLI extra root /tmp/.gemini-2 is unreadable"]
               : [];
         return { value: [], errors };
       },
@@ -1454,6 +1508,7 @@ describe("cmux collection time truth", () => {
       grokCliRootsReader: () => ["/tmp/.grok-2"],
       botRootsReader: () => ["/tmp/Grok Bot 2"],
       copilotRootsReader: () => ["/tmp/.copilot-2"],
+      geminiRootsReader: () => ["/tmp/.gemini-2"],
     });
 
     await state.refresh();
@@ -1464,9 +1519,11 @@ describe("cmux collection time truth", () => {
       grokBot: ["/tmp/Grok Bot 2"],
     });
     expect(seen.get("copilot")?.copilot).toEqual(["/tmp/.copilot-2"]);
+    expect(seen.get("gemini")?.gemini).toEqual(["/tmp/.gemini-2"]);
     expect(state.get().totals.sourceHealth?.byProvider?.cursor.healthy).toBe(false);
     expect(state.get().totals.sourceHealth?.byProvider?.grok.healthy).toBe(false);
     expect(state.get().totals.sourceHealth?.byProvider?.copilot.healthy).toBe(false);
+    expect(state.get().totals.sourceHealth?.byProvider?.gemini.healthy).toBe(false);
     expect(state.get().totals.sourceHealth?.byProvider?.claude.healthy).toBe(true);
   });
   test("per-source health timestamps set on success and survive later failure", async () => {
@@ -1659,6 +1716,7 @@ describe("what is recorded is what is published", () => {
         muse: { value: [], errors: [] },
         antigravity: { value: [], errors: [] },
         copilot: { value: [], errors: [] },
+        gemini: { value: [], errors: [] },
       }),
       cmux: async () => ({ value: [], errors: [] }),
       notifications: async () => ({ value: [], errors: [] }),

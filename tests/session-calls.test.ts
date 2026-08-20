@@ -1,9 +1,10 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseClaudeJsonl, parseCodexJsonl, parseOmpJsonl } from "../src/server/collectors";
 import { parseCursorChildSession } from "../src/server/cursor";
+import { parseGeminiJsonl } from "../src/server/gemini";
 import { sessionCallsResponse } from "../src/server/session-calls";
 import { buildSnapshot } from "../src/server/snapshot";
 import type { CollectedAgent } from "../src/server/types";
@@ -219,6 +220,26 @@ describe("the endpoint answers with checkable evidence", () => {
     expect(body.prefixSums).toContain(112_258);
     expect(body.prefixSums.at(-1)).toBe(293_235);
     expect(body.sessionProcessed).toBe(293_235);
+  });
+
+  test("Gemini debug session calls reparse the bounded transcript with prefix sums", async () => {
+    const source = join(
+      import.meta.dir,
+      "fixtures/gemini/demo-project/chats/session-2026-08-19T12-00-abcd1234.jsonl",
+    );
+    const text = await readFile(source, "utf8");
+    const parsed = parseGeminiJsonl(text, { sourcePath: source, nowMs: Date.parse(at(9)) })!;
+    const agent = {
+      ...parsed,
+      artifacts: [{ kind: "transcript", path: source, label: "Transcript" } as never],
+    };
+
+    expect(parsed.callSizes).toEqual([125, 150]);
+    const { body } = await serve([agent], agent.id);
+    expect(body.calls).toEqual([125, 150]);
+    expect(body.sessionProcessed).toBe(275);
+    expect(body.prefixSums).toEqual([125, 275]);
+    expect(body.unavailable).toBeUndefined();
   });
 
   test("a total that is NOT a prefix does not match one", async () => {

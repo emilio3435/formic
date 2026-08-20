@@ -63,7 +63,7 @@ describe("control refusal wire shape", () => {
           "No cmux hook-store record exists for this source session.",
           "No recorded cmux target IDs on this source.",
           "Source session ID is not present on any ready cmux surface this scan.",
-          "Cursor GUI agents require exact cmux identity; cwd fallback is disabled.",
+          "This harness requires exact cmux identity; cwd fallback is disabled.",
         ],
         observationsUrl: "/api/debug/identity?agent=cursor%3Abebe2e7c-c783-4449-b75d-d707cba51ac4",
       },

@@ -48,6 +48,12 @@ export class ProviderSettlementCoordinator<P extends string, T> {
 
   constructor(private readonly isSuccessful: (value: T) => boolean) {}
 
+  /** A watchdog explicitly abandoned these scans. Keep last-known truth, but
+      prevent the replacement generation from reusing an aborting promise. */
+  discardInFlight(): void {
+    for (const slot of this.#slots.values()) slot.inFlight = undefined;
+  }
+
   async settle(
     providers: readonly P[],
     scan: (provider: P) => Promise<T>,
@@ -144,7 +150,9 @@ export class ProviderSettlementCoordinator<P extends string, T> {
     void promise.then(
       (settled) => {
         inFlight.settled = settled;
-        if (this.isSuccessful(settled.value)) slot.lastSuccessful = settled;
+        if (slot.inFlight === inFlight && this.isSuccessful(settled.value)) {
+          slot.lastSuccessful = settled;
+        }
         if (inFlight.observers === 0) this.#finish(slot, inFlight);
       },
       () => {

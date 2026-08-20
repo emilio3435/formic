@@ -1480,7 +1480,7 @@ describe("Cursor Agent live pane identity", () => {
 
     expect(target).toEqual({
       resolution: "missing",
-      reason: "Cursor GUI agents require exact cmux identity; cwd fallback is disabled.",
+      reason: "This harness requires exact cmux identity; cwd fallback is disabled.",
     });
   });
 });

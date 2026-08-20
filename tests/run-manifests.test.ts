@@ -524,6 +524,7 @@ test("the cmux refresh tick supplies manifests and workspace env to the snapshot
       muse: { value: [], errors: [] },
       antigravity: { value: [], errors: [] },
       copilot: { value: [], errors: [] },
+      gemini: { value: [], errors: [] },
     }),
     cmux: async () => ({
       value: [{

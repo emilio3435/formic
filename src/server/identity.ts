@@ -34,6 +34,7 @@ const PROVIDER_BINARIES: Record<Provider, string> = {
   muse: "muse",
   antigravity: "agy",
   copilot: "copilot",
+  gemini: "gemini",
 };
 const AGENT_BINARIES = Object.values(PROVIDER_BINARIES).join("|");
 const RESUME_PROVIDERS = PROVIDERS.join("|");
@@ -130,6 +131,18 @@ export function identityFromSessionPath(path: string): IdentityHint | null {
       full: true,
     };
   }
+  const geminiChild = path.match(
+    new RegExp(`\\/\\.gemini(?:[^/]*)\\/tmp\\/[^/]+\\/chats\\/(${UUID})\\/(${UUID})\\.jsonl$`, "i"),
+  );
+  if (geminiChild) {
+    return { provider: "gemini", value: geminiChild[2].toLowerCase(), full: true };
+  }
+  const geminiMain = path.match(
+    /\/\.gemini(?:[^/]*)\/tmp\/[^/]+\/chats\/session-[^/]*-([a-z0-9]{8})\.jsonl?$/i,
+  );
+  if (geminiMain) {
+    return { provider: "gemini", value: geminiMain[1].toLowerCase(), full: false };
+  }
   const antigravityTranscript = path.match(
     new RegExp(`\\/antigravity(?:-cli|-ide)?\\/brain\\/(${UUID})\\/`, "i"),
   );
@@ -176,6 +189,7 @@ export function identitiesFromCommand(command: string): IdentityHint[] {
     ["muse", new RegExp(`(?:^|[\\s/])muse(?:-bin-[^\\s/]+)?\\b[^\\n]{0,160}?\\sresume\\s+(${UUID})(?:\\s|$)`, "i")],
     ["copilot", new RegExp(`(?:^|[\\s/])copilot\\b[^\\n]{0,160}?\\s(?:-r|--resume|--session-id)(?:\\s+|=)(${UUID})(?:\\s|$)`, "i")],
     ["antigravity", new RegExp(`(?:^|[\\s/])agy\\b[^\\n]{0,160}?\\s(?:--conversation|-c)(?:\\s+|=)(${UUID})(?:\\s|$)`, "i")],
+    ["gemini", new RegExp(`(?:^|[\\s/])gemini\\b[^\\n]{0,160}?\\s(?:-r|--resume)(?:\\s+|=)(${UUID})(?:\\s|$)`, "i")],
   ];
   for (const [provider, pattern] of exactPatterns) {
     const match = command.match(pattern);
@@ -185,8 +199,12 @@ export function identitiesFromCommand(command: string): IdentityHint[] {
     new RegExp(`\\/cmux-agent-resume\\/(${RESUME_PROVIDERS})-([0-9a-f-]{8,36})(?:\\.zsh)?(?:\\s|$)`, "i"),
   );
   if (resume) {
+    const provider = resume[1].toLowerCase() as Provider;
     const value = resume[2].toLowerCase();
-    hints.push({ provider: resume[1].toLowerCase() as Provider, value, full: new RegExp(`^${UUID}$`, "i").test(value) });
+    const full = new RegExp(`^${UUID}$`, "i").test(value);
+    /* Gemini's own resume contract requires the full UUID. A short wrapper id
+       is only a filename lookup prefix and must not choose an active row. */
+    if (provider !== "gemini" || full) hints.push({ provider, value, full });
   }
   return hints;
 }
@@ -640,6 +658,28 @@ export async function enrichCmuxIdentity(
     }
     return resolvedCommandHints.get(key) ?? {};
   };
+  const resolvedOpenHint = (path: string, hint: IdentityHint): IdentityHint | undefined => {
+    if (hint.full) return hint;
+    /* Gemini main-session filenames carry only the first eight UUID characters.
+       That prefix is a lookup key, not session identity: choosing whichever
+       matching row happens to be active can attach liveness and controls to a
+       different same-prefix session. The collector already publishes the exact
+       transcript path as an artifact, so a partial open-file hint may become a
+       full claim only when that exact path belongs to one compatible row. */
+    const matches = agents.filter((agent) => {
+      if (agent.provider !== hint.provider) return false;
+      const sourceId = agent.sourceSessionId.toLowerCase();
+      const runtimeId = agent.runtimeSessionId?.toLowerCase();
+      if (!sourceId.startsWith(hint.value) && !runtimeId?.startsWith(hint.value)) return false;
+      return agent.artifacts.some((artifact) => artifact.kind === "transcript" && artifact.path === path);
+    });
+    if (matches.length !== 1) return undefined;
+    return {
+      provider: hint.provider,
+      value: matches[0].sourceSessionId.toLowerCase(),
+      full: true,
+    };
+  };
   const pids = [...new Set([...recognizedAgentProcessIds, ...processes.map(({ pid }) => pid)])];
   let openFiles = new Map<number, string[]>();
   if (pids.length > 0) {
@@ -736,7 +776,8 @@ export async function enrichCmuxIdentity(
     const sessionOwned = !isSharedAgentService(commandByPid.get(pid) ?? "");
     for (const path of paths) {
       const hint = identityFromSessionPath(path);
-      if (hint) addProcessEvidence(identityKey(hint), pid, { transcriptOpen: true, sessionOwned });
+      const resolved = hint ? resolvedOpenHint(path, hint) : undefined;
+      if (resolved) addProcessEvidence(identityKey(resolved), pid, { transcriptOpen: true, sessionOwned });
     }
   }
   for (const process of allProcesses) {
@@ -833,7 +874,8 @@ export async function enrichCmuxIdentity(
       const openFileMatches: SurfaceOpenFileEvidence[] = surfaceProcesses.flatMap((process) =>
         (openFiles.get(process.pid) ?? []).flatMap((path) => {
           const hint = identityFromSessionPath(path);
-          return hint ? [{ pid: process.pid, path, provider: hint.provider, sessionId: hint.value }] : [];
+          const resolved = hint ? resolvedOpenHint(path, hint) : undefined;
+          return resolved ? [{ pid: process.pid, path, provider: resolved.provider, sessionId: resolved.value }] : [];
         }),
       );
       const commandHintEvidence: SurfaceCommandHintEvidence[] = surfaceProcesses.flatMap((process) =>

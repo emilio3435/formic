@@ -9971,6 +9971,7 @@ const HARNESS_MARK = {
   muse: { src: "/icons/muse.svg", label: "Muse Code" },
   antigravity: { src: "/icons/antigravity.png", label: "Antigravity", raster: true },
   copilot: { src: "/icons/copilot.svg", label: "Copilot CLI" },
+  gemini: { src: "/icons/gemini-cli.svg", label: "Gemini CLI" },
   omni: { src: "/icons/omp.svg", label: "OMP" },
 };
 const AGENT_MARK = {
