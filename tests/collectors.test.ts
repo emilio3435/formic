@@ -890,7 +890,7 @@ describe("collector identity and usage truth", () => {
     ].join("\n"), { nowMs });
 
     expect(agent?.task).toBe("Mission: Redesign the Platforms operating room.");
-    expect(agent?.displayName).toBe("Claude · Home");
+    expect(agent?.displayName).toBe("Claude Code · Home");
   });
 
   /* The drawer prints `task` under the heading as the standing objective, so

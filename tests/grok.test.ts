@@ -106,7 +106,7 @@ describe("a Grok Build session becomes an agent", () => {
     }, { mtimeMs: NOW, nowMs: NOW });
     expect(fromUpdates).toMatchObject({
       provider: "grok",
-      displayName: "Grok · formic",
+      displayName: "Grok Build · formic",
       task: "Add Grok Build to the board.",
       tokens: { provenance: "unknown" },
     });

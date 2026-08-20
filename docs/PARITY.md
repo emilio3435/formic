@@ -60,6 +60,55 @@ Exact blockers remain: file collection cannot observe new user-only or `--no-ses
 
 ## Harness marks
 
+### Canonical operator labels
+
+One label per `Provider`, harness-qualified, identical across the row's Harness
+cell, the Harness filter facet, the Mix reading, the Inspector's `Run` fact,
+Settings, both `PROVIDER_DISPLAY_NAMES` maps, and the durable names
+`PROVIDER_NAMES` composes. The column is titled *Harness* and the board draws a
+separate Agent mark, so the product name is the right one: "Claude" names a
+model family as readily as a harness.
+
+<!-- harness-labels:begin -->
+
+| Provider key | Operator label |
+| --- | --- |
+| `codex` | Codex |
+| `omp` | OMP |
+| `claude` | Claude Code |
+| `cursor` | Cursor |
+| `factory` | Factory |
+| `prime` | Prime |
+| `grok` | Grok Build |
+| `hermes` | Hermes |
+| `muse` | Muse Code |
+| `antigravity` | Antigravity |
+| `copilot` | Copilot CLI |
+| `gemini` | Gemini CLI |
+| `opencode` | OpenCode |
+| `pi` | Pi |
+
+<!-- harness-labels:end -->
+
+### Inspector channel rail
+
+<!-- harness-channel:begin -->
+
+`.dw-provider--<key>` sets `--prov` for the four oldest providers, which each
+have a dedicated channel colour. Every other provider deliberately uses one
+**shared** fallback rail, painted by the base rule as
+`inset 3px 0 var(--prov, var(--line-strong))`.
+
+Providers on the shared rail: `antigravity`, `copilot`, `factory`, `gemini`,
+`grok`, `hermes`, `muse`, `opencode`, `pi`, `prime`.
+
+This is a decision, not an omission. Ten more accent colours would make the rail
+decorative rather than identifying, and the drawer already names its harness in
+its Run fact. Give a provider its own colour only when the colour carries
+meaning the name does not.
+
+<!-- harness-channel:end -->
+
 `HARNESS_MARK` / `AGENT_MARK` in `src/web/app.js`. A configured mark is an official file under `src/web/icons/` with a `src`; a label without one is an explicitly documented unset state. Do not generate a mark, use `formic-mark.svg` as a stand-in, or invent a `src`.
 
 | Mark | File | Used as | Official source |

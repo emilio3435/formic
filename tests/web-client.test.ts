@@ -2598,13 +2598,37 @@ describe("snippet honesty", () => {
 });
 
 describe("token honesty", () => {
-  test("an all-zero reading renders as absence, not as a measurement", () => {
-    /* Sweep audit §16: a spend-limit-locked session reported total 0 and the
-       row printed a bold "0" styled exactly like a reading — a measurement the
-       source never made. Zero everywhere is a source that has said nothing. */
-    const s = M.tokenSummary({ provenance: "observed", scope: "latest-turn", total: 0 });
-    expect(s.known).toBe(false);
-    expect(s.text).toBe("not reported");
+  test("an all-zero observed reading is a reading; an unreported one is absence", () => {
+    /* Sweep audit §16 read every all-zero block as absence, on the grounds that
+       a bold "0" styled like a reading claims a measurement the source never
+       made. That was right about the CASE it measured — a spend-limit-locked
+       session whose counters were never populated — and wrong about the rule it
+       drew from it, because it keyed on the value instead of on the provenance.
+
+       `provenance` is exactly the field that separates the two: a source that
+       says "observed, 0" has counted and found none, and a source that says
+       nothing carries `unknown`. Collapsing them discarded a real reading —
+       OpenCode's archived child sessions genuinely report zero of everything,
+       and the board answered "not reported" about counters it had been handed.
+
+       So the distinction moves to provenance, and the audit's own case still
+       holds under it: an unpopulated block is `unknown` and still reads as
+       absence. */
+    const observed = M.tokenSummary({ provenance: "observed", scope: "latest-turn", total: 0 });
+    expect(observed.known).toBe(true);
+    expect(observed.text).toBe("0");
+
+    /* The audit's case, restated by provenance rather than by value. */
+    const unreported = M.tokenSummary({ provenance: "unknown", scope: "latest-turn", total: 0 });
+    expect(unreported.known).toBe(false);
+    expect(unreported.text).toBe("not reported");
+
+    /* And a block with no counters at all is still absence, observed or not:
+       there is no zero here to report, only silence. */
+    const empty = M.tokenSummary({ provenance: "observed", scope: "latest-turn" });
+    expect(empty.known).toBe(false);
+    expect(empty.text).toBe("not reported");
+
     // A real measurement with one zero part is untouched.
     expect(M.tokenSummary({ provenance: "observed", total: 1200, output: 0 }).known).toBe(true);
   });
@@ -3074,11 +3098,18 @@ describe("unavailable-control explanation stays plain-language", () => {
      accusing both of an evidence conflict neither had. The banner now prints
      the server's own sentence, which is the point of stamping `target.reason`.
 
-     What did NOT change, and is why this test still exists: the surface UUID
-     inside that sentence never reaches the chrome, and the DOCK stays silent.
-     A tty name survives on purpose — it names the terminal an operator has to
-     go and look at, which is the one identifier that is an instruction rather
-     than a fact about our own bookkeeping. */
+     What did NOT change, and is why this test still exists: raw identifiers
+     inside that sentence never reach the chrome, and the DOCK stays silent.
+
+     The identifier rule this test pins is the established one — raw cmux and
+     session identifiers belong ONLY in Evidence — and it covers tty names as
+     well as surface UUIDs. This test used to carve out the tty on the theory
+     that it is an instruction rather than bookkeeping. It is neither: the
+     operator cannot act on "ttys011" without first going to Evidence to learn
+     which sessions are on it, so the tty in the banner buys nothing and
+     contradicts controlUnavailableText above (which already rejects /ttys/),
+     IDENTITY_CAUSES, and renderControlBanner's own privacy test. The banner
+     names the SHAPE of the collision; Evidence names the terminal. */
   test("the banner prints the server's reason, ID-stripped; the dock stays silent", () => {
     const reason = "cmux surface is quarantined because exact identity evidence conflicts:"
       + " cmux 8B1F2C3D-4E5F-4A6B-8C9D-0E1F2A3B4C5D has conflicting open agent session files on ttys011";
@@ -3100,7 +3131,10 @@ describe("unavailable-control explanation stays plain-language", () => {
     // reports it.
     expect(banner).not.toBeNull();
     const bannerText = textOf(banner);
-    expect(bannerText).toContain("has conflicting open agent session files on ttys011");
+    expect(bannerText).toContain("this pane has conflicting open agent session files on this terminal");
+    // The terminal is named in Evidence, never in Operate chrome.
+    expect(bannerText).not.toContain("ttys011");
+    expect(bannerText).not.toMatch(/\bttys\d+\b/i);
     // ...and it is no longer the generic accusation.
     expect(bannerText).not.toContain("this session's identity is ambiguous");
     // The one identifier that stays out of operator copy.
@@ -11402,6 +11436,10 @@ describe("FE-B: harness-backed client behavior", () => {
     // The established Operate-chrome rule holds: raw cmux/session identifiers
     // live in Evidence, never in the banner — even though the trace is full of
     // them and the capability reasons name the tty.
+    // The banner names the SHAPE of the collision, and names it positively: a
+    // pure set of rejections would be satisfied by a banner that said nothing
+    // about the terminal at all, which is the other way to lose the sentence.
+    expect(text).toContain("Identity conflict on this terminal.");
     expect(text).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}/i);
     expect(text).not.toContain("ttys082");
     expect(text).not.toContain("SURFACE-82");
@@ -11449,14 +11487,14 @@ describe("FE-B: harness-backed client behavior", () => {
     expect(line).toContain("ttys082");
     expect(line).toContain("2 sessions claim it");
     expect(line).toContain("Codex 019f94a1…");
-    expect(line).toContain("Claude c0eb6d3f…");
+    expect(line).toContain("Claude Code c0eb6d3f…");
     expect(line).toContain("pid 4242, codex resume 019f94a1");
     expect(line).toContain("pid 5150, claude --resume");
 
     // An uncontested terminal reads as one session, and an empty one says so
     // rather than implying a conflict that is not there.
     expect(M.collisionLine({ tty: "ttys001", surfaceId: "S1", conflict: "", claims: [{ provider: "claude", sessionId: "abcdefghijkl", pid: 7, command: "claude" }] }))
-      .toBe("ttys001 — one session open: Claude abcdefgh… (pid 7, claude)");
+      .toBe("ttys001 — one session open: Claude Code abcdefgh… (pid 7, claude)");
     expect(M.collisionLine({ tty: "", surfaceId: "S9", conflict: "", claims: [] }))
       .toBe("S9 — no open agent session files observed.");
     expect(M.surfaceCollisions(null)).toEqual([]);
@@ -17751,8 +17789,12 @@ describe("R — the quarantine mark and the Died chip tell the truth", () => {
     // The guess is gone from this row — it is not appended, not kept as a lead.
     expect(explained.attributes.title).not.toContain("Conflicting identity evidence");
 
-    // The cmux surface UUID never reaches a hover; the tty name does, because it
-    // is the terminal the operator has to go and look at.
+    // Neither the cmux surface UUID nor the tty name reaches a hover. A hover is
+    // Operate chrome, and raw cmux/session identifiers — UUIDs and tty names
+    // alike — live in Evidence. "ttys011" is not an instruction on its own: the
+    // operator still has to open Evidence to learn which sessions are on that
+    // terminal, so carrying it here buys nothing and splits one identifier rule
+    // across two surfaces.
     const live = dotFor({
       controlState: "quarantined",
       target: {
@@ -17761,7 +17803,10 @@ describe("R — the quarantine mark and the Died chip tell the truth", () => {
           + " cmux 8B1F2C3D-4E5F-4A6B-8C9D-0E1F2A3B4C5D has conflicting open agent session files on ttys011",
       },
     });
-    expect(live.attributes.title).toContain("has conflicting open agent session files on ttys011");
+    expect(live.attributes.title)
+      .toContain("this pane has conflicting open agent session files on this terminal");
+    expect(live.attributes.title).not.toContain("ttys011");
+    expect(live.attributes.title).not.toMatch(/\bttys\d+\b/i);
     expect(live.attributes.title).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
     // Stripping the id must not leave cmux itself accused of the collision.
     expect(live.attributes.title).not.toContain("cmux has conflicting");

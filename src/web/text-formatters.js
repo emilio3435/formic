@@ -133,7 +133,37 @@ export function modelShort(m) {
   return raw.length > 18 ? raw.slice(0, 17) + "…" : raw;
 }
 
-export const PROVIDER_LABELS = { codex: "Codex", claude: "Claude", cursor: "Cursor", omp: "OMP", factory: "Factory", prime: "Prime", grok: "Grok", hermes: "Hermes", muse: "Muse", antigravity: "Antigravity", copilot: "Copilot" };
+/* One operator label per provider, harness-qualified.
+
+   The column these strings head is titled *Harness*, and the board draws a
+   separate Agent mark for the model — so "Claude" was ambiguous exactly where it
+   could least afford to be: it names a model family as readily as a harness, and
+   a row could print "Claude" under Harness beside a Claude agent mark. Claude
+   Code, Grok Build, Muse Code, Copilot CLI and Gemini CLI are the products.
+
+   Four sibling maps carry the same catalog for other surfaces — HARNESS_MARK in
+   app.js, PROVIDER_DISPLAY_NAMES in web/naming.js and server/naming.ts,
+   PROVIDER_NAMES in server/collectors.ts — and all five must agree. The other
+   four are typed `Record<Provider, string>`, so the compiler caught them when
+   Gemini was added; THIS one is an untyped literal in a dependency-free browser
+   module, which is why it was the one that silently fell behind and let
+   `providerLabel` return the raw key. */
+export const PROVIDER_LABELS = {
+  codex: "Codex",
+  omp: "OMP",
+  claude: "Claude Code",
+  cursor: "Cursor",
+  factory: "Factory",
+  prime: "Prime",
+  grok: "Grok Build",
+  hermes: "Hermes",
+  muse: "Muse Code",
+  antigravity: "Antigravity",
+  copilot: "Copilot CLI",
+  gemini: "Gemini CLI",
+  opencode: "OpenCode",
+  pi: "Pi",
+};
 export const HARNESS_LABELS = PROVIDER_LABELS;
 export const providerLabel = (p) => PROVIDER_LABELS[p] || p;
 export const harnessLabel = providerLabel;

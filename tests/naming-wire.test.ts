@@ -50,7 +50,7 @@ const LANES = [
 describe("the collector freezes the name at the session's origin", () => {
   test("a session that wandered through four directories is named for the first", () => {
     const agent = parseClaudeJsonl(wandering(LANES), meta);
-    expect(agent?.identity?.name).toBe("Claude · the-mountain-main");
+    expect(agent?.identity?.name).toBe("Claude Code · the-mountain-main");
     expect(agent?.identity?.source).toBe("origin-cwd");
   });
 
@@ -80,8 +80,8 @@ describe("the collector freezes the name at the session's origin", () => {
        a separate commit with its own rollback boundary. A change here would mean
        the wire moved before the surfaces were ready for it. */
     const agent = parseClaudeJsonl(wandering(LANES.slice(0, 3)), meta);
-    expect(agent?.displayName).toBe("Claude · naming-contract-20260804");
-    expect(agent?.identity?.name).toBe("Claude · the-mountain-main");
+    expect(agent?.displayName).toBe("Claude Code · naming-contract-20260804");
+    expect(agent?.identity?.name).toBe("Claude Code · the-mountain-main");
   });
 });
 

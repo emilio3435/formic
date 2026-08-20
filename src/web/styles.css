@@ -4079,17 +4079,30 @@ button.repo-name { text-align: left; color: inherit; }
     grid-template-areas: "agent agent" "status model";
     padding: 0.4rem 0.45rem;
   }
+  /* The header is a 7-column table: Agent/message, Status, Harness, Model, Ctx,
+     Tokens, Quiet. This map was authored when it had five children and Model
+     was third; Harness was inserted at 3 and nothing here was renumbered, so
+     the phone header labelled its second line "Harness" while the rows below it
+     printed a model name, and Ctx, Tokens and Quiet fell into implicit tracks
+     off the two-column grid. The ordinals below are the current ones. */
   .agent-column-header > :nth-child(1) { grid-area: agent; justify-self: start; text-align: left; }
   .agent-column-header > :nth-child(2) { grid-area: status; justify-self: start; text-align: left; }
-  .agent-column-header > :nth-child(3) { grid-area: model; justify-self: end; text-align: right; }
-  /* Tokens + Elapsed columns collapse away on narrow — the cluster keeps status + model. */
-  .agent-column-header > :nth-child(4),
-  .agent-column-header > :nth-child(5) { display: none; }
+  .agent-column-header > :nth-child(3) { display: none; }
+  .agent-column-header > :nth-child(4) { grid-area: model; justify-self: end; text-align: right; }
+  /* Ctx, Tokens and Quiet collapse away on narrow — the cluster keeps the two
+     the row still prints: status on the left, model on the right. */
+  .agent-column-header > :nth-child(5),
+  .agent-column-header > :nth-child(6),
+  .agent-column-header > :nth-child(7) { display: none; }
   .agent-column-label { font-size: 8px; letter-spacing: 0.05em; }
   .agent-row .agent-grid { grid-template-areas: "identity identity" "status model"; }
   .agent-row .row-identity { grid-area: identity; }
   .agent-row .row-state { grid-area: status; justify-self: start; padding-top: 0; }
   .agent-row .ri-model { grid-area: model; justify-self: end; }
+  /* Folded with the header cells that name them, so the two-line matrix is the
+     same shape in the header and in every row. */
+  .agent-row .ri-harness,
+  .agent-row .ri-ctx,
   .agent-row .ri-tokens,
   .agent-row .ri-elapsed { display: none; }
   .agent-row .row-summary { -webkit-line-clamp: 2; max-height: calc(1.35em * 2); }
@@ -4566,6 +4579,17 @@ button.repo-name { text-align: left; color: inherit; }
   padding: 0;
 }
 .home b { font: 600 0.68rem/1.15 var(--font-ui); text-align: center; }
+/* The consequence sentence, now that it is on screen rather than in a `title`.
+   Small and quiet — it is the second thing read on a tile, after the name — and
+   it wraps rather than truncating, because a state sentence cut off mid-clause
+   is the hover-only problem again in a different shape. */
+.home-state {
+  font: 400 0.58rem/1.25 var(--font-ui);
+  color: var(--muted);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.home.is-off .home-state { color: var(--faint); }
 .home s { font: 500 0.58rem/1 var(--font-mono); color: var(--ok); text-decoration: none; letter-spacing: 0.02em; }
 .home.is-wait {
   border-color: color-mix(in srgb, var(--warn) 55%, var(--line));
@@ -4664,6 +4688,16 @@ button.repo-name { text-align: left; color: inherit; }
 .settings-input { width: 7rem; padding: 0.3rem 0.45rem; border: 1px solid var(--rule); border-radius: 4px; background: var(--surface); color: var(--ink); font: inherit; }
 .settings-collectors { border: 0; margin: 0; padding: 0; display: grid; gap: 0.5rem; }
 .settings-collectors-group { display: grid; gap: 0.5rem; }
+/* The five group headings, which were carried only by `data-group`. Same mono
+   eyebrow the panel's other section labels use, so a heading reads as a heading
+   and not as another tile. */
+.settings-collectors-group-title {
+  margin: 0;
+  font: 500 0.62rem/1 var(--font-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
 .settings-collectors-ignore {
   border: 0; background: none; color: var(--muted); font: inherit; font-size: 0.8rem;
   padding: 0.15rem 0; min-height: 0; cursor: pointer;
