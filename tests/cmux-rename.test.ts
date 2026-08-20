@@ -219,6 +219,7 @@ async function renameState(): Promise<HubState> {
     copilot: { value: [], errors: [] },
     gemini: { value: [], errors: [] },
     opencode: { value: [], errors: [] },
+    pi: { value: [], errors: [] },
   });
   const collectors: HubCollectors = {
     sessions: async () => sessions(),

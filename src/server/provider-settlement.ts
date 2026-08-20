@@ -39,9 +39,9 @@ interface ProviderSlot<T> {
 
 /**
  * Owns collection lifetime independently from refresh lifetime. A scan that
- * misses one generation remains the only scan for that provider; when it does
- * settle, its value is consumed by the next generation and never published by
- * the promise callback.
+ * misses one generation remains the only scan for that provider/config; a
+ * changed config starts its own scan, and displaced evidence may return only
+ * to its original observers. The promise callback never publishes a value.
  */
 export class ProviderSettlementCoordinator<P extends string, T> {
   readonly #slots = new Map<P, ProviderSlot<T>>();
@@ -72,11 +72,15 @@ export class ProviderSettlementCoordinator<P extends string, T> {
         slot.staged = undefined;
         current[provider] = staged.value;
         settledAtMs[provider] = staged.settledAtMs;
-        if (this.isSuccessful(staged.value)) slot.lastSuccessful = staged;
+        if (this.isSuccessful(staged.value)) {
+          slot.lastSuccessful = staged;
+        }
         continue;
       }
       if (slot.staged) slot.staged = undefined;
-      const candidate = slot.inFlight ?? this.#start(provider, slot, scan, configKey, options.now);
+      const candidate = slot.inFlight?.configKey === configKey
+        ? slot.inFlight
+        : this.#start(provider, slot, scan, configKey, options.now);
       candidate.observers += 1;
       candidates.set(provider, candidate);
     }
@@ -103,12 +107,16 @@ export class ProviderSettlementCoordinator<P extends string, T> {
         current[provider] = settled.value;
         settledAtMs[provider] = settled.settledAtMs;
         candidate.consumedCurrent = true;
-        if (this.isSuccessful(settled.value)) slot.lastSuccessful = settled;
+        if (settled.version === slot.version && this.isSuccessful(settled.value)) {
+          slot.lastSuccessful = settled;
+        }
         this.#release(slot, candidate);
         continue;
       }
       timedOut.push(provider);
-      if (slot.lastSuccessful !== undefined) lastKnown[provider] = slot.lastSuccessful.value;
+      if (slot.lastSuccessful?.configKey === configKey) {
+        lastKnown[provider] = slot.lastSuccessful.value;
+      }
       if (candidate) this.#release(slot, candidate);
     }
 

@@ -46,6 +46,8 @@ function sameCwd(left?: string, right?: string): boolean {
 
 type SessionIdentitySource = Pick<CollectedAgent, "provider" | "sourceSessionId">;
 
+const PI_SESSION_ID = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
+
 export type SessionIdentityProviderIndex = ReadonlyMap<
   string,
   ReadonlyMap<CollectedAgent["provider"], number>
@@ -69,7 +71,9 @@ export function sourceSessionHasProviderCollision(
   providersBySession: SessionIdentityProviderIndex,
 ): boolean {
   const providers = providersBySession.get(sessionId.toLowerCase());
-  return (providers?.size ?? 0) > 1 || (providers?.get("opencode") ?? 0) > 1;
+  return (providers?.size ?? 0) > 1
+    || (providers?.get("opencode") ?? 0) > 1
+    || (providers?.get("pi") ?? 0) > 1;
 }
 
 function sourceSessionClaims(surface: CmuxSurface): SessionIdentityClaim[] {
@@ -83,6 +87,7 @@ export function surfaceClaimsSourceSession(
   agent: SessionIdentitySource,
   providersBySession: SessionIdentityProviderIndex,
 ): boolean {
+  if (agent.provider === "pi" && !PI_SESSION_ID.test(agent.sourceSessionId)) return false;
   const sessionId = agent.sourceSessionId.toLowerCase();
   const claims = sourceSessionClaims(surface).filter(
     (claim) => claim.sessionId.toLowerCase() === sessionId,
@@ -214,6 +219,22 @@ function resolveAgentTargetInternal(
     return finish(resolved.target, resolved.trace.matchedTier);
   }
 
+  const providersBySession = indexSessionIdentityProviders(sources);
+  if (
+    agent.provider === "pi"
+    && (providersBySession.get(agent.sourceSessionId.toLowerCase())?.get("pi") ?? 0) > 1
+  ) {
+    steps?.push({
+      tier: "session",
+      outcome: "ambiguous",
+      detail: "Pi source session ID is duplicated; exact target selection is disabled.",
+    });
+    return finish({
+      resolution: "ambiguous",
+      reason: "Pi source session ID is duplicated; controls are disabled.",
+    });
+  }
+
   const routableSurfaces = surfaces.filter((surface) => surface.runtimeSurfaceReady !== false);
   const sharedHostSurface = routableSurfaces.find(
     (surface) => surface.identityTrace?.outcome === "shared-host" && surfaceNamesAgent(surface, agent),
@@ -304,7 +325,6 @@ function resolveAgentTargetInternal(
     steps?.push({ tier: "recorded", outcome: "skipped", detail: "No recorded cmux target IDs on this source." });
   }
 
-  const providersBySession = indexSessionIdentityProviders(sources);
   const sessionMatches = routableSurfaces.filter((surface) =>
     surfaceClaimsSourceSession(surface, agent, providersBySession),
   );

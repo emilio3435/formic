@@ -196,6 +196,7 @@ const HOME_MARK = {
   "antigravity-ide": "/icons/antigravity.png",
   codex: "/icons/codex.webp",
   opencode: "/icons/opencode.svg",
+  pi: "/icons/pi.svg",
   burnbar: "/icons/history.svg",
 };
 

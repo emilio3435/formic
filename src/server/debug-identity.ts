@@ -15,6 +15,7 @@ import {
 } from "./gemini";
 import { isReplicaBlob, parseReplicaBlob } from "./grok-bot";
 import { readOpenCodeStore } from "./opencode-store";
+import { readPiSessionFile } from "./pi";
 import { routingSurfaceObservations, type RoutingSurfaceObservation } from "./targets";
 import type { CmuxSurface } from "./types";
 
@@ -139,6 +140,11 @@ export interface TranscriptLine {
   at: string | null;
   role: "user" | "assistant" | "tool" | "system" | "unknown";
   text: string;
+  sourceEntryId?: string;
+  toolCallId?: string;
+  toolName?: string;
+  sourceType?: "assistant_tool_call" | "branch_summary" | "custom_message";
+  sourceName?: string;
 }
 
 function transcriptRole(value: unknown): TranscriptLine["role"] {
@@ -797,6 +803,7 @@ export async function transcriptResponse(
   agentId: string,
   limit: number,
   headers: Readonly<Record<string, string>>,
+  signal?: AbortSignal,
 ): Promise<Response> {
   const responseHeaders = { ...headers, "cache-control": "no-store" };
   const agent = snapshot.programs
@@ -861,6 +868,30 @@ export async function transcriptResponse(
         { headers: responseHeaders },
       );
     }
+    if (agent.provider === "pi") {
+      const transcript = await readPiSessionFile(source, { signal });
+      const lines: TranscriptLine[] = (transcript.evidence?.events ?? []).map((event) => ({
+        at: event.timestamp ?? null,
+        role: event.role,
+        text: event.text,
+        ...(event.sourceEntryId ? { sourceEntryId: event.sourceEntryId } : {}),
+        ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
+        ...(event.toolName ? { toolName: event.toolName } : {}),
+        ...(event.sourceType ? { sourceType: event.sourceType } : {}),
+        ...(event.sourceName ? { sourceName: event.sourceName } : {}),
+      }));
+      return Response.json(
+        {
+          ok: true,
+          agentId,
+          source,
+          truncated: transcript.partial || lines.length > limit,
+          lines: lines.slice(-limit),
+          ...(transcript.warnings.length > 0 ? { warning: transcript.warnings.join("; ") } : {}),
+        },
+        { headers: responseHeaders },
+      );
+    }
     const contents = await readFile(source, "utf8");
     let historyContents: string | undefined;
     if (agent.provider === "grok") {
@@ -888,6 +919,7 @@ export async function transcriptResponse(
       { headers: responseHeaders },
     );
   } catch (error) {
+    if (signal?.aborted) throw signal.reason;
     /* A transcript we could not read is not a session with nothing to say.
        Returning the same {source:null, lines:[]} envelope as the no-artifact
        branch above asserted that no evidence exists, when the truth is that the

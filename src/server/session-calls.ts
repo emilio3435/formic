@@ -3,6 +3,7 @@ import { isAbsolute } from "node:path";
 import { parseClaudeJsonl, parseCodexJsonl, parseOmpJsonl } from "./collectors";
 import { parseGeminiConversationFile } from "./gemini";
 import { readOpenCodeStore } from "./opencode-store";
+import { readPiSessionFile } from "./pi";
 import type { CollectedAgent } from "./types";
 import type { HubSnapshot } from "../shared/types";
 
@@ -75,6 +76,7 @@ export async function sessionCallsResponse(
   snapshot: HubSnapshot,
   agentId: string,
   headers: Readonly<Record<string, string>>,
+  signal?: AbortSignal,
 ): Promise<Response> {
   const responseHeaders = { ...headers, "cache-control": "no-store" };
   const agent = snapshot.programs
@@ -145,6 +147,47 @@ export async function sessionCallsResponse(
       return answer({
         source, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
         unavailable: `The OpenCode store could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  }
+
+  if (agent.provider === "pi") {
+    try {
+      const evidence = await readPiSessionFile(source, { signal });
+      if (evidence.partial) {
+        const detail = evidence.warnings[0];
+        return answer({
+          source,
+          calls: null,
+          sessionProcessed: null,
+          prefixSums: null,
+          processedSnapshots: null,
+          unavailable: `Pi call series is unavailable because the bounded transcript is partial or incomplete${detail ? `: ${detail}` : "."}`,
+        });
+      }
+      const calls = evidence.evidence?.callSizes;
+      if (!calls || calls.length === 0) {
+        return answer({
+          source,
+          calls: null,
+          sessionProcessed: null,
+          prefixSums: null,
+          processedSnapshots: null,
+          unavailable: "The Pi transcript records no per-call usage for this session.",
+        });
+      }
+      let running = 0;
+      const prefixSums = calls.map((size) => (running += size));
+      return answer({ source, calls, sessionProcessed: running, prefixSums, processedSnapshots: null });
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason;
+      return answer({
+        source,
+        calls: null,
+        sessionProcessed: null,
+        prefixSums: null,
+        processedSnapshots: null,
+        unavailable: `The Pi transcript could not be read: ${error instanceof Error ? error.message : String(error)}`,
       });
     }
   }

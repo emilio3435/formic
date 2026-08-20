@@ -159,6 +159,82 @@ describe("durable agent focus links", () => {
     expect(runner.commands).toHaveLength(0);
   });
 
+  test("a Pi durable link with no target issues zero cmux commands", async () => {
+    const runner = new StubRunner();
+    const agent = snapshotAgent({
+      id: "pi:pi.native_2026-08-20",
+      provider: "pi" as never,
+      sourceSessionId: "pi.native_2026-08-20",
+      cwd: "/tmp/agent-links-project",
+      target: {
+        resolution: "missing",
+        reason: "This harness requires exact cmux identity; cwd fallback is disabled.",
+      },
+      controls: [{
+        action: "focus",
+        enabled: false,
+        reason: "This harness requires exact cmux identity; cwd fallback is disabled.",
+      }],
+    });
+    const fetch = createAgentLinkFetch(
+      () => new Response("fallback", { status: 418 }),
+      {
+        getSnapshot: () => snapshot(agent),
+        surfaces: () => [],
+        runner,
+        archiveStore,
+        cmuxExecutable: "cmux",
+      },
+    );
+
+    const response = await fetch(new Request(
+      `http://127.0.0.1:4701/agent/${encodeURIComponent(agent.id)}/focus`,
+    ));
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: { code: "CONTROL_DISABLED" } });
+    expect(runner.commands).toHaveLength(0);
+  });
+
+  test("a Pi durable link preserves exact-only routing and issues zero commands for unique same cwd", async () => {
+    const runner = new StubRunner();
+    const agent = snapshotAgent({
+      id: "pi:pi.native_2026-08-20",
+      provider: "pi" as never,
+      sourceSessionId: "pi.native_2026-08-20",
+      cwd: "/tmp/agent-links-project",
+      target: {
+        resolution: "missing",
+        reason: "This harness requires exact cmux identity; cwd fallback is disabled.",
+      },
+      controls: [{
+        action: "focus",
+        enabled: false,
+        reason: "This harness requires exact cmux identity; cwd fallback is disabled.",
+      }],
+    });
+    const fetch = createAgentLinkFetch(
+      () => new Response("fallback", { status: 418 }),
+      {
+        getSnapshot: () => snapshot(agent),
+        surfaces: () => [surface("PI-CWD-ONLY")],
+        runner,
+        archiveStore,
+        cmuxExecutable: "cmux",
+      },
+    );
+
+    const response = await fetch(new Request(
+      `http://127.0.0.1:4701/agent/${encodeURIComponent(agent.id)}/focus`,
+    ));
+
+    expect(response.status).toBe(409);
+    const body = await response.json();
+    expect(body).toMatchObject({ error: { code: "CONTROL_DISABLED" } });
+    expect(body.error.message).toMatch(/exact cmux identity/);
+    expect(runner.commands).toHaveLength(0);
+  });
+
   test("an exact agent URL re-resolves through the hook-store tier and focuses that surface", async () => {
     loadHookStore({ sessionId: "live-session", lifecycle: "running" });
     const runner = new StubRunner();

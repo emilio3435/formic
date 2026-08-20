@@ -1,0 +1,3 @@
+{"type":"session","version":3,"id":"pi.absent-evidence","timestamp":"2026-08-20T16:00:00.000Z","cwd":"/tmp/formic-pi-fixture/absent-evidence"}
+{"type":"model_change","id":"model-unknown","parentId":null,"timestamp":"2026-08-20T16:00:01.000Z","provider":"synthetic-provider","modelId":"private-model-with-no-window"}
+{"type":"message","id":"user-only","parentId":"model-unknown","timestamp":"2026-08-20T16:00:02.000Z","message":{"role":"user","content":"Keep absent Pi evidence unavailable.","timestamp":1787232002000}}

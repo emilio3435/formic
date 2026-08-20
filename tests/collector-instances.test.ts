@@ -13,6 +13,8 @@ import {
   scanAgentHomes,
   type ScanFs,
 } from "../src/server/collector-instances";
+import { collectSessionProvider } from "../src/server/collectors";
+import type { Provider } from "../src/shared/types";
 
 function underRoot(root: string, path: string): boolean {
   return path === root || path.startsWith(`${root}/`);
@@ -161,6 +163,48 @@ describe("classifyDataDir", () => {
     expect(hit?.kind).toBe("grok-cli");
     expect(hit?.default).toBe(true);
     expect(hit?.reason).toBeUndefined();
+  });
+
+  test("PI-REPAIR-2A Pi classification distinguishes the builtin default, refused agent-home extras, and direct session roots", () => {
+    const root = mkdtempSync(join(tmpdir(), "ah-pi-root-shapes-"));
+    const builtin = join(root, ".pi");
+    const alternateAgentHome = join(root, "profile-two/.pi");
+    const direct = join(root, "pi-direct-sessions");
+    const pip = join(root, ".pip");
+    const arbitrary = join(root, "arbitrary-jsonl");
+    const nested = join(root, "nested-lookalike");
+    mkdirSync(join(builtin, "agent/sessions"), { recursive: true });
+    mkdirSync(join(alternateAgentHome, "agent/sessions"), { recursive: true });
+    for (const directory of [direct, pip, arbitrary, join(nested, "child")]) mkdirSync(directory, { recursive: true });
+    const session = [
+      "",
+      "malformed-before-header",
+      JSON.stringify({ type: "session", version: 3, id: "pi.settings-direct", timestamp: "2026-08-20T12:00:00.000Z", cwd: "/tmp/pi-settings" }),
+      JSON.stringify({ type: "message", id: "settings-user", parentId: null, timestamp: "2026-08-20T12:00:01.000Z", message: { role: "user", content: "Settings direct root.", timestamp: 1_787_227_201_000 } }),
+      JSON.stringify({ type: "message", id: "settings-answer", parentId: "settings-user", timestamp: "2026-08-20T12:00:02.000Z", message: { role: "assistant", content: [{ type: "text", text: "Settings direct answer." }], provider: "anthropic", model: "claude-opus-5", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, stopReason: "stop", timestamp: 1_787_227_202_000 } }),
+      "",
+    ].join("\n");
+    writeFileSync(join(direct, "session.jsonl"), session);
+    writeFileSync(join(pip, "session.jsonl"), session);
+    writeFileSync(join(arbitrary, "session.jsonl"), `${JSON.stringify({ type: "message", id: "not-header" })}\n`);
+    writeFileSync(join(nested, "child/session.jsonl"), session);
+    const fs = memFs(root);
+
+    expect({
+      builtin: classifyDataDir(builtin, fs),
+      alternateAgentHome: classifyDataDir(alternateAgentHome, fs),
+      direct: classifyDataDir(direct, fs),
+      pip: classifyDataDir(pip, fs),
+      arbitrary: classifyDataDir(arbitrary, fs),
+      nested: classifyDataDir(nested, fs),
+    }).toEqual({
+      builtin: expect.objectContaining({ kind: "pi", provider: "pi", default: true }),
+      alternateAgentHome: expect.objectContaining({ kind: "pi", provider: "pi", default: false, reason: "needs-parser" }),
+      direct: expect.objectContaining({ kind: "pi", provider: "pi", default: false }),
+      pip: undefined,
+      arbitrary: undefined,
+      nested: undefined,
+    });
   });
 });
 
@@ -368,6 +412,7 @@ describe("JsonCollectorInstanceStore", () => {
       "copilot",
       "gemini-cli",
       "opencode",
+      "pi",
     ]);
   });
 
@@ -489,6 +534,7 @@ describe("JsonCollectorInstanceStore", () => {
       { kind: "copilot" as const, provider: "copilot" as const, dataDir: "/tmp/.copilot-2", label: ".copilot-2", default: false },
       { kind: "gemini-cli" as const, provider: "gemini" as const, dataDir: "/tmp/.gemini-2", label: ".gemini-2", default: false },
       { kind: "opencode" as const, provider: "opencode" as const, dataDir: "/tmp/opencode-2", label: "opencode-2", default: false },
+      { kind: "pi" as const, provider: "pi" as const, dataDir: "/tmp/pi-sessions-2", label: "pi-sessions-2", default: false },
     ];
     store.mergeScan(candidates, "2026-08-16T00:00:00.000Z");
     await store.update({ ids: candidates.map((candidate) => instanceIdFor(candidate.kind, candidate.dataDir)), onboarded: true });
@@ -500,6 +546,43 @@ describe("JsonCollectorInstanceStore", () => {
       extraCopilotRoots: ["/tmp/.copilot-2"],
       extraGeminiCliRoots: ["/tmp/.gemini-2"],
       extraOpenCodeRoots: ["/tmp/opencode-2"],
+      extraPiRoots: ["/tmp/pi-sessions-2"],
+    });
+  });
+
+  test("PI-REPAIR-2B scanned direct Pi root survives onboarding into the production collector", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ah-pi-onboard-"));
+    const direct = join(home, "pi-direct-sessions");
+    mkdirSync(direct, { recursive: true });
+    writeFileSync(join(direct, "session.jsonl"), [
+      JSON.stringify({ type: "session", version: 3, id: "pi.settings-onboarded", timestamp: "2026-08-20T12:00:00.000Z", cwd: "/tmp/pi-onboarded" }),
+      JSON.stringify({ type: "message", id: "onboard-user", parentId: null, timestamp: "2026-08-20T12:00:01.000Z", message: { role: "user", content: "Onboard direct root.", timestamp: 1_787_227_201_000 } }),
+      JSON.stringify({ type: "message", id: "onboard-answer", parentId: "onboard-user", timestamp: "2026-08-20T12:00:02.000Z", message: { role: "assistant", content: [{ type: "text", text: "Onboarded collector answer." }], provider: "anthropic", model: "claude-opus-5", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, stopReason: "stop", timestamp: 1_787_227_202_000 } }),
+      "",
+    ].join("\n"));
+    const hits = scanAgentHomes(memFs(home, {
+      processArgv: () => [`pi --session-dir "${direct}"`],
+    }));
+    const store = await JsonCollectorInstanceStore.open(join(home, "collector-instances.json"));
+    const merged = store.mergeScan(hits, "2026-08-20T12:01:00.000Z");
+    if (merged.length > 0) await store.update({ ids: merged.map(({ id }) => id), onboarded: true });
+    const roots = onboardedSessionRoots(store);
+    const collected = await collectSessionProvider(
+      "pi" as Provider,
+      home,
+      Number.POSITIVE_INFINITY,
+      undefined,
+      { extraPiRoots: roots.extraPiRoots },
+    );
+
+    expect({
+      scanned: hits.map(({ kind, provider, dataDir, reason }) => ({ kind, provider, dataDir, reason })),
+      onboarded: roots.extraPiRoots,
+      collected: collected.value.map(({ sourceSessionId }) => sourceSessionId),
+    }).toEqual({
+      scanned: [{ kind: "pi", provider: "pi", dataDir: direct, reason: undefined }],
+      onboarded: [direct],
+      collected: ["pi.settings-onboarded"],
     });
   });
 

@@ -60,6 +60,7 @@ function routingSource(agent: AgentSnapshot): CollectedAgent {
     allowCwdFallback: agent.provider === "cursor"
       || agent.provider === "antigravity"
       || agent.provider === "gemini"
+      || agent.provider === "pi"
       ? false
       : agent.target.resolution === "unique-cwd"
         ? true

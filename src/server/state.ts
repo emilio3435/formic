@@ -57,7 +57,7 @@ import type {
   CommandRunner,
   SpendSource,
 } from "./types";
-import { enrichCmuxIdentity } from "./identity";
+import { enrichCmuxIdentity, parseProcessTable } from "./identity";
 import { bridgeAgentsWithBindings, updateBindingsFromScan, type IdentityBindingStore } from "./identity-bindings";
 import {
   DEFAULT_PROVIDER_WAIT_MS,
@@ -88,13 +88,18 @@ import {
   type SenderTranscriptTailReader,
 } from "./sender-verification";
 import { ProviderSettlementCoordinator } from "./provider-settlement";
+import {
+  canonicalPiLaunchObservations,
+  piLaunchObservationFromCommand,
+  type PiLaunchObservation,
+} from "./pi";
 
 type Abortable<T extends (...args: any[]) => any> = (
   ...args: [...Parameters<T>, signal?: AbortSignal]
 ) => ReturnType<T>;
 
 export interface HubCollectors {
-  sessions: Abortable<typeof collectSessions>;
+  sessions: typeof collectSessions;
   sessionProvider?: typeof collectSessionProvider;
   finalizeSessions?: typeof finalizeSessionProviders;
   spendSources?: typeof collectHermesSpendSources;
@@ -142,8 +147,68 @@ export function providerCollectionConfigKey(
   extraCopilotRoots: readonly string[] = [],
   extraGeminiCliRoots: readonly string[] = [],
   extraOpenCodeRoots: readonly string[] = [],
+  extraPiRoots: readonly string[] = [],
+  piLaunchObservations: readonly PiLaunchObservation[] = [],
+  piReadDeadlineMs?: number,
 ): string {
-  return `${windowMs}:${thresholds?.freshMs ?? "default"}:${thresholds?.quietMs ?? "default"}:${extraCursorGuiRoots.join(",")}:bot=${extraGrokBotRoots.join(",")}:cli=${extraGrokCliRoots.join(",")}:copilot=${extraCopilotRoots.join(",")}:gemini=${extraGeminiCliRoots.join(",")}:opencode=${extraOpenCodeRoots.join(",")}`;
+  const launches = canonicalPiLaunchObservations(piLaunchObservations);
+  return `${windowMs}:${thresholds?.freshMs ?? "default"}:${thresholds?.quietMs ?? "default"}:${extraCursorGuiRoots.join(",")}:bot=${extraGrokBotRoots.join(",")}:cli=${extraGrokCliRoots.join(",")}:copilot=${extraCopilotRoots.join(",")}:gemini=${extraGeminiCliRoots.join(",")}:opencode=${extraOpenCodeRoots.join(",")}:pi=${extraPiRoots.join(",")}:piLaunch=${JSON.stringify(launches)}:piRead=${piReadDeadlineMs ?? "default"}`;
+}
+
+function cwdByPid(output: string): Map<number, string> {
+  const result = new Map<number, string>();
+  let pid: number | undefined;
+  let cwd = false;
+  for (const line of output.split("\n")) {
+    if (/^p\d+$/.test(line)) {
+      pid = Number(line.slice(1));
+      cwd = false;
+    } else if (line.startsWith("f")) {
+      cwd = line === "fcwd";
+    } else if (cwd && pid !== undefined && line.startsWith("n") && line.length > 1) {
+      result.set(pid, line.slice(1));
+      cwd = false;
+    }
+  }
+  return result;
+}
+
+async function readPiLaunchObservations(
+  runner: CommandRunner,
+  signal?: AbortSignal,
+): Promise<PiLaunchObservation[]> {
+  try {
+    if (signal?.aborted) throw signal.reason;
+    const processes = await runner.run(
+      ["env", "LC_ALL=C", "ps", "-axo", "pid=,tty=,command="],
+      8_000,
+      signal,
+    );
+    if (signal?.aborted) throw signal.reason;
+    if (processes.cancelled || processes.timedOut || processes.exitCode !== 0) return [];
+    const piProcesses = parseProcessTable(processes.stdout).flatMap((process) => {
+      const observation = piLaunchObservationFromCommand(process.command);
+      return observation === undefined ? [] : [{ pid: process.pid, observation }];
+    });
+    if (piProcesses.length === 0) return [];
+    const pids = [...new Set(piProcesses.map(({ pid }) => pid))].sort((left, right) => left - right);
+    const cwdResult = await runner.run(
+      ["/usr/sbin/lsof", "-n", "-P", "-a", "-p", pids.join(","), "-d", "cwd", "-Fn"],
+      8_000,
+      signal,
+    );
+    if (signal?.aborted) throw signal.reason;
+    const cwds = cwdResult.cancelled || cwdResult.timedOut || cwdResult.exitCode !== 0
+      ? new Map<number, string>()
+      : cwdByPid(cwdResult.stdout);
+    return canonicalPiLaunchObservations(piProcesses.map(({ pid, observation }) => ({
+      ...(cwds.get(pid) ? { launchCwd: cwds.get(pid) } : {}),
+      ...observation,
+    })));
+  } catch (error) {
+    if (signal?.aborted) throw signal.reason;
+    return [];
+  }
 }
 
 function waitWithAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -233,6 +298,8 @@ export interface HubStateOptions {
   copilotRootsReader?: () => readonly string[];
   geminiRootsReader?: () => readonly string[];
   openCodeRootsReader?: () => readonly string[];
+  piRootsReader?: () => readonly string[];
+  piLaunchReader?: (runner: CommandRunner, signal?: AbortSignal) => Promise<readonly PiLaunchObservation[]>;
   triageReader?: () => readonly TriageQueueSummary[];
   burnReader?: () => Promise<UsageSummary>;
   cmuxExecutable?: string;
@@ -313,6 +380,8 @@ export class HubState {
   private readonly copilotRootsReader?: () => readonly string[];
   private readonly geminiRootsReader?: () => readonly string[];
   private readonly openCodeRootsReader?: () => readonly string[];
+  private readonly piRootsReader?: () => readonly string[];
+  private readonly piLaunchReader: (runner: CommandRunner, signal?: AbortSignal) => Promise<readonly PiLaunchObservation[]>;
   private readonly triageReader?: () => readonly TriageQueueSummary[];
   private readonly burnReader?: () => Promise<UsageSummary>;
   private readonly cmuxExecutable: string;
@@ -342,6 +411,8 @@ export class HubState {
     this.copilotRootsReader = options.copilotRootsReader;
     this.geminiRootsReader = options.geminiRootsReader;
     this.openCodeRootsReader = options.openCodeRootsReader;
+    this.piRootsReader = options.piRootsReader;
+    this.piLaunchReader = options.piLaunchReader ?? readPiLaunchObservations;
     this.triageReader = options.triageReader;
     this.burnReader = options.burnReader;
     this.cmuxExecutable = options.cmuxExecutable ?? DEFAULT_CMUX_EXECUTABLE;
@@ -912,6 +983,11 @@ export class HubState {
     const extraCopilotRoots = this.copilotRootsReader?.() ?? [];
     const extraGeminiCliRoots = this.geminiRootsReader?.() ?? [];
     const extraOpenCodeRoots = this.openCodeRootsReader?.() ?? [];
+    const extraPiRoots = this.piRootsReader?.() ?? [];
+    const piLaunchObservations = canonicalPiLaunchObservations(
+      await this.piLaunchReader(this.runner, signal),
+    );
+    if (signal.aborted) throw signal.reason;
     type SessionsResult = Awaited<ReturnType<HubCollectors["sessions"]>>;
     type SpendSourcesResult = Awaited<ReturnType<typeof collectHermesSpendSources>>;
     type CmuxResult = Awaited<ReturnType<HubCollectors["cmux"]>>;
@@ -983,6 +1059,18 @@ export class HubState {
       }
     };
     const providerTimeoutMs = this.refreshAggregateTimeoutMs ?? providerWaitMs;
+    const piReadDeadlineMs = Math.max(1, Math.min(providerTimeoutMs, providerWaitMs));
+    const collectionOptions = {
+      extraCursorGuiRoots,
+      extraGrokBotRoots,
+      extraGrokCliRoots,
+      extraCopilotRoots,
+      extraGeminiCliRoots,
+      extraOpenCodeRoots,
+      extraPiRoots,
+      piLaunchObservations,
+      piReadDeadlineMs,
+    };
     const controlTimeoutMs = this.refreshAggregateTimeoutMs
       ?? Math.max(MIN_CONTROL_AGGREGATE_TIMEOUT_MS, providerWaitMs);
     const tailTimeoutMs = Math.min(
@@ -1003,14 +1091,15 @@ export class HubState {
     const providerCollection = (this.collectors.sessionProvider && this.collectors.finalizeSessions
       ? track("providers", (async () => {
           const configKey = providerCollectionConfigKey(
-            windowMs, thresholds, extraCursorGuiRoots, extraGrokBotRoots, extraGrokCliRoots, extraCopilotRoots, extraGeminiCliRoots, extraOpenCodeRoots,
+            windowMs, thresholds, extraCursorGuiRoots, extraGrokBotRoots, extraGrokCliRoots, extraCopilotRoots, extraGeminiCliRoots, extraOpenCodeRoots, extraPiRoots,
+            piLaunchObservations, piReadDeadlineMs,
           );
           const selection = await this.#providerSettlement.settle(
             providers,
             async (provider) => {
               try {
                 return await this.collectors.sessionProvider!(
-                  provider, homedir(), windowMs, thresholds, { extraCursorGuiRoots, extraGrokBotRoots, extraGrokCliRoots, extraCopilotRoots, extraGeminiCliRoots, extraOpenCodeRoots }, signal,
+                  provider, homedir(), windowMs, thresholds, collectionOptions, signal,
                 );
               } catch (error) {
                 if (signal.aborted) throw signal.reason ?? error;
@@ -1036,7 +1125,7 @@ export class HubState {
             return [provider, { value: [], errors: [reason] }];
           })) as SessionProviderResults;
           try {
-            sessionsResult = this.collectors.finalizeSessions!(selected, homedir());
+            sessionsResult = this.collectors.finalizeSessions!(selected, homedir(), collectionOptions);
             lastKnownAgents = providers.flatMap((provider) => selection.lastKnown[provider]?.value ?? []);
           } catch (error) {
             collectionErrors.push(
@@ -1044,7 +1133,7 @@ export class HubState {
             );
           }
         })())
-      : capture("session collection failed", this.collectors.sessions(homedir(), windowMs, thresholds, { extraCursorGuiRoots, extraGrokBotRoots, extraGrokCliRoots, extraCopilotRoots, extraGeminiCliRoots, extraOpenCodeRoots }, signal), (value) => {
+      : capture("session collection failed", this.collectors.sessions(homedir(), windowMs, thresholds, collectionOptions, signal), (value) => {
           sessionsResult = value;
         })).catch((error) => {
           if (!signal.aborted) {

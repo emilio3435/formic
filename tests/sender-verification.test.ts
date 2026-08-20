@@ -223,6 +223,7 @@ describe("agent message provenance", () => {
         copilot: { value: [], errors: [] },
         gemini: { value: [], errors: [] },
         opencode: { value: [], errors: [] },
+        pi: { value: [], errors: [] },
       });
       const collectors: HubCollectors = {
         sessions: async () => sessions(),

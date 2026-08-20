@@ -9956,6 +9956,7 @@ const PROVIDER_MARK = {
   copilot: { src: "/icons/copilot.svg" },
   antigravity: { src: "/icons/antigravity.png", raster: true },
   opencode: { src: "/icons/opencode-provider.svg" },
+  pi: { src: "/icons/pi.svg" },
 };
 
 /* Harness vs Agent — two badges per row. Harness = where it ran (provider), Agent = what thought (model family).
@@ -9974,6 +9975,7 @@ const HARNESS_MARK = {
   copilot: { src: "/icons/copilot.svg", label: "Copilot CLI" },
   gemini: { src: "/icons/gemini-cli.svg", label: "Gemini CLI" },
   opencode: { src: "/icons/opencode.svg", label: "OpenCode" },
+  pi: { src: "/icons/pi.svg", label: "Pi" },
   omni: { src: "/icons/omp.svg", label: "OMP" },
 };
 const AGENT_MARK = {

@@ -221,6 +221,7 @@ test("the cmux tick keeps sidebar repo facts and they outrank spawned git branch
       copilot: { value: [], errors: [] },
       gemini: { value: [], errors: [] },
       opencode: { value: [], errors: [] },
+      pi: { value: [], errors: [] },
     }),
     cmux: async () => ({
       value: [{

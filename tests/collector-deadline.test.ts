@@ -44,7 +44,8 @@ const empty = (): SessionsResult => ({
   copilot: { value: [], errors: [] },
   gemini: { value: [], errors: [] },
   opencode: { value: [], errors: [] },
-});
+  pi: { value: [], errors: [] },
+} as SessionsResult & { pi: SessionsResult[keyof SessionsResult] });
 
 /** A hub whose collectors behave exactly as described, with a 60ms deadline. */
 function hub(collectors: Partial<HubCollectors>): HubState {
@@ -295,11 +296,14 @@ describe("a refresh the watchdog abandoned does not publish over its replacement
     try {
       let release: () => void = () => {};
       const held = new Promise<void>((resolve) => { release = resolve; });
+      let markFirstSessionsStarted: () => void = () => {};
+      const firstSessionsStarted = new Promise<void>((resolve) => { markFirstSessionsStarted = resolve; });
       let call = 0;
       const state = patientHub({
         sessions: async () => {
           call += 1;
           if (call === 1) {
+            markFirstSessionsStarted();
             await held;
             return sessionsWith("stale");
           }
@@ -309,6 +313,7 @@ describe("a refresh the watchdog abandoned does not publish over its replacement
 
       const abandoned = state.refresh();
       // Past the watchdog: the next caller stops waiting and starts its own pass.
+      await firstSessionsStarted;
       nowMs += WATCHDOG_MS + 1_000;
       await state.refresh();
       expect(idsOn(state)).toEqual(["codex:fresh"]);

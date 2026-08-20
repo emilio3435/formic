@@ -36,6 +36,7 @@ const PROVIDER_BINARIES: Record<Provider, string> = {
   copilot: "copilot",
   gemini: "gemini",
   opencode: "opencode",
+  pi: "pi",
 };
 const AGENT_BINARIES = Object.values(PROVIDER_BINARIES).join("|");
 const RESUME_PROVIDERS = PROVIDERS.join("|");
@@ -195,6 +196,20 @@ export function identitiesFromCommand(command: string): IdentityHint[] {
   for (const [provider, pattern] of exactPatterns) {
     const match = command.match(pattern);
     if (match) hints.push({ provider, value: match[1].toLowerCase(), full: true });
+  }
+  const pi = command.match(/(?:^|\s)(?:\S*\/)?pi(?=\s|$)([^\n]*)/i);
+  if (pi) {
+    const session = pi[1].match(
+      /(?:^|\s)(--session-id|--session)(?:\s+|=)([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)(?=\s|$)/,
+    );
+    if (session) {
+      const value = session[2];
+      /* `--session` accepts either a full ID or a prefix. Its value is exact
+         only after it equals a collected Pi header/runtime identity; syntax,
+         length, UUID shape, and date shape cannot attest that equality. */
+      const full = session[1] === "--session-id";
+      hints.push({ provider: "pi", value, full });
+    }
   }
   const openCode = command.match(/(?:^|\s)(?:\S*\/)?opencode(?=\s|$)([^\n]*)/i);
   if (openCode && !/(?:^|\s)--fork(?:=\S+)?(?=\s|$)/i.test(openCode[1])) {
@@ -371,6 +386,22 @@ function resolveCommandHint(
       ? sourceId === normalizedHint || runtimeId === normalizedHint
       : sourceId.startsWith(normalizedHint) || runtimeId?.startsWith(normalizedHint);
   });
+  if (hint.provider === "pi" && !hint.full) {
+    const exact = matches.find((agent) =>
+      agent.sourceSessionId.toLowerCase() === normalizedHint
+      || agent.runtimeSessionId?.toLowerCase() === normalizedHint
+    );
+    if (!exact) {
+      return {
+        rejectionReason: `Pi session prefix ${hint.value} is non-exact and cannot authorize control`,
+      };
+    }
+  }
+  if (hint.provider === "pi" && matches.length > 1) {
+    return {
+      rejectionReason: `multiple active Pi sources (${matches.length}) claim source session ${hint.value}`,
+    };
+  }
   if (hint.provider === "opencode" && matches.length > 1) {
     return {
       rejectionReason: `multiple OpenCode instances (${matches.length}) claim source session ${hint.value}`,
@@ -791,7 +822,21 @@ export async function enrichCmuxIdentity(
     for (const path of paths) {
       const hint = identityFromSessionPath(path);
       const resolved = hint ? resolvedOpenHint(path, hint) : undefined;
-      if (resolved) addProcessEvidence(identityKey(resolved), pid, { transcriptOpen: true, sessionOwned });
+      if (resolved) {
+        addProcessEvidence(identityKey(resolved), pid, { transcriptOpen: true, sessionOwned });
+        continue;
+      }
+      for (const agent of agents) {
+        if (
+          agent.provider === "pi"
+          && agent.artifacts.some((artifact) => artifact.kind === "transcript" && artifact.path === path)
+        ) {
+          addProcessEvidence(`${agent.provider}:${agent.sourceSessionId.toLowerCase()}`, pid, {
+            transcriptOpen: true,
+            sessionOwned,
+          });
+        }
+      }
     }
   }
   for (const process of allProcesses) {
@@ -977,7 +1022,10 @@ export async function enrichCmuxIdentity(
         hint.resolvedSessionId ? [{ provider: hint.provider, value: hint.resolvedSessionId, full: true }] : [],
       );
       const rejectedCommandHint = commandHintEvidence.find((hint) => hint.rejectionReason);
-      if (rejectedCommandHint?.rejectionReason) {
+      if (
+        rejectedCommandHint?.rejectionReason
+        && !(rejectedCommandHint.provider === "pi" && rejectedCommandHint.full === false)
+      ) {
         const identityConflict = `cmux ${surface.surfaceId} refused command identity: ${rejectedCommandHint.rejectionReason}`;
         errors.push(identityConflict);
         return {

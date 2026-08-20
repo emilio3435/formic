@@ -41,6 +41,7 @@ export const PROVIDER_DISPLAY_NAMES = {
   copilot: "Copilot",
   gemini: "Gemini CLI",
   opencode: "OpenCode",
+  pi: "Pi",
 };
 
 /* Strings that arrive in a name-shaped field but are not names: OMP's periodic

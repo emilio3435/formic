@@ -30,7 +30,7 @@ const ID = "019fcd73-1a2b-7000-9c4d-5e6f70819aab";
 
 /* A total map: adding a Provider without a sample fails the build here, which
    is the only moment anyone is thinking about that provider's process shape. */
-const SAMPLES: Record<Provider, { path?: string; command: string }> = {
+const SAMPLES: Record<Provider | "pi", { path?: string; command: string }> = {
   omp: {
     path: `/Users/me/.omp/agent/sessions/my-project/${ID}.jsonl`,
     command: "/Users/me/.local/bin/omp -p --model anthropic/claude-fable-5",
@@ -81,6 +81,9 @@ const SAMPLES: Record<Provider, { path?: string; command: string }> = {
   },
   opencode: {
     command: "opencode --session ses_0123456789abcdefghijklmnop",
+  },
+  pi: {
+    command: "pi --session-id pi.native_2026-08-20",
   },
 };
 

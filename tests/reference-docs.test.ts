@@ -1105,7 +1105,7 @@ describe("day one on a machine without cmux", () => {
   });
 
   test("QUICKSTART names every collector the code has, with the path it reads", () => {
-    expect(providers.length, "the Provider union changed shape; re-read the roster").toBe(13);
+    expect(providers.length, "the Provider union changed shape; re-read the roster").toBe(14);
     const table = quickstart.slice(quickstart.indexOf("| Collector |"));
     for (const provider of providers) {
       expect(table.toLowerCase(), `QUICKSTART's collector table omits "${provider}"`)
@@ -1970,11 +1970,11 @@ describe("ANT-GUIDE tells a reader how to find their own blind spot", () => {
   test("the collectors it tells them to compare against are the real ones", () => {
     const union = read("src/shared/types.ts").match(/export type Provider = ([^;]+);/)?.[1] ?? "";
     const names = [...union.matchAll(/"([a-z]+)"/g)].map((m) => m[1]);
-    expect(names.length, "the Provider union changed shape").toBe(13);
+    expect(names.length, "the Provider union changed shape").toBe(14);
     const g = guide();
     /* The guide names them in reader-facing form, so check the mapping rather
        than the identifiers. */
-    for (const shown of ["Claude Code", "Codex", "Cursor", "OMP", "Factory", "Prime", "Grok", "Hermes", "Muse", "Antigravity", "Copilot", "Gemini CLI", "OpenCode"]) {
+    for (const shown of ["Claude Code", "Codex", "Cursor", "OMP", "Factory", "Prime", "Grok", "Hermes", "Muse", "Antigravity", "Copilot", "Gemini CLI", "OpenCode", "Pi"]) {
       expect(g, `the guide stopped listing ${shown} among the collectors to compare against`)
         .toContain(shown);
     }

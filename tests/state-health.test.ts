@@ -30,6 +30,7 @@ const emptySessions = () => ({
   copilot: { value: [], errors: [] },
   gemini: { value: [], errors: [] },
   opencode: { value: [], errors: [] },
+  pi: { value: [], errors: [] },
 });
 
 const ROUTING_RACE_SESSION_ID = "routing-race-session";
@@ -1390,15 +1391,18 @@ describe("cmux collection time truth", () => {
     resolveOld({ value: [routingRaceSource({ displayName: "old config" })], errors: [] });
 
     const changed = await drained;
-    expect(changed.programs.flatMap(({ agents }) => agents).find(({ id }) => id === current.id)?.sourceFreshness)
-      .toBe("last-known");
-    expect(codexCalls).toBe(1);
+    const changedAgent = changed.programs.flatMap(({ agents }) => agents).find(({ id }) => id === current.id);
+    expect(changedAgent?.displayName).toBe("new config");
+    expect(changedAgent?.sourceFreshness).toBeUndefined();
+    expect(codexCalls).toBe(2);
 
     const recovered = await state.refresh();
     expect(recovered.programs.flatMap(({ agents }) => agents).find(({ id }) => id === current.id)?.displayName)
       .toBe("new config");
+    expect(codexCalls).toBe(3);
     expect(calls).toEqual([
       { windowMs: 36 * 60 * 60 * 1_000, freshMs: 5 * 60_000, quietMs: 30 * 60_000 },
+      { windowMs: 60 * 60 * 1_000, freshMs: 2 * 60_000, quietMs: 10 * 60_000 },
       { windowMs: 60 * 60 * 1_000, freshMs: 2 * 60_000, quietMs: 10 * 60_000 },
     ]);
   });
@@ -1482,6 +1486,7 @@ describe("cmux collection time truth", () => {
           grokBot: options?.extraGrokBotRoots ?? [],
           copilot: options?.extraCopilotRoots ?? [],
           gemini: options?.extraGeminiCliRoots ?? [],
+          pi: options?.extraPiRoots ?? [],
         });
         const errors = provider === "cursor"
           ? ["Cursor extra root /tmp/Cursor-2 is unreadable"]
@@ -1491,6 +1496,8 @@ describe("cmux collection time truth", () => {
               ? ["Copilot extra root /tmp/.copilot-2 is unreadable"]
               : provider === "gemini"
                 ? ["Gemini CLI extra root /tmp/.gemini-2 is unreadable"]
+              : provider === "pi"
+                ? ["Pi extra root /tmp/pi-sessions-2 is unreadable"]
               : [];
         return { value: [], errors };
       },
@@ -1510,6 +1517,7 @@ describe("cmux collection time truth", () => {
       botRootsReader: () => ["/tmp/Grok Bot 2"],
       copilotRootsReader: () => ["/tmp/.copilot-2"],
       geminiRootsReader: () => ["/tmp/.gemini-2"],
+      piRootsReader: () => ["/tmp/pi-sessions-2"],
     });
 
     await state.refresh();
@@ -1521,10 +1529,12 @@ describe("cmux collection time truth", () => {
     });
     expect(seen.get("copilot")?.copilot).toEqual(["/tmp/.copilot-2"]);
     expect(seen.get("gemini")?.gemini).toEqual(["/tmp/.gemini-2"]);
+    expect(seen.get("pi")?.pi).toEqual(["/tmp/pi-sessions-2"]);
     expect(state.get().totals.sourceHealth?.byProvider?.cursor.healthy).toBe(false);
     expect(state.get().totals.sourceHealth?.byProvider?.grok.healthy).toBe(false);
     expect(state.get().totals.sourceHealth?.byProvider?.copilot.healthy).toBe(false);
     expect(state.get().totals.sourceHealth?.byProvider?.gemini.healthy).toBe(false);
+    expect(state.get().totals.sourceHealth?.byProvider?.pi.healthy).toBe(false);
     expect(state.get().totals.sourceHealth?.byProvider?.claude.healthy).toBe(true);
   });
   test("per-source health timestamps set on success and survive later failure", async () => {
@@ -1719,6 +1729,7 @@ describe("what is recorded is what is published", () => {
         copilot: { value: [], errors: [] },
         gemini: { value: [], errors: [] },
         opencode: { value: [], errors: [] },
+        pi: { value: [], errors: [] },
       }),
       cmux: async () => ({ value: [], errors: [] }),
       notifications: async () => ({ value: [], errors: [] }),

@@ -8,8 +8,8 @@
    without adding it here fails the build rather than quietly under-counting.
    Every runtime consumer imports this list so a provider cannot be taught to
    one subsystem while remaining invisible to another. */
-export type Provider = "codex" | "omp" | "claude" | "cursor" | "factory" | "prime" | "grok" | "hermes" | "muse" | "antigravity" | "copilot" | "gemini" | "opencode";
-export const PROVIDERS = ["codex", "omp", "claude", "cursor", "factory", "prime", "grok", "hermes", "muse", "antigravity", "copilot", "gemini", "opencode"] as const satisfies readonly Provider[];
+export type Provider = "codex" | "omp" | "claude" | "cursor" | "factory" | "prime" | "grok" | "hermes" | "muse" | "antigravity" | "copilot" | "gemini" | "opencode" | "pi";
+export const PROVIDERS = ["codex", "omp", "claude", "cursor", "factory", "prime", "grok", "hermes", "muse", "antigravity", "copilot", "gemini", "opencode", "pi"] as const satisfies readonly Provider[];
 /* Exhaustiveness in the other direction: `satisfies` proves every entry is a
    Provider, and this proves every Provider is an entry. Adding one to the union
    without adding it to the list fails the build here rather than quietly
@@ -51,6 +51,7 @@ export type AuthoredNameSource =
   | "antigravity-title"
   | "copilot-title"
   | "gemini-title"
+  | "pi-title"
   | "launch-env"
   | "manifest";
 /* What a session is called, decided once by src/server/naming.ts.

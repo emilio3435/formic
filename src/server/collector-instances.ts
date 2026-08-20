@@ -5,13 +5,14 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, normalize, resolve } from "node:path";
 import { PROVIDERS, type Provider } from "../shared/types";
+import { piLaunchObservationFromCommand } from "./pi";
 import type { SettingsFileOperations } from "./settings";
 
 export type CollectorKind =
   | "cursor-gui" | "cursor-cli" | "codex" | "claude" | "factory"
   | "prime" | "omp" | "grok-cli" | "hermes" | "grok-bot"
   | "muse" | "antigravity-cli" | "antigravity-desktop" | "antigravity-ide"
-  | "copilot" | "gemini-cli" | "opencode" | "burnbar" | "cmux-hooks" | "unknown";
+  | "copilot" | "gemini-cli" | "opencode" | "pi" | "burnbar" | "cmux-hooks" | "unknown";
 
 export const SUPPORTED_ALTERNATE_HOME_KINDS = [
   "cursor-gui",
@@ -20,6 +21,7 @@ export const SUPPORTED_ALTERNATE_HOME_KINDS = [
   "copilot",
   "gemini-cli",
   "opencode",
+  "pi",
 ] as const satisfies readonly CollectorKind[];
 
 const SUPPORTED_ALTERNATE_HOME_KIND_SET = new Set<CollectorKind>(SUPPORTED_ALTERNATE_HOME_KINDS);
@@ -62,14 +64,15 @@ const PROVIDER_FOR = {
   "copilot": "copilot",
   "gemini-cli": "gemini",
   "opencode": "opencode",
+  "pi": "pi",
   "grok-bot": null,
   "burnbar": null,
   "cmux-hooks": null,
   "unknown": null,
 } as const satisfies Record<CollectorKind, Provider | null>;
 
-const NAME_TOKEN_RE = /^(claude|codex|cursor|grok|hermes|factory|prime|omp|droid|aider|continue|opencode|gemini|muse|antigravity|windsurf|copilot|crush|amp)/i;
-const AGENT_MENTION_RE = /(claude|codex|cursor|grok|hermes|factory|prime|omp|droid|aider|continue|opencode|gemini|muse|antigravity|windsurf|copilot|crush|amp)/i;
+const NAME_TOKEN_RE = /^(?:claude|codex|cursor|grok|hermes|factory|prime|omp|droid|aider|continue|opencode|gemini|muse|antigravity|windsurf|copilot|crush|amp|pi(?:$|-\d))/i;
+const AGENT_MENTION_RE = /(?:claude|codex|cursor|grok|hermes|factory|prime|omp|droid|aider|continue|opencode|gemini|muse|antigravity|windsurf|copilot|crush|amp)|(?:^|[^A-Za-z0-9_-])pi(?:$|[^A-Za-z0-9_-])/i;
 const SESSION_DIR_NAMES = new Set(["sessions", "projects", "chats", "conversations"]);
 const SKIP_WALK_NAMES = new Set(["node_modules", "Caches", "Logs"]);
 const OPENCODE_DATABASE = /^opencode(?:-[A-Za-z0-9][A-Za-z0-9._-]*)?\.db$/;
@@ -89,6 +92,7 @@ export function defaultHomes(home: string): ReadonlyArray<{ kind: CollectorKind;
     { kind: "copilot", dataDir: join(home, ".copilot") },
     { kind: "gemini-cli", dataDir: join(home, ".gemini") },
     { kind: "opencode", dataDir: join(home, ".local/share/opencode") },
+    { kind: "pi", dataDir: join(home, ".pi") },
     { kind: "antigravity-cli", dataDir: join(home, ".gemini/antigravity-cli") },
     { kind: "antigravity-desktop", dataDir: join(home, ".gemini/antigravity") },
     { kind: "antigravity-ide", dataDir: join(home, ".gemini/antigravity-ide") },
@@ -127,6 +131,8 @@ export function readTextCappedSync(path: string, maxBytes: number): string | und
 
 const SCAN_BUDGET_MS = 2_000;
 const SCRIPT_CAP_BYTES = 8_192;
+const PI_HEADER_FILE_CAP = 32;
+const PI_HEADER_BYTES = 64 * 1024;
 const DOTDIR_RE = /^\.[A-Za-z0-9._-]+$/;
 const USER_DATA_DIR_RE = /--user-data-dir=(?:"([^"]+)"|(\S+))/;
 const HOME_FLAG_RE = /--home=(?:"([^"]+)"|(\S+))/;
@@ -238,6 +244,38 @@ function extractedHomeFlag(text: string): string | undefined {
   return firstGroup(text.match(HOME_FLAG_RE));
 }
 
+function hasDirectPiHeader(dataDir: string, fs: ScanFs, deadline?: number): boolean {
+  const names = fs.readdir(dataDir)
+    .filter((name) => name.endsWith(".jsonl"))
+    .sort()
+    .slice(0, PI_HEADER_FILE_CAP);
+  for (const name of names) {
+    if (pastDeadline(deadline)) return false;
+    const text = fs.readTextCapped(join(dataDir, name), PI_HEADER_BYTES);
+    if (text === undefined) continue;
+    for (const line of text.split("\n")) {
+      if (!line.trim()) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+      const header = parsed as Record<string, unknown>;
+      const version = header.version;
+      if (header.type === "session"
+        && typeof header.id === "string"
+        && /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/.test(header.id)
+        && typeof header.timestamp === "string"
+        && typeof header.cwd === "string"
+        && (version === undefined || version === 1 || version === 2 || version === 3)) return true;
+      break;
+    }
+  }
+  return false;
+}
+
 export function prioritizeAgentNamedDirs(names: readonly string[]): string[] {
   const known: string[] = [];
   const rest: string[] = [];
@@ -326,6 +364,12 @@ export function classifyDataDir(dataDir: string, fs: ScanFs, deadline?: number):
   }
   if (isDotFamily(base, "omp") && fs.isDirectory(join(dataDir, "agent/sessions"))) {
     return candidate("omp", dataDir, fs);
+  }
+  if (base.replace(/^\./, "").toLowerCase() === "pi" && fs.isDirectory(join(dataDir, "agent/sessions"))) {
+    return candidate("pi", dataDir, fs, isDefaultDataDir(dataDir, fs.home()) ? undefined : "needs-parser");
+  }
+  if (base.toLowerCase() !== ".pip" && hasDirectPiHeader(dataDir, fs, deadline)) {
+    return candidate("pi", dataDir, fs);
   }
   if (isDotFamily(base, "grok") && (fs.isDirectory(join(dataDir, "sessions")) || fs.exists(join(dataDir, "sessions")))) {
     return candidate("grok-cli", dataDir, fs);
@@ -459,7 +503,9 @@ export function scanAgentHomes(fs: ScanFs): CollectorCandidate[] {
   for (const argv of fs.processArgv()) {
     if (Date.now() > deadline) break;
     const extracted = resolveExtractedPath(
-      extractedUserDataDir(argv) ?? extractedHomeFlag(argv),
+      extractedUserDataDir(argv)
+        ?? extractedHomeFlag(argv)
+        ?? piLaunchObservationFromCommand(argv)?.cliSessionDir,
       home,
     );
     if (!extracted) continue;
@@ -765,6 +811,7 @@ export interface OnboardedSessionRoots {
   extraCopilotRoots: string[];
   extraGeminiCliRoots: string[];
   extraOpenCodeRoots: string[];
+  extraPiRoots: string[];
 }
 
 export function onboardedSessionRoots(store: JsonCollectorInstanceStore): OnboardedSessionRoots {
@@ -775,6 +822,7 @@ export function onboardedSessionRoots(store: JsonCollectorInstanceStore): Onboar
     extraCopilotRoots: store.onboardedRoots("copilot"),
     extraGeminiCliRoots: store.onboardedRoots("gemini-cli"),
     extraOpenCodeRoots: store.onboardedRoots("opencode"),
+    extraPiRoots: store.onboardedRoots("pi"),
   };
 }
 

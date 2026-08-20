@@ -47,6 +47,12 @@ export interface CollectSessionsOptions {
   extraCopilotRoots?: readonly string[];
   extraGeminiCliRoots?: readonly string[];
   extraOpenCodeRoots?: readonly string[];
+  extraPiRoots?: readonly string[];
+  piLaunchObservations?: readonly import("./pi").PiLaunchObservation[];
+  piCliSessionDir?: string;
+  piLaunchCwd?: string;
+  piReadDeadlineMs?: number;
+  piReadTestHooks?: import("./pi").PiReadTestHooks;
 }
 export type SessionProviderResult = CollectionResult<CollectedAgent[]>;
 export type SessionProviderResults = Record<Provider, SessionProviderResult>;
@@ -104,6 +110,7 @@ const PROVIDER_NAMES: Record<Provider, string> = {
   copilot: "Copilot",
   gemini: "Gemini CLI",
   opencode: "OpenCode",
+  pi: "Pi",
 };
 
 const NON_TASK_PREFIXES = [
@@ -335,6 +342,7 @@ const AUTHORED_BY: Record<Exclude<Provider, "opencode">, AuthoredNameSource> = {
   antigravity: "antigravity-title",
   copilot: "copilot-title",
   gemini: "gemini-title",
+  pi: "pi-title",
 };
 
 function authoredByFor(provider: Provider): AuthoredNameSource | undefined {
@@ -1462,6 +1470,10 @@ export async function collectSessionProvider(
         extraDataDirs: configuredDatabasePath ? [] : options.extraOpenCodeRoots ?? [],
       });
     }
+    case "pi": {
+      const { collectPiSessions } = await import("./pi");
+      return collectPiSessions(home, windowMs, thresholds, options, signal);
+    }
   }
 }
 
@@ -1497,10 +1509,11 @@ export async function collectSessions(
   windowMs = DEFAULT_SESSION_WINDOW_MS,
   thresholds?: LifecycleThresholds,
   options: CollectSessionsOptions = {},
+  signal?: AbortSignal,
 ): Promise<SessionProviderResults> {
   const results = Object.fromEntries(await Promise.all(PROVIDERS.map(async (provider) => [
     provider,
-    await collectSessionProvider(provider, home, windowMs, thresholds, options),
+    await collectSessionProvider(provider, home, windowMs, thresholds, options, signal),
   ]))) as SessionProviderResults;
   return finalizeSessionProviders(results, home, options);
 }

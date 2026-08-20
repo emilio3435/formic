@@ -42,6 +42,7 @@ describe("provider settlement", () => {
   test("an old-config settlement cannot publish current under a new collection config", async () => {
     const coordinator = new ProviderSettlementCoordinator<"p", string>(() => true);
     const pending = deferred<string>();
+    const replacementPending = deferred<string>();
     let scans = 0;
     const old = coordinator.settle(["p"], async () => {
       scans += 1;
@@ -49,30 +50,45 @@ describe("provider settlement", () => {
     }, { waitMs: 7_500, configKey: "window=36h;fresh=5m;quiet=30m" });
     await flushSettlements();
 
-    const cutoff = controlledCutoff();
     const changed = coordinator.settle(["p"], async () => {
       scans += 1;
       return "new-config";
     }, {
       waitMs: 7_500,
       configKey: "window=1h;fresh=2m;quiet=10m",
+    });
+    await flushSettlements();
+
+    expect(await changed).toMatchObject({ current: { p: "new-config" }, timedOut: [] });
+    expect(scans).toBe(2);
+
+    pending.resolve("old-config");
+    expect(await old).toMatchObject({ current: { p: "old-config" } });
+
+    const cutoff = controlledCutoff();
+    const later = coordinator.settle(["p"], async () => {
+      scans += 1;
+      return replacementPending.promise;
+    }, {
+      waitMs: 7_500,
+      configKey: "window=1h;fresh=2m;quiet=10m",
       wait: cutoff.wait,
     });
     await flushSettlements();
-    pending.resolve("old-config");
-    await flushSettlements();
     cutoff.release();
+    expect(await later).toEqual({
+      current: {},
+      settledAtMs: {},
+      lastKnown: { p: "new-config" },
+      timedOut: ["p"],
+    });
 
-    expect(await old).toMatchObject({ current: { p: "old-config" } });
-    expect(await changed).toMatchObject({ current: {}, timedOut: ["p"] });
-    expect(scans).toBe(1);
-
-    const recovered = await coordinator.settle(["p"], async () => {
+    const oldKeyFresh = await coordinator.settle(["p"], async () => {
       scans += 1;
-      return "new-config";
-    }, { waitMs: 7_500, configKey: "window=1h;fresh=2m;quiet=10m" });
-    expect(recovered).toMatchObject({ current: { p: "new-config" }, timedOut: [] });
-    expect(scans).toBe(2);
+      return "old-config-fresh";
+    }, { waitMs: 7_500, configKey: "window=36h;fresh=5m;quiet=30m" });
+    expect(oldKeyFresh).toMatchObject({ current: { p: "old-config-fresh" }, timedOut: [] });
+    expect(scans).toBe(4);
   });
 
   test("late current evidence keeps its settlement time when consumed later", async () => {
@@ -330,25 +346,16 @@ describe("provider settlement", () => {
     }, { waitMs: 7_500, configKey: firstKey });
     await flushSettlements();
 
-    const cutoff = controlledCutoff();
     const second = coordinator.settle(["cursor"], async () => {
       scans += 1;
       return "with-extra";
-    }, { waitMs: 7_500, configKey: secondKey, wait: cutoff.wait });
-    await flushSettlements();
-    pending.resolve("without-extra");
-    await flushSettlements();
-    cutoff.release();
-
-    expect(await first).toMatchObject({ current: { cursor: "without-extra" } });
-    expect(await second).toMatchObject({ current: {}, timedOut: ["cursor"] });
-    expect(scans).toBe(1);
-
-    const recovered = await coordinator.settle(["cursor"], async () => {
-      scans += 1;
-      return "with-extra";
     }, { waitMs: 7_500, configKey: secondKey });
-    expect(recovered).toMatchObject({ current: { cursor: "with-extra" }, timedOut: [] });
+    await flushSettlements();
+
+    expect(await second).toMatchObject({ current: { cursor: "with-extra" }, timedOut: [] });
     expect(scans).toBe(2);
+
+    pending.resolve("without-extra");
+    expect(await first).toMatchObject({ current: { cursor: "without-extra" } });
   });
 });

@@ -111,6 +111,7 @@ const emptySessions = () => ({
   copilot: { value: [], errors: [] },
   gemini: { value: [], errors: [] },
   opencode: { value: [], errors: [] },
+  pi: { value: [], errors: [] },
 });
 
 async function eventually(assertion: () => void): Promise<void> {
