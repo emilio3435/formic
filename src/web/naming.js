@@ -40,6 +40,7 @@ export const PROVIDER_DISPLAY_NAMES = {
   antigravity: "Antigravity",
   copilot: "Copilot",
   gemini: "Gemini CLI",
+  opencode: "OpenCode",
 };
 
 /* Strings that arrive in a name-shaped field but are not names: OMP's periodic

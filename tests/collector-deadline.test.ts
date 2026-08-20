@@ -43,6 +43,7 @@ const empty = (): SessionsResult => ({
   antigravity: { value: [], errors: [] },
   copilot: { value: [], errors: [] },
   gemini: { value: [], errors: [] },
+  opencode: { value: [], errors: [] },
 });
 
 /** A hub whose collectors behave exactly as described, with a 60ms deadline. */

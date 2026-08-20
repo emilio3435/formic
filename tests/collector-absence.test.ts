@@ -166,7 +166,7 @@ describe("a provider that was never installed is absent, not degraded", () => {
          HOME reports every provider absent", which iterates the shared union. The old
          fixture left omp unstated and the accounting silently read it as
          installed-and-healthy, which is the bug this file now covers. */
-      sourceAbsent: { cursor: true, omp: true, factory: true, prime: true, grok: true, gemini: true, hermes: true, muse: true, antigravity: true, copilot: true },
+      sourceAbsent: { cursor: true, omp: true, factory: true, prime: true, grok: true, hermes: true, muse: true, antigravity: true, copilot: true, gemini: true, opencode: true },
       cmuxAbsent: true,
       cmuxReachable: false,
     });

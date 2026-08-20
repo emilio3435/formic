@@ -110,6 +110,7 @@ const emptySessions = () => ({
   antigravity: { value: [], errors: [] },
   copilot: { value: [], errors: [] },
   gemini: { value: [], errors: [] },
+  opencode: { value: [], errors: [] },
 });
 
 async function eventually(assertion: () => void): Promise<void> {

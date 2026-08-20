@@ -48,17 +48,17 @@ type SessionIdentitySource = Pick<CollectedAgent, "provider" | "sourceSessionId"
 
 export type SessionIdentityProviderIndex = ReadonlyMap<
   string,
-  ReadonlySet<CollectedAgent["provider"]>
+  ReadonlyMap<CollectedAgent["provider"], number>
 >;
 
 export function indexSessionIdentityProviders(
   sources: readonly SessionIdentitySource[],
 ): SessionIdentityProviderIndex {
-  const providersBySession = new Map<string, Set<CollectedAgent["provider"]>>();
+  const providersBySession = new Map<string, Map<CollectedAgent["provider"], number>>();
   for (const source of sources) {
     const sessionId = source.sourceSessionId.toLowerCase();
-    const providers = providersBySession.get(sessionId) ?? new Set();
-    providers.add(source.provider);
+    const providers = providersBySession.get(sessionId) ?? new Map();
+    providers.set(source.provider, (providers.get(source.provider) ?? 0) + 1);
     providersBySession.set(sessionId, providers);
   }
   return providersBySession;
@@ -68,7 +68,8 @@ export function sourceSessionHasProviderCollision(
   sessionId: string,
   providersBySession: SessionIdentityProviderIndex,
 ): boolean {
-  return (providersBySession.get(sessionId.toLowerCase())?.size ?? 0) > 1;
+  const providers = providersBySession.get(sessionId.toLowerCase());
+  return (providers?.size ?? 0) > 1 || (providers?.get("opencode") ?? 0) > 1;
 }
 
 function sourceSessionClaims(surface: CmuxSurface): SessionIdentityClaim[] {
@@ -341,7 +342,9 @@ function resolveAgentTargetInternal(
   steps?.push({ tier: "session", outcome: "no-match", detail: "Source session ID is not present on any ready cmux surface this scan." });
 
   if (agent.allowCwdFallback === false) {
-    const reason = "This harness requires exact cmux identity; cwd fallback is disabled.";
+    const reason = agent.provider === "opencode"
+      ? "OpenCode agents require exact cmux identity; cwd fallback is disabled."
+      : "This harness requires exact cmux identity; cwd fallback is disabled.";
     steps?.push({ tier: "cwd", outcome: "rejected", detail: reason });
     return finish({
       resolution: "missing",
@@ -672,17 +675,19 @@ export function transmitRefusal(agent: {
     return null;
   }
   if (!canAddressTarget(agent.target)) {
-    const sourceRequiresExact = agent.identityTrace?.steps.some(
-      ({ detail }) => detail === "This harness requires exact cmux identity; cwd fallback is disabled.",
+    const requiresExactCmux = agent.identityTrace?.steps.some(
+      ({ detail }) =>
+        detail === "This harness requires exact cmux identity; cwd fallback is disabled." ||
+        /agents require exact cmux identity; cwd fallback is disabled\.$/.test(detail),
     ) ?? false;
     return refuse(
       "UNSAFE_TARGET",
-      sourceRequiresExact
+      requiresExactCmux
         ? "No safe cmux target is linked to this session."
         : agent.target.reason ?? "No safe cmux surface target is available.",
       agent.target.resolution === "ambiguous"
         ? "Inspect the routing evidence, then remove the conflicting claim so one exact session identity remains."
-        : sourceRequiresExact
+        : requiresExactCmux
           ? "Open it in a cmux pane (or start the agent from one); the next scan binds it."
           : "Open or start the agent in a cmux pane; the next scan links it when cmux reports the session.",
       routingEvidence,

@@ -14,6 +14,7 @@ import {
   type GeminiConversation,
 } from "./gemini";
 import { isReplicaBlob, parseReplicaBlob } from "./grok-bot";
+import { readOpenCodeStore } from "./opencode-store";
 import { routingSurfaceObservations, type RoutingSurfaceObservation } from "./targets";
 import type { CmuxSurface } from "./types";
 
@@ -760,6 +761,37 @@ export function transcriptLines(
   return lines;
 }
 
+function openCodeTranscriptLines(
+  agent: AgentSnapshot,
+  source: string,
+): { lines: TranscriptLine[]; parserTruncated: boolean; missing: boolean } {
+  const session = readOpenCodeStore(source, { sessionId: agent.sourceSessionId }).sessions[0];
+  if (!session) return { lines: [], parserTruncated: false, missing: true };
+  const lines: TranscriptLine[] = [];
+  for (const event of session.events) {
+    if (event.kind === "tool") {
+      lines.push({
+        at: transcriptTimestamp(event.observedAt),
+        role: "tool",
+        text: [
+          event.title ?? event.toolName,
+          `Call: ${event.callId}`,
+          `Status: ${event.status}`,
+        ].join("\n"),
+      });
+      continue;
+    }
+    pushTranscriptLine(
+      lines,
+      event.kind === "reasoning" ? "system" : event.role,
+      event.kind === "reasoning" ? `Thought\n${event.text}` : event.text,
+      event.observedAt,
+      agent.provider,
+    );
+  }
+  return { lines, parserTruncated: session.transcriptTruncated, missing: false };
+}
+
 export async function transcriptResponse(
   snapshot: HubSnapshot,
   agentId: string,
@@ -800,6 +832,31 @@ export async function transcriptResponse(
           ...(conversation?.warnings?.length
             ? { warning: conversation.warnings.join("; ") }
             : {}),
+        },
+        { headers: responseHeaders },
+      );
+    }
+    if (agent.provider === "opencode") {
+      const transcript = openCodeTranscriptLines(agent, source);
+      if (transcript.missing) {
+        return Response.json(
+          {
+            ok: false,
+            error: {
+              code: "TRANSCRIPT_SESSION_GONE",
+              message: "The OpenCode session is missing from its store and is no longer available.",
+            },
+          },
+          { status: 410, headers: responseHeaders },
+        );
+      }
+      return Response.json(
+        {
+          ok: true,
+          agentId,
+          source,
+          truncated: transcript.parserTruncated || transcript.lines.length > limit,
+          lines: transcript.lines.slice(-limit),
         },
         { headers: responseHeaders },
       );

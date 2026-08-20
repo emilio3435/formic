@@ -195,6 +195,7 @@ const HOME_MARK = {
   "antigravity-desktop": "/icons/antigravity.png",
   "antigravity-ide": "/icons/antigravity.png",
   codex: "/icons/codex.webp",
+  opencode: "/icons/opencode.svg",
   burnbar: "/icons/history.svg",
 };
 

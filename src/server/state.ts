@@ -141,8 +141,9 @@ export function providerCollectionConfigKey(
   extraGrokCliRoots: readonly string[] = [],
   extraCopilotRoots: readonly string[] = [],
   extraGeminiCliRoots: readonly string[] = [],
+  extraOpenCodeRoots: readonly string[] = [],
 ): string {
-  return `${windowMs}:${thresholds?.freshMs ?? "default"}:${thresholds?.quietMs ?? "default"}:${extraCursorGuiRoots.join(",")}:bot=${extraGrokBotRoots.join(",")}:cli=${extraGrokCliRoots.join(",")}:copilot=${extraCopilotRoots.join(",")}:gemini=${extraGeminiCliRoots.join(",")}`;
+  return `${windowMs}:${thresholds?.freshMs ?? "default"}:${thresholds?.quietMs ?? "default"}:${extraCursorGuiRoots.join(",")}:bot=${extraGrokBotRoots.join(",")}:cli=${extraGrokCliRoots.join(",")}:copilot=${extraCopilotRoots.join(",")}:gemini=${extraGeminiCliRoots.join(",")}:opencode=${extraOpenCodeRoots.join(",")}`;
 }
 
 function waitWithAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -231,6 +232,7 @@ export interface HubStateOptions {
   grokCliRootsReader?: () => readonly string[];
   copilotRootsReader?: () => readonly string[];
   geminiRootsReader?: () => readonly string[];
+  openCodeRootsReader?: () => readonly string[];
   triageReader?: () => readonly TriageQueueSummary[];
   burnReader?: () => Promise<UsageSummary>;
   cmuxExecutable?: string;
@@ -310,6 +312,7 @@ export class HubState {
   private readonly grokCliRootsReader?: () => readonly string[];
   private readonly copilotRootsReader?: () => readonly string[];
   private readonly geminiRootsReader?: () => readonly string[];
+  private readonly openCodeRootsReader?: () => readonly string[];
   private readonly triageReader?: () => readonly TriageQueueSummary[];
   private readonly burnReader?: () => Promise<UsageSummary>;
   private readonly cmuxExecutable: string;
@@ -338,6 +341,7 @@ export class HubState {
     this.grokCliRootsReader = options.grokCliRootsReader;
     this.copilotRootsReader = options.copilotRootsReader;
     this.geminiRootsReader = options.geminiRootsReader;
+    this.openCodeRootsReader = options.openCodeRootsReader;
     this.triageReader = options.triageReader;
     this.burnReader = options.burnReader;
     this.cmuxExecutable = options.cmuxExecutable ?? DEFAULT_CMUX_EXECUTABLE;
@@ -907,6 +911,7 @@ export class HubState {
     const extraGrokCliRoots = this.grokCliRootsReader?.() ?? [];
     const extraCopilotRoots = this.copilotRootsReader?.() ?? [];
     const extraGeminiCliRoots = this.geminiRootsReader?.() ?? [];
+    const extraOpenCodeRoots = this.openCodeRootsReader?.() ?? [];
     type SessionsResult = Awaited<ReturnType<HubCollectors["sessions"]>>;
     type SpendSourcesResult = Awaited<ReturnType<typeof collectHermesSpendSources>>;
     type CmuxResult = Awaited<ReturnType<HubCollectors["cmux"]>>;
@@ -998,14 +1003,14 @@ export class HubState {
     const providerCollection = (this.collectors.sessionProvider && this.collectors.finalizeSessions
       ? track("providers", (async () => {
           const configKey = providerCollectionConfigKey(
-            windowMs, thresholds, extraCursorGuiRoots, extraGrokBotRoots, extraGrokCliRoots, extraCopilotRoots, extraGeminiCliRoots,
+            windowMs, thresholds, extraCursorGuiRoots, extraGrokBotRoots, extraGrokCliRoots, extraCopilotRoots, extraGeminiCliRoots, extraOpenCodeRoots,
           );
           const selection = await this.#providerSettlement.settle(
             providers,
             async (provider) => {
               try {
                 return await this.collectors.sessionProvider!(
-                  provider, homedir(), windowMs, thresholds, { extraCursorGuiRoots, extraGrokBotRoots, extraGrokCliRoots, extraCopilotRoots, extraGeminiCliRoots }, signal,
+                  provider, homedir(), windowMs, thresholds, { extraCursorGuiRoots, extraGrokBotRoots, extraGrokCliRoots, extraCopilotRoots, extraGeminiCliRoots, extraOpenCodeRoots }, signal,
                 );
               } catch (error) {
                 if (signal.aborted) throw signal.reason ?? error;
@@ -1039,7 +1044,7 @@ export class HubState {
             );
           }
         })())
-      : capture("session collection failed", this.collectors.sessions(homedir(), windowMs, thresholds, { extraCursorGuiRoots, extraGrokBotRoots, extraGrokCliRoots, extraCopilotRoots, extraGeminiCliRoots }, signal), (value) => {
+      : capture("session collection failed", this.collectors.sessions(homedir(), windowMs, thresholds, { extraCursorGuiRoots, extraGrokBotRoots, extraGrokCliRoots, extraCopilotRoots, extraGeminiCliRoots, extraOpenCodeRoots }, signal), (value) => {
           sessionsResult = value;
         })).catch((error) => {
           if (!signal.aborted) {

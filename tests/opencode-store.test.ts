@@ -223,10 +223,14 @@ test("V1 step-finish evidence publishes callSizes in transcript order and leaves
 
   expect({
     rootCallSizes: root.callSizes,
+    rootCallSizesComplete: root.callSizesComplete,
     childCallSizes: child?.callSizes,
+    childCallSizesComplete: child?.callSizesComplete,
   }).toEqual({
     rootCallSizes: [415, 153],
+    rootCallSizesComplete: true,
     childCallSizes: undefined,
+    childCallSizesComplete: false,
   });
 });
 
@@ -406,6 +410,7 @@ test("global part cap preserves boundary speech when one selected message has 50
       ({ kind, partId }) => kind === "tool" && partId === "prt_synthetic_assistant_1_tool",
     ),
     callSizes: session.callSizes,
+    callSizesComplete: session.callSizesComplete,
     transcriptTruncated: session.transcriptTruncated,
     hasPartTruncationDiagnostic: evidence.diagnostics.some((item) =>
       item.kind === "truncated" && item.table === "part" && item.recordId === ROOT_SESSION_ID
@@ -416,6 +421,7 @@ test("global part cap preserves boundary speech when one selected message has 50
     retainedReasoning: true,
     retainedTool: true,
     callSizes: [415, 153],
+    callSizesComplete: false,
     transcriptTruncated: true,
     hasPartTruncationDiagnostic: true,
   });
@@ -854,7 +860,8 @@ test("invalid latest step-finish falls back only for latestCallTokens and is omi
     cacheWrite: 4,
     total: 153,
   });
-  expect(session.callSizes).toEqual([415]);
+  expect({ callSizes: session.callSizes, callSizesComplete: session.callSizesComplete })
+    .toEqual({ callSizes: [415], callSizesComplete: false });
 });
 
 test("unknown latest-call counters remain absent instead of collapsing to zeros", async () => {

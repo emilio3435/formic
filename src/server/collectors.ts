@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { open, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { PROVIDERS, type AgentStatus, type EndEvidence, type Provider, type TokenUsage } from "../shared/types";
 import {
   DEFAULT_LIFECYCLE_THRESHOLDS,
@@ -46,6 +46,7 @@ export interface CollectSessionsOptions {
   extraGrokCliRoots?: readonly string[];
   extraCopilotRoots?: readonly string[];
   extraGeminiCliRoots?: readonly string[];
+  extraOpenCodeRoots?: readonly string[];
 }
 export type SessionProviderResult = CollectionResult<CollectedAgent[]>;
 export type SessionProviderResults = Record<Provider, SessionProviderResult>;
@@ -102,6 +103,7 @@ const PROVIDER_NAMES: Record<Provider, string> = {
   antigravity: "Antigravity",
   copilot: "Copilot",
   gemini: "Gemini CLI",
+  opencode: "OpenCode",
 };
 
 const NON_TASK_PREFIXES = [
@@ -320,7 +322,7 @@ function taskDisplayName(task?: string): string | undefined {
 /* Which launcher a provider's explicit name came from. Each provider has
    exactly one place an authored name can originate, so this is a lookup rather
    than a per-call-site argument. */
-const AUTHORED_BY: Record<Provider, AuthoredNameSource> = {
+const AUTHORED_BY: Record<Exclude<Provider, "opencode">, AuthoredNameSource> = {
   codex: "codex-nickname",
   omp: "omp-title",
   claude: "claude-subagent",
@@ -334,6 +336,10 @@ const AUTHORED_BY: Record<Provider, AuthoredNameSource> = {
   copilot: "copilot-title",
   gemini: "gemini-title",
 };
+
+function authoredByFor(provider: Provider): AuthoredNameSource | undefined {
+  return provider === "opencode" ? undefined : AUTHORED_BY[provider];
+}
 
 function statusFrom(
   updatedAt: string,
@@ -387,6 +393,8 @@ export function makeAgent(input: {
   processedSnapshots?: readonly { readonly at: string; readonly total: number }[];
   provider: Provider;
   sourceSessionId: string;
+  sourceTitle?: CollectedAgent["sourceTitle"];
+  rawModel?: CollectedAgent["rawModel"];
   displayName?: string;
   cwd?: string;
   /* The FIRST working directory this session recorded. Separate from `cwd`,
@@ -395,6 +403,12 @@ export function makeAgent(input: {
      not an identity. Defaults to `cwd` for the providers whose session file
      records a single directory and therefore cannot drift. */
   originCwd?: string;
+  /** Naming evidence when it differs from the publishable first cwd. */
+  identityCwd?: string;
+  /** Legacy display-name cwd when current cwd is not the naming source. */
+  displayCwd?: string;
+  /** Existing providers publish cwd as origin when no separate origin exists. */
+  allowOriginCwdFallback?: boolean;
   launch?: CollectedAgent["launch"];
   model?: string;
   effort?: string;
@@ -428,7 +442,7 @@ export function makeAgent(input: {
     input.meta.thresholds,
   );
   const statusReason = input.statusReason ?? status.reason;
-  const normalizedCwd = input.cwd?.replace(/\/+$/, "");
+  const normalizedCwd = (input.displayCwd ?? input.cwd)?.replace(/\/+$/, "");
   const atHome = Boolean(normalizedCwd && normalizedCwd === homedir().replace(/\/+$/, ""));
   const cwdName = normalizedCwd && !atHome ? basename(normalizedCwd) : undefined;
   const cwdIdentity = cwdName
@@ -449,25 +463,29 @@ export function makeAgent(input: {
   const authoredName = usefulExplicitName ||
     (input.provider === "codex" ? input.nickname : undefined);
   const taskName = taskDisplayName(input.task);
+  const authoredBy = authoredName ? authoredByFor(input.provider) : undefined;
+  const originCwd = input.originCwd ?? (input.allowOriginCwdFallback === false ? undefined : input.cwd);
   const thread = input.thread ?? threadFromMessages(input.humanMessages, input.exited);
   const identity = resolveAgentName({
     provider: input.provider,
     sourceSessionId: input.sourceSessionId,
-    authored: authoredName
-      ? { name: authoredName, by: AUTHORED_BY[input.provider] }
+    authored: authoredName && authoredBy
+      ? { name: authoredName, by: authoredBy }
       : undefined,
-    originCwd: input.taskBeforeOriginCwd ? undefined : input.originCwd ?? input.cwd,
+    originCwd: input.taskBeforeOriginCwd ? undefined : input.identityCwd ?? originCwd,
     taskName,
   });
   return {
     identity,
-    originCwd: input.originCwd ?? input.cwd,
+    originCwd,
     launch: input.launch,
     id: `${input.provider}:${input.sourceSessionId}`,
     callSizes: input.callSizes,
     processedSnapshots: input.processedSnapshots,
     provider: input.provider,
     sourceSessionId: input.sourceSessionId,
+    sourceTitle: input.sourceTitle,
+    rawModel: input.rawModel,
     runtimeSessionId: input.runtimeSessionId,
     // Identity first (folder / Home), task second. The prompt belongs in the
     // message lane — not as the agent/terminal name operators hunt for in cmux.
@@ -1426,6 +1444,23 @@ export async function collectSessionProvider(
         Date.now(),
         signal,
       );
+    }
+    case "opencode": {
+      const { collectOpenCodeSessions } = await import("./opencode");
+      const useOperatorEnvironment = home === homedir();
+      const xdgDataHome = useOperatorEnvironment ? process.env.XDG_DATA_HOME?.trim() : undefined;
+      const dataRoot = xdgDataHome
+        ? join(xdgDataHome, "opencode")
+        : join(home, ".local/share/opencode");
+      const configured = useOperatorEnvironment ? process.env.OPENCODE_DB?.trim() : undefined;
+      if (configured === ":memory:") return { value: [], errors: [] };
+      const configuredDatabasePath = configured
+        ? (isAbsolute(configured) ? configured : join(dataRoot, configured))
+        : undefined;
+      return collectOpenCodeSessions(dataRoot, {
+        ...(configuredDatabasePath ? { configuredDatabasePath } : {}),
+        extraDataDirs: configuredDatabasePath ? [] : options.extraOpenCodeRoots ?? [],
+      });
     }
   }
 }

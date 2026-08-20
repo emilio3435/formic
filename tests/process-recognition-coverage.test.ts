@@ -79,6 +79,9 @@ const SAMPLES: Record<Provider, { path?: string; command: string }> = {
     path: `/Users/me/.gemini/tmp/demo-project/chats/11111111-2222-4333-8444-555555555555/${ID}.jsonl`,
     command: `gemini --resume ${ID}`,
   },
+  opencode: {
+    command: "opencode --session ses_0123456789abcdefghijklmnop",
+  },
 };
 
 describe("every provider is visible to the process scanner", () => {

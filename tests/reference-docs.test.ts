@@ -1105,14 +1105,14 @@ describe("day one on a machine without cmux", () => {
   });
 
   test("QUICKSTART names every collector the code has, with the path it reads", () => {
-    expect(providers.length, "the Provider union changed shape; re-read the roster").toBe(12);
+    expect(providers.length, "the Provider union changed shape; re-read the roster").toBe(13);
     const table = quickstart.slice(quickstart.indexOf("| Collector |"));
     for (const provider of providers) {
       expect(table.toLowerCase(), `QUICKSTART's collector table omits "${provider}"`)
         .toContain(provider === "claude" ? "~/.claude/projects" : provider);
     }
     const collectors = read("src/server/collectors.ts");
-    for (const root of [".omp/agent/sessions", ".codex/sessions", ".claude/projects", ".factory/sessions"]) {
+    for (const root of [".omp/agent/sessions", ".codex/sessions", ".claude/projects", ".factory/sessions", ".local/share/opencode"]) {
       expect(collectors, `collectors.ts no longer reads ${root}`).toContain(root);
       expect(quickstart, `QUICKSTART's table has a stale path for ${root}`).toContain(root);
     }
@@ -1126,7 +1126,7 @@ describe("day one on a machine without cmux", () => {
     expect(quickstart, "QUICKSTART no longer names absence separately from health")
       .toMatch(/not installed/i);
     expect(quickstart, "QUICKSTART stopped telling the reader cmux is not a collector")
-      .toMatch(/cmux is not one of the (?:four|five|six|eight|ten|eleven|twelve)/i);
+      .toMatch(/cmux is not one of the (?:four|five|six|eight|ten|eleven|twelve|thirteen)/i);
     /* Extra copies stay the same provider. Deleting this sentence would send
        a reader looking for a ninth collector instead of Settings. */
     expect(quickstart, "QUICKSTART stopped saying extra homes opt in under Settings")
@@ -1970,11 +1970,11 @@ describe("ANT-GUIDE tells a reader how to find their own blind spot", () => {
   test("the collectors it tells them to compare against are the real ones", () => {
     const union = read("src/shared/types.ts").match(/export type Provider = ([^;]+);/)?.[1] ?? "";
     const names = [...union.matchAll(/"([a-z]+)"/g)].map((m) => m[1]);
-    expect(names.length, "the Provider union changed shape").toBe(12);
+    expect(names.length, "the Provider union changed shape").toBe(13);
     const g = guide();
     /* The guide names them in reader-facing form, so check the mapping rather
        than the identifiers. */
-    for (const shown of ["Claude Code", "Codex", "Cursor", "OMP", "Factory", "Prime", "Grok", "Hermes", "Muse", "Antigravity", "Copilot", "Gemini CLI"]) {
+    for (const shown of ["Claude Code", "Codex", "Cursor", "OMP", "Factory", "Prime", "Grok", "Hermes", "Muse", "Antigravity", "Copilot", "Gemini CLI", "OpenCode"]) {
       expect(g, `the guide stopped listing ${shown} among the collectors to compare against`)
         .toContain(shown);
     }

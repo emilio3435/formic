@@ -367,6 +367,7 @@ describe("JsonCollectorInstanceStore", () => {
       "grok-bot",
       "copilot",
       "gemini-cli",
+      "opencode",
     ]);
   });
 
@@ -487,6 +488,7 @@ describe("JsonCollectorInstanceStore", () => {
       { kind: "grok-bot" as const, provider: null, dataDir: "/tmp/Grok Bot 2", label: "Grok Bot 2", default: false },
       { kind: "copilot" as const, provider: "copilot" as const, dataDir: "/tmp/.copilot-2", label: ".copilot-2", default: false },
       { kind: "gemini-cli" as const, provider: "gemini" as const, dataDir: "/tmp/.gemini-2", label: ".gemini-2", default: false },
+      { kind: "opencode" as const, provider: "opencode" as const, dataDir: "/tmp/opencode-2", label: "opencode-2", default: false },
     ];
     store.mergeScan(candidates, "2026-08-16T00:00:00.000Z");
     await store.update({ ids: candidates.map((candidate) => instanceIdFor(candidate.kind, candidate.dataDir)), onboarded: true });
@@ -497,6 +499,7 @@ describe("JsonCollectorInstanceStore", () => {
       extraGrokBotRoots: ["/tmp/Grok Bot 2"],
       extraCopilotRoots: ["/tmp/.copilot-2"],
       extraGeminiCliRoots: ["/tmp/.gemini-2"],
+      extraOpenCodeRoots: ["/tmp/opencode-2"],
     });
   });
 

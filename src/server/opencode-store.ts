@@ -15,6 +15,7 @@ export const OPENCODE_STORE_LIMITS = {
 } as const;
 
 export interface OpenCodeReadOptions {
+  sessionId?: string;
   sessionLimit?: number;
   messageLimit?: number;
   partLimit?: number;
@@ -108,6 +109,7 @@ export interface OpenCodeSessionEvidence {
   };
   latestCallTokens?: OpenCodeTokenCounters;
   callSizes?: number[];
+  callSizesComplete: boolean;
   sessionTokens?: OpenCodeTokenCounters;
   transcriptTruncated: boolean;
 }
@@ -399,11 +401,15 @@ function readRawSnapshot(
   messageLimit: number,
   partLimit: number,
   pastDeadline: () => boolean,
+  selectedSessionId?: string,
 ): RawStoreSnapshot {
   if (pastDeadline()) return { sessions: [], sessionTruncated: false, deadlineExpired: true };
   assertPinnedSchema(database);
   if (pastDeadline()) return { sessions: [], sessionTruncated: false, deadlineExpired: true };
 
+  const selection = selectedSessionId
+    ? "WHERE id = ? ORDER BY time_updated DESC, id DESC LIMIT 1"
+    : "ORDER BY time_updated DESC, id DESC LIMIT ?";
   const sessionRows = database.query(`
     SELECT
       substr(id, 1, ${ID_CHARS + 1}) AS id,
@@ -427,10 +433,9 @@ function readRawSnapshot(
       time_updated,
       time_archived
     FROM session
-    ORDER BY time_updated DESC, id DESC
-    LIMIT ?
-  `).all(sessionLimit + 1) as RawSessionRow[];
-  const sessionTruncated = sessionRows.length > sessionLimit;
+    ${selection}
+  `).all(selectedSessionId ?? sessionLimit + 1) as RawSessionRow[];
+  const sessionTruncated = selectedSessionId === undefined && sessionRows.length > sessionLimit;
   const sessions: RawSessionBundle[] = [];
 
   for (const session of sessionRows.slice(0, sessionLimit)) {
@@ -951,7 +956,9 @@ function parseSession(
 
   const events: OpenCodeTranscriptEvent[] = [];
   const stepFinishTokens = new Map<string, OpenCodeTokenCounters>();
+  const validStepFinishTotals = new Map<string, number>();
   const callSizes: number[] = [];
+  let invalidStepFinish = false;
   for (const message of decodedMessages) {
     for (const row of partsByMessage.get(message.evidence.messageId) ?? []) {
       const partId = boundedCell(
@@ -991,9 +998,24 @@ function parseSession(
         const tokens = tokenCounters(data.tokens);
         if (tokens) {
           stepFinishTokens.set(message.evidence.messageId, tokens);
-          if (tokens.total !== undefined) callSizes.push(tokens.total);
+          if (tokens.total !== undefined) {
+            callSizes.push(tokens.total);
+            validStepFinishTotals.set(
+              message.evidence.messageId,
+              (validStepFinishTotals.get(message.evidence.messageId) ?? 0) + 1,
+            );
+          } else {
+            invalidStepFinish = true;
+            diagnostic(diagnostics, {
+              kind: "invalid-record",
+              table: "part",
+              recordId: partId,
+              detail: "step-finish total is invalid and remains unavailable",
+            });
+          }
         }
         else {
+          invalidStepFinish = true;
           diagnostic(diagnostics, {
             kind: "invalid-record",
             table: "part",
@@ -1103,6 +1125,11 @@ function parseSession(
   const firstUser = prose.find(({ role }) => role === "user")?.text;
   const assistantClosing = [...prose].reverse().find(({ role }) => role === "assistant")?.text;
   const assistantMessages = decodedMessages.filter(({ evidence }) => evidence.role === "assistant");
+  const callSizesComplete = assistantMessages.length > 0 && callSizes.length > 0 &&
+    !transcriptTruncated && !invalidStepFinish &&
+    assistantMessages.every(({ evidence }) =>
+      validStepFinishTotals.get(evidence.messageId) === 1
+    ) && callSizes.length === assistantMessages.length;
   const earliestAssistantCwd = assistantMessages.find(({ assistantCwd }) => assistantCwd)?.assistantCwd;
   const latestAssistantCwd = [...assistantMessages].reverse()
     .find(({ assistantCwd }) => assistantCwd)?.assistantCwd;
@@ -1163,6 +1190,7 @@ function parseSession(
     ...(latestTurn ? { latestTurn } : {}),
     ...(latestCallTokens ? { latestCallTokens } : {}),
     ...(callSizes.length > 0 ? { callSizes } : {}),
+    callSizesComplete,
     ...(sessionTokens ? { sessionTokens } : {}),
     transcriptTruncated,
   };
@@ -1192,7 +1220,7 @@ export function readOpenCodeStore(
   const messageLimit = boundedLimit(options.messageLimit, OPENCODE_STORE_LIMITS.recentMessagesPerSession);
   const partLimit = boundedLimit(options.partLimit, OPENCODE_STORE_LIMITS.partsPerSession);
   const raw = readForeignSqlite(path, (database) =>
-    readRawSnapshot(database, sessionLimit, messageLimit, partLimit, pastDeadline)
+    readRawSnapshot(database, sessionLimit, messageLimit, partLimit, pastDeadline, options.sessionId)
   );
   const diagnostics: OpenCodeStoreDiagnostic[] = [];
   if (raw.sessionTruncated) {

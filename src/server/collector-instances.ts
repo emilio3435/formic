@@ -11,7 +11,7 @@ export type CollectorKind =
   | "cursor-gui" | "cursor-cli" | "codex" | "claude" | "factory"
   | "prime" | "omp" | "grok-cli" | "hermes" | "grok-bot"
   | "muse" | "antigravity-cli" | "antigravity-desktop" | "antigravity-ide"
-  | "copilot" | "gemini-cli" | "burnbar" | "cmux-hooks" | "unknown";
+  | "copilot" | "gemini-cli" | "opencode" | "burnbar" | "cmux-hooks" | "unknown";
 
 export const SUPPORTED_ALTERNATE_HOME_KINDS = [
   "cursor-gui",
@@ -19,6 +19,7 @@ export const SUPPORTED_ALTERNATE_HOME_KINDS = [
   "grok-bot",
   "copilot",
   "gemini-cli",
+  "opencode",
 ] as const satisfies readonly CollectorKind[];
 
 const SUPPORTED_ALTERNATE_HOME_KIND_SET = new Set<CollectorKind>(SUPPORTED_ALTERNATE_HOME_KINDS);
@@ -60,6 +61,7 @@ const PROVIDER_FOR = {
   "antigravity-ide": "antigravity",
   "copilot": "copilot",
   "gemini-cli": "gemini",
+  "opencode": "opencode",
   "grok-bot": null,
   "burnbar": null,
   "cmux-hooks": null,
@@ -70,6 +72,7 @@ const NAME_TOKEN_RE = /^(claude|codex|cursor|grok|hermes|factory|prime|omp|droid
 const AGENT_MENTION_RE = /(claude|codex|cursor|grok|hermes|factory|prime|omp|droid|aider|continue|opencode|gemini|muse|antigravity|windsurf|copilot|crush|amp)/i;
 const SESSION_DIR_NAMES = new Set(["sessions", "projects", "chats", "conversations"]);
 const SKIP_WALK_NAMES = new Set(["node_modules", "Caches", "Logs"]);
+const OPENCODE_DATABASE = /^opencode(?:-[A-Za-z0-9][A-Za-z0-9._-]*)?\.db$/;
 
 export function defaultHomes(home: string): ReadonlyArray<{ kind: CollectorKind; dataDir: string }> {
   return [
@@ -85,6 +88,7 @@ export function defaultHomes(home: string): ReadonlyArray<{ kind: CollectorKind;
     { kind: "muse", dataDir: join(home, ".local/share/muse") },
     { kind: "copilot", dataDir: join(home, ".copilot") },
     { kind: "gemini-cli", dataDir: join(home, ".gemini") },
+    { kind: "opencode", dataDir: join(home, ".local/share/opencode") },
     { kind: "antigravity-cli", dataDir: join(home, ".gemini/antigravity-cli") },
     { kind: "antigravity-desktop", dataDir: join(home, ".gemini/antigravity") },
     { kind: "antigravity-ide", dataDir: join(home, ".gemini/antigravity-ide") },
@@ -293,6 +297,9 @@ function unknownSignalCount(dataDir: string, fs: ScanFs, deadline?: number): num
 export function classifyDataDir(dataDir: string, fs: ScanFs, deadline?: number): CollectorCandidate | undefined {
   const base = basename(dataDir);
 
+  if (fs.readdir(dataDir).some((name) => OPENCODE_DATABASE.test(name) && fs.exists(join(dataDir, name)))) {
+    return candidate("opencode", dataDir, fs);
+  }
   if (base.startsWith("Cursor") && fs.exists(join(dataDir, "User/globalStorage/state.vscdb"))) {
     return candidate("cursor-gui", dataDir, fs);
   }
@@ -757,6 +764,7 @@ export interface OnboardedSessionRoots {
   extraGrokBotRoots: string[];
   extraCopilotRoots: string[];
   extraGeminiCliRoots: string[];
+  extraOpenCodeRoots: string[];
 }
 
 export function onboardedSessionRoots(store: JsonCollectorInstanceStore): OnboardedSessionRoots {
@@ -766,6 +774,7 @@ export function onboardedSessionRoots(store: JsonCollectorInstanceStore): Onboar
     extraGrokBotRoots: store.onboardedRoots("grok-bot"),
     extraCopilotRoots: store.onboardedRoots("copilot"),
     extraGeminiCliRoots: store.onboardedRoots("gemini-cli"),
+    extraOpenCodeRoots: store.onboardedRoots("opencode"),
   };
 }
 

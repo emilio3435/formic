@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { parseClaudeJsonl, parseCodexJsonl, parseOmpJsonl } from "./collectors";
 import { parseGeminiConversationFile } from "./gemini";
+import { readOpenCodeStore } from "./opencode-store";
 import type { CollectedAgent } from "./types";
 import type { HubSnapshot } from "../shared/types";
 
@@ -106,6 +107,46 @@ export async function sessionCallsResponse(
       source: null, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
       unavailable: "This agent has no transcript on disk, so its calls cannot be re-derived.",
     });
+  }
+
+  if (agent.provider === "opencode") {
+    try {
+      const evidence = readOpenCodeStore(source, { sessionId: agent.sourceSessionId });
+      const session = evidence.sessions[0];
+      if (!session) {
+        return answer({
+          source, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
+          unavailable: "The OpenCode store does not contain this session in the bounded read window.",
+        });
+      }
+      if (!session.callSizesComplete) {
+        return answer({
+          source, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
+          unavailable: "The OpenCode per-call series is corrupt, invalid, truncated, or incomplete, so it cannot be published as complete.",
+        });
+      }
+      const calls = session.callSizes;
+      if (!calls || calls.length === 0) {
+        return answer({
+          source, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
+          unavailable: "The OpenCode store records no per-call usage for this session.",
+        });
+      }
+      let running = 0;
+      const prefixSums = calls.map((size) => (running += size));
+      return answer({
+        source,
+        calls,
+        sessionProcessed: running,
+        prefixSums,
+        processedSnapshots: null,
+      });
+    } catch (error) {
+      return answer({
+        source, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
+        unavailable: `The OpenCode store could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
   }
 
   let parsed: CollectedAgent | null;

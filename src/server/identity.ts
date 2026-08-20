@@ -35,6 +35,7 @@ const PROVIDER_BINARIES: Record<Provider, string> = {
   antigravity: "agy",
   copilot: "copilot",
   gemini: "gemini",
+  opencode: "opencode",
 };
 const AGENT_BINARIES = Object.values(PROVIDER_BINARIES).join("|");
 const RESUME_PROVIDERS = PROVIDERS.join("|");
@@ -195,6 +196,13 @@ export function identitiesFromCommand(command: string): IdentityHint[] {
     const match = command.match(pattern);
     if (match) hints.push({ provider, value: match[1].toLowerCase(), full: true });
   }
+  const openCode = command.match(/(?:^|\s)(?:\S*\/)?opencode(?=\s|$)([^\n]*)/i);
+  if (openCode && !/(?:^|\s)--fork(?:=\S+)?(?=\s|$)/i.test(openCode[1])) {
+    const session = openCode[1].match(
+      /(?:^|\s)(?:--session(?:\s+|=)|-s\s+)(ses_[0-9A-Za-z]{26})(?=\s|$)/,
+    );
+    if (session) hints.push({ provider: "opencode", value: session[1], full: true });
+  }
   const resume = command.match(
     new RegExp(`\\/cmux-agent-resume\\/(${RESUME_PROVIDERS})-([0-9a-f-]{8,36})(?:\\.zsh)?(?:\\s|$)`, "i"),
   );
@@ -354,24 +362,30 @@ function resolveCommandHint(
   hint: IdentityHint,
   agents: readonly CollectedAgent[],
 ): CommandHintResolution {
+  const normalizedHint = hint.value.toLowerCase();
   const matches = agents.filter((agent) => {
     if (agent.provider !== hint.provider) return false;
     const sourceId = agent.sourceSessionId.toLowerCase();
     const runtimeId = agent.runtimeSessionId?.toLowerCase();
     return hint.full
-      ? sourceId === hint.value || runtimeId === hint.value
-      : sourceId.startsWith(hint.value) || runtimeId?.startsWith(hint.value);
+      ? sourceId === normalizedHint || runtimeId === normalizedHint
+      : sourceId.startsWith(normalizedHint) || runtimeId?.startsWith(normalizedHint);
   });
+  if (hint.provider === "opencode" && matches.length > 1) {
+    return {
+      rejectionReason: `multiple OpenCode instances (${matches.length}) claim source session ${hint.value}`,
+    };
+  }
   /* A resumed Claude transcript keeps the original runtime session ID while
      receiving a new source file ID. When the command names that original ID,
      the exact source match is the canonical identity; treating its resumed
      alias as a second owner creates a permanent false conflict on every scan. */
-  const exactSource = matches.find((agent) => agent.sourceSessionId.toLowerCase() === hint.value);
+  const exactSource = matches.find((agent) => agent.sourceSessionId.toLowerCase() === normalizedHint);
   if (exactSource) {
     return {
       hint: {
         provider: hint.provider,
-        value: exactSource.sourceSessionId.toLowerCase(),
+        value: exactSource.sourceSessionId,
         full: true,
       },
     };
@@ -390,7 +404,7 @@ function resolveCommandHint(
   return {
     hint: {
       provider: hint.provider,
-      value: candidates[0].sourceSessionId.toLowerCase(),
+      value: candidates[0].sourceSessionId,
       full: true,
     },
   };

@@ -8,8 +8,8 @@
    without adding it here fails the build rather than quietly under-counting.
    Every runtime consumer imports this list so a provider cannot be taught to
    one subsystem while remaining invisible to another. */
-export type Provider = "codex" | "omp" | "claude" | "cursor" | "factory" | "prime" | "grok" | "hermes" | "muse" | "antigravity" | "copilot" | "gemini";
-export const PROVIDERS = ["codex", "omp", "claude", "cursor", "factory", "prime", "grok", "hermes", "muse", "antigravity", "copilot", "gemini"] as const satisfies readonly Provider[];
+export type Provider = "codex" | "omp" | "claude" | "cursor" | "factory" | "prime" | "grok" | "hermes" | "muse" | "antigravity" | "copilot" | "gemini" | "opencode";
+export const PROVIDERS = ["codex", "omp", "claude", "cursor", "factory", "prime", "grok", "hermes", "muse", "antigravity", "copilot", "gemini", "opencode"] as const satisfies readonly Provider[];
 /* Exhaustiveness in the other direction: `satisfies` proves every entry is a
    Provider, and this proves every Provider is an entry. Adding one to the union
    without adding it to the list fails the build here rather than quietly
@@ -188,7 +188,7 @@ export interface TokenUsage {
   cachedInput?: number;
   /** Latest call's prompt+completion size, cache reads INCLUDED. Occupancy. */
   total?: number;
-  /** Session-cumulative NEW tokens: uncached input + output + cache writes. */
+  /** Session consumption: uncached input + output + separately observed reasoning + cache writes; cache reads excluded. */
   sessionTotal?: number;
   /** Session-cumulative cache READS. Re-read context, billed at a fraction. */
   sessionCachedInput?: number;
@@ -220,6 +220,17 @@ export interface TokenUsage {
   contextWindow?: number;
   scope?: "latest-turn" | "session" | "unknown";
   provenance: "observed" | "estimated" | "unknown";
+}
+
+export interface SourceTitleEvidence {
+  text: string;
+  provenance: "opencode-source-title-unverified-authorship";
+}
+
+export interface RawModelEvidence {
+  modelId: string;
+  providerRoute: string;
+  rawVariant?: string;
 }
 
 export interface CostUsage {
@@ -402,6 +413,8 @@ export interface AgentSnapshot {
   instanceId?: string;
   instanceLabel?: string;
   sourceSessionId: string;
+  sourceTitle?: SourceTitleEvidence;
+  rawModel?: RawModelEvidence;
   displayName: string;
   /* What this session is called and why, resolved server-side across the whole
      fleet so uniqueness is decided once. Published ALONGSIDE `displayName`
