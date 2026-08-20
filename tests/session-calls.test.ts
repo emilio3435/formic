@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseClaudeJsonl, parseCodexJsonl, parseOmpJsonl } from "../src/server/collectors";
+import { parseCursorChildSession } from "../src/server/cursor";
 import { sessionCallsResponse } from "../src/server/session-calls";
 import { buildSnapshot } from "../src/server/snapshot";
 import type { CollectedAgent } from "../src/server/types";
@@ -263,6 +264,24 @@ describe("the endpoint answers with checkable evidence", () => {
     expect(body.ok).toBe(true);
     expect(body.calls).toBeNull();
     expect(body.unavailable).toMatch(/session-cumulative/i);
+  });
+
+  test("I-103 keeps Cursor callSizes absent and reports the boundary directly", async () => {
+    const cursor = parseCursorChildSession({
+      sessionId: "6514e366-df29-434b-979d-52a26168e188",
+      parentSessionId: "286ab053-e84f-4538-9292-4aa3fae6fe9b",
+      cwd: "/tmp/formic",
+      transcriptJsonl: JSON.stringify({ role: "user", message: { content: "Inspect Cursor calls." } }),
+      transcriptPath: "/tmp/cursor-child.jsonl",
+      updatedAtMs: Date.parse(at(1)),
+      nowMs: Date.parse(at(2)),
+    })!;
+
+    expect(cursor).not.toHaveProperty("callSizes");
+    const { body } = await serve([cursor], cursor.id);
+    expect(body.calls).toBeNull();
+    expect(body.sessionProcessed).toBeNull();
+    expect(body.unavailable).toMatch(/does not record per-call/i);
   });
 
   test("an agent with no transcript at all is distinguished from one with no usage", async () => {

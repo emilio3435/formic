@@ -323,6 +323,25 @@ describe("the Grok harness stays distinct from its model badge", () => {
     expect(web.AGENT_MARK.gemini).toMatchObject({ src: "/icons/gemini.svg", label: "Gemini" });
   });
 
+  test("OpenAI-family model ids keep distinct keys and the official family mark", () => {
+    const cases = [
+      ["gpt-5.6-sol-xhigh", "sol", "Sol"],
+      ["gpt-5.6-luna-low", "luna", "Luna"],
+      ["gpt-5.6-terra", "terra", "Terra"],
+      ["gpt-5-codex", "openai", "OpenAI"],
+      ["gpt-4.1-mini", "openai", "OpenAI"],
+    ];
+    for (const [model, key, label] of cases) {
+      expect(web.agentKeyOf({ provider: "cursor", model })).toBe(key);
+      expect(web.AGENT_MARK[key]).toMatchObject({ src: "/icons/openai.svg", label });
+    }
+  });
+
+  test("Hermes stays unmarked when no reusable official mark is evidenced", () => {
+    expect(web.HARNESS_MARK.hermes).toEqual({ label: "Hermes" });
+    expect(web.HARNESS_MARK.hermes).not.toHaveProperty("src");
+  });
+
   test("Cursor-hosted Grok remains a Cursor harness", () => {
     const row = { provider: "cursor", model: "cursor-grok-4.6-high" };
 

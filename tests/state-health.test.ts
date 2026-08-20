@@ -1419,6 +1419,56 @@ describe("cmux collection time truth", () => {
     expect(state.get().triageSummaries).toEqual([{ issueId: "queue:detached", state: "blocked" }]);
     expect(state.get().issues).toEqual([]);
   });
+  test("alternate-home collector errors degrade the matching provider health", async () => {
+    const seen = new Map<string, Record<string, readonly string[]>>();
+    const collectors: HubCollectors = {
+      sessions: async () => emptySessions(),
+      sessionProvider: async (provider, _home, _windowMs, _thresholds, options) => {
+        seen.set(provider, {
+          cursor: options?.extraCursorGuiRoots ?? [],
+          grokCli: options?.extraGrokCliRoots ?? [],
+          grokBot: options?.extraGrokBotRoots ?? [],
+          copilot: options?.extraCopilotRoots ?? [],
+        });
+        const errors = provider === "cursor"
+          ? ["Cursor extra root /tmp/Cursor-2 is unreadable"]
+          : provider === "grok"
+            ? ["Grok extra root /tmp/.grok-2 is unreadable"]
+            : provider === "copilot"
+              ? ["Copilot extra root /tmp/.copilot-2 is unreadable"]
+              : [];
+        return { value: [], errors };
+      },
+      finalizeSessions: (results) => results,
+      cmux: async () => ({ value: [], errors: [] }),
+      notifications: async () => ({ value: [], errors: [] }),
+      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    const state = new HubState(runner, archiveStore, [], {
+      collectors,
+      guiRootsReader: () => ["/tmp/Cursor-2"],
+      grokCliRootsReader: () => ["/tmp/.grok-2"],
+      botRootsReader: () => ["/tmp/Grok Bot 2"],
+      copilotRootsReader: () => ["/tmp/.copilot-2"],
+    });
+
+    await state.refresh();
+
+    expect(seen.get("cursor")?.cursor).toEqual(["/tmp/Cursor-2"]);
+    expect(seen.get("grok")).toMatchObject({
+      grokCli: ["/tmp/.grok-2"],
+      grokBot: ["/tmp/Grok Bot 2"],
+    });
+    expect(seen.get("copilot")?.copilot).toEqual(["/tmp/.copilot-2"]);
+    expect(state.get().totals.sourceHealth?.byProvider?.cursor.healthy).toBe(false);
+    expect(state.get().totals.sourceHealth?.byProvider?.grok.healthy).toBe(false);
+    expect(state.get().totals.sourceHealth?.byProvider?.copilot.healthy).toBe(false);
+    expect(state.get().totals.sourceHealth?.byProvider?.claude.healthy).toBe(true);
+  });
   test("per-source health timestamps set on success and survive later failure", async () => {
     let codexErrors: string[] = [];
     const collectors: HubCollectors = {

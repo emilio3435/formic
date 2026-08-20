@@ -188,7 +188,6 @@ const HOME_MARK = {
   factory: "/icons/factory.svg",
   prime: "/icons/prime-orch.svg",
   omp: "/icons/omp.svg",
-  hermes: "/icons/formic-mark.svg",
   muse: "/icons/muse.svg",
   copilot: "/icons/copilot.svg",
   "antigravity-cli": "/icons/antigravity.png",

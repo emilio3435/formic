@@ -2,7 +2,17 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { classifyDataDir, handleCollectorInstancesRequest, instanceIdFor, JsonCollectorInstanceStore, readTextCappedSync, scanAgentHomes, type ScanFs } from "../src/server/collector-instances";
+import {
+  SUPPORTED_ALTERNATE_HOME_KINDS,
+  classifyDataDir,
+  handleCollectorInstancesRequest,
+  instanceIdFor,
+  JsonCollectorInstanceStore,
+  onboardedSessionRoots,
+  readTextCappedSync,
+  scanAgentHomes,
+  type ScanFs,
+} from "../src/server/collector-instances";
 
 function underRoot(root: string, path: string): boolean {
   return path === root || path.startsWith(`${root}/`);
@@ -62,7 +72,7 @@ describe("classifyDataDir", () => {
     expect(hit?.reason).toBeUndefined();
   });
 
-  test("codex-2 sessions classify as codex and are not default", () => {
+  test("codex-2 sessions are identified but need an alternate-root parser route", () => {
     const root = mkdtempSync(join(tmpdir(), "ah-scan-"));
     const dataDir = join(root, ".codex-2");
     mkdirSync(join(dataDir, "sessions"), { recursive: true });
@@ -71,6 +81,7 @@ describe("classifyDataDir", () => {
     expect(hit?.kind).toBe("codex");
     expect(hit?.provider).toBe("codex");
     expect(hit?.default).toBe(false);
+    expect(hit?.reason).toBe("needs-parser");
   });
 
   test("~/.crush/sessions jsonl is unknown / needs-parser", () => {
@@ -322,6 +333,40 @@ describe("classify deadline", () => {
 });
 
 describe("JsonCollectorInstanceStore", () => {
+  test("only collector-wired alternate kinds are advertised as supported", () => {
+    expect(SUPPORTED_ALTERNATE_HOME_KINDS).toEqual([
+      "cursor-gui",
+      "grok-cli",
+      "grok-bot",
+      "copilot",
+    ]);
+  });
+
+  test("a persisted needs-parser row cannot remain onboarded after reopen", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ah-store-"));
+    const path = join(dir, "collector-instances.json");
+    writeFileSync(path, JSON.stringify({
+      version: 1,
+      instances: [{
+        id: "codex:dot-codex-2",
+        kind: "codex",
+        provider: "codex",
+        label: ".codex-2",
+        dataDir: "/tmp/.codex-2",
+        onboarded: true,
+        ignored: false,
+        default: false,
+        discoveredAt: "2026-08-16T00:00:00.000Z",
+        lastSeenAt: "2026-08-16T00:00:00.000Z",
+        reason: "needs-parser",
+      }],
+    }));
+
+    const store = await JsonCollectorInstanceStore.open(path);
+    expect(store.get()[0]?.onboarded).toBe(false);
+    expect(store.onboardedRoots("codex")).toEqual([]);
+  });
+
   test("empty store + scan leaves extras not onboarded", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ah-store-"));
     const store = await JsonCollectorInstanceStore.open(join(dir, "collector-instances.json"));
@@ -347,6 +392,37 @@ describe("JsonCollectorInstanceStore", () => {
     expect(again.onboardedGuiRoots()).toEqual(["/Users/me/Library/Application Support/Cursor-2"]);
     expect(again.onboardedRoots("cursor-gui")).toEqual(again.onboardedGuiRoots());
     expect(again.onboardedRoots("grok-bot")).toEqual([]);
+  });
+
+  test("supported roots reach the matching session collector options", async () => {
+    const store = await JsonCollectorInstanceStore.open(join(mkdtempSync(join(tmpdir(), "ah-store-")), "collector-instances.json"));
+    const candidates = [
+      { kind: "cursor-gui" as const, provider: "cursor" as const, dataDir: "/tmp/Cursor-2", label: "Cursor-2", default: false },
+      { kind: "grok-cli" as const, provider: "grok" as const, dataDir: "/tmp/.grok-2", label: ".grok-2", default: false },
+      { kind: "grok-bot" as const, provider: null, dataDir: "/tmp/Grok Bot 2", label: "Grok Bot 2", default: false },
+      { kind: "copilot" as const, provider: "copilot" as const, dataDir: "/tmp/.copilot-2", label: ".copilot-2", default: false },
+    ];
+    store.mergeScan(candidates, "2026-08-16T00:00:00.000Z");
+    await store.update({ ids: candidates.map((candidate) => instanceIdFor(candidate.kind, candidate.dataDir)), onboarded: true });
+
+    expect(onboardedSessionRoots(store)).toEqual({
+      extraCursorGuiRoots: ["/tmp/Cursor-2"],
+      extraGrokCliRoots: ["/tmp/.grok-2"],
+      extraGrokBotRoots: ["/tmp/Grok Bot 2"],
+      extraCopilotRoots: ["/tmp/.copilot-2"],
+    });
+  });
+
+  test("needs-parser roots cannot become working collector roots", async () => {
+    const store = await JsonCollectorInstanceStore.open(join(mkdtempSync(join(tmpdir(), "ah-store-")), "collector-instances.json"));
+    store.mergeScan([{
+      kind: "codex", provider: "codex", dataDir: "/tmp/.codex-2",
+      label: ".codex-2", default: false, reason: "needs-parser",
+    }], "2026-08-16T00:00:00.000Z");
+
+    await expect(store.update({ ids: ["codex:dot-codex-2"], onboarded: true }))
+      .rejects.toThrow(/parser/i);
+    expect(store.onboardedRoots("codex")).toEqual([]);
   });
 
   test("defaults cannot be turned off", async () => {
@@ -444,6 +520,25 @@ describe("handleCollectorInstancesRequest", () => {
     );
     expect(res.status).toBe(200);
     expect(store.onboardedGuiRoots()[0]).toContain("Cursor-2");
+  });
+
+  test("POST refuses needs-parser instances", async () => {
+    const store = await JsonCollectorInstanceStore.open(join(mkdtempSync(join(tmpdir(), "ah-http-")), "c.json"));
+    store.mergeScan([{
+      kind: "codex", provider: "codex", dataDir: "/tmp/.codex-2",
+      label: ".codex-2", default: false, reason: "needs-parser",
+    }], new Date().toISOString());
+    const res = await handleCollectorInstancesRequest(
+      new Request("http://127.0.0.1/api/collector-instances", {
+        method: "POST",
+        headers: { origin: "http://127.0.0.1", "content-type": "application/json" },
+        body: JSON.stringify({ id: "codex:dot-codex-2", onboarded: true }),
+      }),
+      store,
+    );
+
+    expect(res.status).toBe(409);
+    expect((await res.json() as { error: { code: string } }).error.code).toBe("PARSER_REQUIRED");
   });
 
   test("POST /etc/passwd as a new dataDir is 400", async () => {

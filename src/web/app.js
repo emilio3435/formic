@@ -9967,7 +9967,7 @@ const HARNESS_MARK = {
   prime: { src: "/icons/prime-orch.svg", label: "Prime" },
   omp: { src: "/icons/omp.svg", label: "OMP" },
   grok: { src: "/icons/xai.svg", label: "Grok Build" },
-  hermes: { src: "/icons/formic-mark.svg", label: "Hermes" },
+  hermes: { label: "Hermes" },
   muse: { src: "/icons/muse.svg", label: "Muse Code" },
   antigravity: { src: "/icons/antigravity.png", label: "Antigravity", raster: true },
   copilot: { src: "/icons/copilot.svg", label: "Copilot CLI" },
@@ -9981,6 +9981,7 @@ const AGENT_MARK = {
   cursor: { src: "/icons/cursor.svg", label: "Cursor" },
   sol: { src: "/icons/openai.svg", label: "Sol" },
   luna: { src: "/icons/openai.svg", label: "Luna" },
+  terra: { src: "/icons/openai.svg", label: "Terra" },
   gemini: { src: "/icons/gemini.svg", label: "Gemini" },
 };
 
@@ -10001,8 +10002,10 @@ function agentKeyOf(agent) {
   if (/gemini/i.test(m)) return "gemini";
   if (/fable|opus|sonnet|haiku/i.test(m)) return "claude";
   if (/composer/i.test(m)) return "cursor";
-  if (/sol|luna/i.test(m)) return "sol";
-  if (/codex|openai/i.test(m)) return "openai";
+  if (/\bsol\b/i.test(m)) return "sol";
+  if (/\bluna\b/i.test(m)) return "luna";
+  if (/\bterra\b/i.test(m)) return "terra";
+  if (/(?:^|\/)gpt-/i.test(m) || /codex|openai/i.test(m)) return "openai";
   return "";
 }
 function harnessMark(agent) {

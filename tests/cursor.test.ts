@@ -502,6 +502,7 @@ describe("Cursor Agent persisted session truth", () => {
       tokens: { scope: "unknown", provenance: "unknown" },
       cost: null,
     });
+    expect(child).not.toHaveProperty("startedAt");
   });
 
   test("an aborted Cursor child reports the failure without being declared over", () => {

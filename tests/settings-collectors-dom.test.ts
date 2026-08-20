@@ -259,6 +259,7 @@ describe("Settings Collectors inventory", () => {
       { id: "claude:claude", kind: "claude", label: "Claude", dataDir: "/Users/me/.claude", default: false, onboarded: false, ignored: false, reason: "needs-parser" },
       { id: "muse:muse", kind: "muse", label: "Muse", dataDir: "/Users/me/.local/share/muse", default: false, onboarded: false, ignored: true },
       { id: "copilot:dot-copilot", kind: "copilot", label: ".copilot", dataDir: "/Users/me/.copilot", default: true, onboarded: true, ignored: false },
+      { id: "hermes:dot-hermes", kind: "hermes", label: "Hermes", dataDir: "/Users/me/.hermes", default: true, onboarded: true, ignored: false },
     ];
     withDom(() => {
       web.state.collectorInstances = instances;
@@ -276,6 +277,9 @@ describe("Settings Collectors inventory", () => {
       expect(document.querySelector("[data-instance='muse:muse'] [data-fkey='instance-restore']")).toBeTruthy();
       expect(document.querySelector("[data-group='needs-parser'] [data-instance='copilot:dot-copilot']")).toBeNull();
       expect(document.querySelector("[data-instance='copilot:dot-copilot']")?.textContent).toMatch(/Collecting/);
+      const hermes = document.querySelector("[data-instance='hermes:dot-hermes']") as unknown as FakeNode | null;
+      expect(hermes?.children[0]).toMatchObject({ tagName: "span", textContent: "H" });
+      expect(hermes?.children[0]?.className).toContain("home-letter");
     });
   });
 

@@ -12,6 +12,15 @@ export type CollectorKind =
   | "muse" | "antigravity-cli" | "antigravity-desktop" | "antigravity-ide"
   | "copilot" | "burnbar" | "cmux-hooks" | "unknown";
 
+export const SUPPORTED_ALTERNATE_HOME_KINDS = [
+  "cursor-gui",
+  "grok-cli",
+  "grok-bot",
+  "copilot",
+] as const satisfies readonly CollectorKind[];
+
+const SUPPORTED_ALTERNATE_HOME_KIND_SET = new Set<CollectorKind>(SUPPORTED_ALTERNATE_HOME_KINDS);
+
 export type CollectorReason = "needs-parser" | "needs-home-list";
 
 export interface CollectorCandidate {
@@ -160,14 +169,16 @@ function candidate(
   fs: ScanFs,
   reason?: CollectorReason,
 ): CollectorCandidate {
+  const isDefault = isDefaultDataDir(dataDir, fs.home());
   const hit: CollectorCandidate = {
     kind,
     provider: PROVIDER_FOR[kind],
     dataDir,
     label: basename(dataDir),
-    default: isDefaultDataDir(dataDir, fs.home()),
+    default: isDefault,
   };
-  if (reason) hit.reason = reason;
+  const unsupportedAlternate = !isDefault && !SUPPORTED_ALTERNATE_HOME_KIND_SET.has(kind);
+  if (reason ?? unsupportedAlternate) hit.reason = reason ?? "needs-parser";
   return hit;
 }
 
@@ -543,7 +554,10 @@ function parseInstance(value: unknown): CollectorInstance | undefined {
     discoveredAt: record.discoveredAt,
     lastSeenAt: record.lastSeenAt,
   };
-  if (isCollectorReason(record.reason)) instance.reason = record.reason;
+  if (isCollectorReason(record.reason)) {
+    instance.reason = record.reason;
+    instance.onboarded = false;
+  }
   return instance;
 }
 
@@ -576,6 +590,9 @@ function applyInstancePatch(
   for (const id of patch.ids) {
     const instance = instances.find((row) => row.id === id);
     if (!instance) continue;
+    if (instance.reason === "needs-parser" && patch.onboarded === true) {
+      throw new Error("collector instances marked needs-parser cannot be onboarded");
+    }
     if (instance.default && patch.onboarded === false) {
       if (rejectDefaultOff) throw new Error("default collector instances cannot be turned off");
       continue;
@@ -641,8 +658,10 @@ export class JsonCollectorInstanceStore {
         existing.dataDir = candidate.dataDir;
         existing.default = candidate.default;
         existing.lastSeenAt = nowIso;
-        if (candidate.reason) existing.reason = candidate.reason;
-        else delete existing.reason;
+        if (candidate.reason) {
+          existing.reason = candidate.reason;
+          existing.onboarded = false;
+        } else delete existing.reason;
         continue;
       }
       const instance: CollectorInstance = {
@@ -651,7 +670,7 @@ export class JsonCollectorInstanceStore {
         provider: candidate.provider,
         label: candidate.label,
         dataDir: candidate.dataDir,
-        onboarded: candidate.default,
+        onboarded: candidate.default && candidate.reason === undefined,
         ignored: false,
         default: candidate.default,
         discoveredAt: nowIso,
@@ -699,13 +718,29 @@ export class JsonCollectorInstanceStore {
 
   onboardedRoots(kind: CollectorKind): string[] {
     return this.#instances
-      .filter((row) => row.kind === kind && row.onboarded && !row.default)
+      .filter((row) => row.kind === kind && row.onboarded && !row.default && row.reason === undefined)
       .map((row) => row.dataDir);
   }
 
   onboardedGuiRoots(): string[] {
     return this.onboardedRoots("cursor-gui");
   }
+}
+
+export interface OnboardedSessionRoots {
+  extraCursorGuiRoots: string[];
+  extraGrokCliRoots: string[];
+  extraGrokBotRoots: string[];
+  extraCopilotRoots: string[];
+}
+
+export function onboardedSessionRoots(store: JsonCollectorInstanceStore): OnboardedSessionRoots {
+  return {
+    extraCursorGuiRoots: store.onboardedRoots("cursor-gui"),
+    extraGrokCliRoots: store.onboardedRoots("grok-cli").filter((root) => !isGrokBotProductCache(root)),
+    extraGrokBotRoots: store.onboardedRoots("grok-bot"),
+    extraCopilotRoots: store.onboardedRoots("copilot"),
+  };
 }
 
 function json(value: unknown, status = 200): Response {
@@ -804,6 +839,9 @@ export async function handleCollectorInstancesRequest(
   }
   if (patch.onboarded === false && store.get().some((row) => ids.includes(row.id) && row.default)) {
     return requestError(400, "DEFAULT_LOCKED", "Default collector instances cannot be turned off.");
+  }
+  if (patch.onboarded === true && store.get().some((row) => ids.includes(row.id) && row.reason === "needs-parser")) {
+    return requestError(409, "PARSER_REQUIRED", "Collector instances marked needs-parser cannot be onboarded.");
   }
   try {
     const instances = await store.update(patch);

@@ -199,6 +199,17 @@ test("leftover Gemini settings produce zero rows", async () => {
   });
 });
 
+test("I-112 leaves legacy protobuf conversations unparsed", async () => {
+  const home = await fixtureHome();
+  const desktop = join(home, ".gemini/antigravity");
+  await mkdir(join(desktop, "conversations"), { recursive: true });
+  await writeFile(join(desktop, "conversations", `${ID}.pb`), "legacy protobuf bytes");
+
+  const result = await collectAntigravitySessions([desktop], NOW_MS, WINDOW_MS);
+  expect(result.errors).toEqual([]);
+  expect(result.value).toEqual([]);
+});
+
 test("agy --conversation names the session", () => {
   expect(identitiesFromCommand(`agy --conversation ${ID}`)).toEqual([
     { provider: "antigravity", value: ID, full: true },
