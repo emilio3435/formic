@@ -7,6 +7,7 @@ import { state } from "./client-state.js";
 import { $, el } from "./dom-primitives.js";
 import { apiFetch, API_READ_TIMEOUT_MS, API_WRITE_TIMEOUT_MS } from "./api-client.js";
 import { renderSettingsPanel } from "./settings-panel.js";
+import { PROVIDER_LABELS } from "./text-formatters.js";
 
 let collectorImportFailed = false;
 
@@ -188,21 +189,94 @@ const HOME_MARK = {
   factory: "/icons/factory.svg",
   prime: "/icons/prime-orch.svg",
   omp: "/icons/omp.svg",
-  hermes: "/icons/formic-mark.svg",
   muse: "/icons/muse.svg",
   copilot: "/icons/copilot.svg",
+  "gemini-cli": "/icons/gemini-cli.svg",
   "antigravity-cli": "/icons/antigravity.png",
   "antigravity-desktop": "/icons/antigravity.png",
   "antigravity-ide": "/icons/antigravity.png",
   codex: "/icons/codex.webp",
+  opencode: "/icons/opencode.svg",
+  pi: "/icons/pi.svg",
   burnbar: "/icons/history.svg",
 };
 
+/* Collector kind → provider key, mirroring PROVIDER_FOR in
+   src/server/collector-instances.ts. The instances the server publishes do
+   carry a `provider` field, but Settings renders from the stored record and a
+   home imported before that field existed has none, so the kind — which every
+   record has always had — is what this dialog maps from.
+
+   Kinds with no provider (grok-bot, burnbar, cmux-hooks) are absent on purpose:
+   there is no canonical harness label to give them, and inventing one would be
+   the same lie in the other direction. */
+const PROVIDER_FOR_KIND = {
+  "cursor-gui": "cursor",
+  "cursor-cli": "cursor",
+  codex: "codex",
+  claude: "claude",
+  factory: "factory",
+  prime: "prime",
+  omp: "omp",
+  "grok-cli": "grok",
+  hermes: "hermes",
+  muse: "muse",
+  "antigravity-cli": "antigravity",
+  "antigravity-desktop": "antigravity",
+  "antigravity-ide": "antigravity",
+  copilot: "copilot",
+  "gemini-cli": "gemini",
+  opencode: "opencode",
+  pi: "pi",
+};
+
+/* The name this tile shows.
+
+   A collector's `label` is `basename(dataDir)`, so a built-in home is named
+   after its directory: ".gemini", ".grok", "muse", "Cursor". Settings was the
+   one surface still printing those, which meant the board said "Gemini CLI"
+   and its own Settings said ".gemini" about the same collector.
+
+   Canonicalization is limited to the built-in home, identified by its label
+   reducing — leading dot removed — to the kind or its provider key. That is
+   what keeps a second, operator-named home distinct: "work-claude" and
+   ".claude-work" both survive this test and stay exactly as the operator named
+   them, because two Claude homes that both render "Claude Code" are one home
+   as far as the dialog is concerned. Instance identity outranks the catalog. */
+function collectorDisplayName(inst) {
+  const raw = String(inst.label || "");
+  const provider = PROVIDER_FOR_KIND[inst.kind];
+  if (!provider) return raw || inst.id;
+  const reduced = raw.replace(/^\./, "").toLowerCase();
+  /* `default` is the server's own answer to "is this the built-in home", and it
+     outranks any inference drawn from the basename: an alternate root parked at
+     /elsewhere/.claude reduces to "claude" too, and canonicalizing it made the
+     two homes indistinguishable in the one dialog whose job is telling them
+     apart. A non-default home keeps the name it arrived with. */
+  const builtIn = inst.default === true
+    && (reduced === provider || reduced === String(inst.kind).toLowerCase());
+  if (!builtIn) return raw || inst.id;
+  return PROVIDER_LABELS[provider] || raw || inst.id;
+}
+
 function homeMark(inst) {
   const src = HOME_MARK[inst.kind];
-  const label = inst.label || inst.id;
+  const label = collectorDisplayName(inst);
   if (!src) {
-    return el("span", { class: "home-letter", text: String(label).slice(0, 1), title: label });
+    /* An initial names nothing on its own. `title` cannot carry that name
+       either — it needs a pointer, which a keyboard or touch operator does not
+       have — so the accessible name is an aria-label and the tooltip stays as
+       the sighted-hover convenience it always was. */
+    /* And the initial is taken from the name this tile DISPLAYS, not from the
+       raw label: the server publishes basename(dataDir), so slicing the raw
+       string painted the leading dot of ".hermes" beside an aria-label that
+       already read "Hermes". The two carriers now agree. */
+    return el("span", {
+      class: "home-letter",
+      text: String(label || inst.id).slice(0, 1),
+      title: label,
+      "aria-label": label + " collector home",
+    });
   }
   return el("img", { class: "home-mark", src, alt: label });
 }
@@ -221,7 +295,7 @@ function collectorRow(inst) {
     title: collectorStatusLine(inst),
   },
     homeMark(inst),
-    el("b", { text: inst.label || inst.id }),
+    el("b", { text: collectorDisplayName(inst) }),
     on ? el("s", { text: "on" }) : null,
     waiting ? el("label", {},
       el("input", {
@@ -242,7 +316,13 @@ function collectorRow(inst) {
       dataset: { fkey: "instance-restore" },
       onclick: () => restoreCollectorInstance(inst.id),
     }, "Restore") : null,
-    el("span", { hidden: "", text: collectorStatusLine(inst) }));
+    /* The consequence, on screen.
+
+       This span was `hidden`, so the only operator who ever learned whether a
+       home produces board rows was one hovering a pointer over the tile for the
+       `title`. Whether Formic is collecting from a directory is the whole
+       question this dialog answers; it is not a tooltip. */
+    el("span", { class: "home-state", text: collectorStatusLine(inst) }));
 }
 
 function collectorGroup(title, rows, group) {
@@ -252,6 +332,11 @@ function collectorGroup(title, rows, group) {
     "data-group": group,
     dataset: { group },
   },
+    /* `title` was accepted by this function and dropped on the floor — the five
+       headings survived only as `data-group`, which is announced by nothing.
+       They render as headings, not styled text, so the groups can be navigated
+       as the five distinct answers they are. */
+    el("h4", { class: "settings-collectors-group-title", text: title }),
     el("div", { class: "home-grid" },
       ...rows.map(collectorRow)));
 }

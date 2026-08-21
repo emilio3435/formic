@@ -127,6 +127,22 @@ describe("sourceHealth census matches byProvider", () => {
       .toContain("antigravity");
   });
 
+  test("a missing Gemini CLI root is explicitly absent and stays provider-qualified", async () => {
+    const state = stateWith([{ gemini: ABSENT }]);
+    await state.refresh();
+
+    assertReconciled(state.get().totals.sourceHealth!, {
+      healthy: PROVIDERS.length - 1,
+      degraded: 0,
+      absent: 1,
+    });
+    expect(state.get().totals.sourceHealth?.byProvider?.gemini).toMatchObject({
+      healthy: false,
+      absent: true,
+      lastHealthyAt: null,
+    });
+  });
+
   test("buildSnapshot scalars keep the same census without dropping anyone from the known set", () => {
     const snapshot = buildSnapshot({
       agents: [],

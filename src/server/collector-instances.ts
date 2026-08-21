@@ -1,16 +1,30 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, join, normalize } from "node:path";
+import { basename, dirname, join, normalize, resolve } from "node:path";
 import { PROVIDERS, type Provider } from "../shared/types";
+import { piLaunchObservationFromCommand } from "./pi";
 import type { SettingsFileOperations } from "./settings";
 
 export type CollectorKind =
   | "cursor-gui" | "cursor-cli" | "codex" | "claude" | "factory"
   | "prime" | "omp" | "grok-cli" | "hermes" | "grok-bot"
   | "muse" | "antigravity-cli" | "antigravity-desktop" | "antigravity-ide"
-  | "copilot" | "burnbar" | "cmux-hooks" | "unknown";
+  | "copilot" | "gemini-cli" | "opencode" | "pi" | "burnbar" | "cmux-hooks" | "unknown";
+
+export const SUPPORTED_ALTERNATE_HOME_KINDS = [
+  "cursor-gui",
+  "grok-cli",
+  "grok-bot",
+  "copilot",
+  "gemini-cli",
+  "opencode",
+  "pi",
+] as const satisfies readonly CollectorKind[];
+
+const SUPPORTED_ALTERNATE_HOME_KIND_SET = new Set<CollectorKind>(SUPPORTED_ALTERNATE_HOME_KINDS);
 
 export type CollectorReason = "needs-parser" | "needs-home-list";
 
@@ -48,16 +62,20 @@ const PROVIDER_FOR = {
   "antigravity-desktop": "antigravity",
   "antigravity-ide": "antigravity",
   "copilot": "copilot",
+  "gemini-cli": "gemini",
+  "opencode": "opencode",
+  "pi": "pi",
   "grok-bot": null,
   "burnbar": null,
   "cmux-hooks": null,
   "unknown": null,
 } as const satisfies Record<CollectorKind, Provider | null>;
 
-const NAME_TOKEN_RE = /^(claude|codex|cursor|grok|hermes|factory|prime|omp|droid|aider|continue|opencode|gemini|muse|antigravity|windsurf|copilot|crush|amp)/i;
-const AGENT_MENTION_RE = /(claude|codex|cursor|grok|hermes|factory|prime|omp|droid|aider|continue|opencode|gemini|muse|antigravity|windsurf|copilot|crush|amp)/i;
+const NAME_TOKEN_RE = /^(?:claude|codex|cursor|grok|hermes|factory|prime|omp|droid|aider|continue|opencode|gemini|muse|antigravity|windsurf|copilot|crush|amp|pi(?:$|-\d))/i;
+const AGENT_MENTION_RE = /(?:claude|codex|cursor|grok|hermes|factory|prime|omp|droid|aider|continue|opencode|gemini|muse|antigravity|windsurf|copilot|crush|amp)|(?:^|[^A-Za-z0-9_-])pi(?:$|[^A-Za-z0-9_-])/i;
 const SESSION_DIR_NAMES = new Set(["sessions", "projects", "chats", "conversations"]);
 const SKIP_WALK_NAMES = new Set(["node_modules", "Caches", "Logs"]);
+const OPENCODE_DATABASE = /^opencode(?:-[A-Za-z0-9][A-Za-z0-9._-]*)?\.db$/;
 
 export function defaultHomes(home: string): ReadonlyArray<{ kind: CollectorKind; dataDir: string }> {
   return [
@@ -72,6 +90,9 @@ export function defaultHomes(home: string): ReadonlyArray<{ kind: CollectorKind;
     { kind: "hermes", dataDir: join(home, ".hermes") },
     { kind: "muse", dataDir: join(home, ".local/share/muse") },
     { kind: "copilot", dataDir: join(home, ".copilot") },
+    { kind: "gemini-cli", dataDir: join(home, ".gemini") },
+    { kind: "opencode", dataDir: join(home, ".local/share/opencode") },
+    { kind: "pi", dataDir: join(home, ".pi") },
     { kind: "antigravity-cli", dataDir: join(home, ".gemini/antigravity-cli") },
     { kind: "antigravity-desktop", dataDir: join(home, ".gemini/antigravity") },
     { kind: "antigravity-ide", dataDir: join(home, ".gemini/antigravity-ide") },
@@ -82,7 +103,14 @@ export function defaultHomes(home: string): ReadonlyArray<{ kind: CollectorKind;
 
 export function instanceIdFor(kind: CollectorKind, dataDir: string): string {
   const base = basename(dataDir).replace(/^\./, "dot-").toLowerCase().replace(/[^a-z0-9]+/g, "-");
-  return `${kind}:${base || "home"}`;
+  const identityPath = normalizePath(resolve(dataDir));
+  const digest = createHash("sha256")
+    .update(kind)
+    .update("\0")
+    .update(identityPath)
+    .digest("hex")
+    .slice(0, 16);
+  return `${kind}:${base || "home"}--${digest}`;
 }
 
 /* Adapters must not slurp binaries. Open, read at most maxBytes, close. */
@@ -103,6 +131,8 @@ export function readTextCappedSync(path: string, maxBytes: number): string | und
 
 const SCAN_BUDGET_MS = 2_000;
 const SCRIPT_CAP_BYTES = 8_192;
+const PI_HEADER_FILE_CAP = 32;
+const PI_HEADER_BYTES = 64 * 1024;
 const DOTDIR_RE = /^\.[A-Za-z0-9._-]+$/;
 const USER_DATA_DIR_RE = /--user-data-dir=(?:"([^"]+)"|(\S+))/;
 const HOME_FLAG_RE = /--home=(?:"([^"]+)"|(\S+))/;
@@ -160,14 +190,16 @@ function candidate(
   fs: ScanFs,
   reason?: CollectorReason,
 ): CollectorCandidate {
+  const isDefault = isDefaultDataDir(dataDir, fs.home());
   const hit: CollectorCandidate = {
     kind,
     provider: PROVIDER_FOR[kind],
     dataDir,
     label: basename(dataDir),
-    default: isDefaultDataDir(dataDir, fs.home()),
+    default: isDefault,
   };
-  if (reason) hit.reason = reason;
+  const unsupportedAlternate = !isDefault && !SUPPORTED_ALTERNATE_HOME_KIND_SET.has(kind);
+  if (reason ?? unsupportedAlternate) hit.reason = reason ?? "needs-parser";
   return hit;
 }
 
@@ -210,6 +242,38 @@ function extractedUserDataDir(text: string): string | undefined {
 
 function extractedHomeFlag(text: string): string | undefined {
   return firstGroup(text.match(HOME_FLAG_RE));
+}
+
+function hasDirectPiHeader(dataDir: string, fs: ScanFs, deadline?: number): boolean {
+  const names = fs.readdir(dataDir)
+    .filter((name) => name.endsWith(".jsonl"))
+    .sort()
+    .slice(0, PI_HEADER_FILE_CAP);
+  for (const name of names) {
+    if (pastDeadline(deadline)) return false;
+    const text = fs.readTextCapped(join(dataDir, name), PI_HEADER_BYTES);
+    if (text === undefined) continue;
+    for (const line of text.split("\n")) {
+      if (!line.trim()) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+      const header = parsed as Record<string, unknown>;
+      const version = header.version;
+      if (header.type === "session"
+        && typeof header.id === "string"
+        && /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/.test(header.id)
+        && typeof header.timestamp === "string"
+        && typeof header.cwd === "string"
+        && (version === undefined || version === 1 || version === 2 || version === 3)) return true;
+      break;
+    }
+  }
+  return false;
 }
 
 export function prioritizeAgentNamedDirs(names: readonly string[]): string[] {
@@ -271,6 +335,9 @@ function unknownSignalCount(dataDir: string, fs: ScanFs, deadline?: number): num
 export function classifyDataDir(dataDir: string, fs: ScanFs, deadline?: number): CollectorCandidate | undefined {
   const base = basename(dataDir);
 
+  if (fs.readdir(dataDir).some((name) => OPENCODE_DATABASE.test(name) && fs.exists(join(dataDir, name)))) {
+    return candidate("opencode", dataDir, fs);
+  }
   if (base.startsWith("Cursor") && fs.exists(join(dataDir, "User/globalStorage/state.vscdb"))) {
     return candidate("cursor-gui", dataDir, fs);
   }
@@ -298,6 +365,12 @@ export function classifyDataDir(dataDir: string, fs: ScanFs, deadline?: number):
   if (isDotFamily(base, "omp") && fs.isDirectory(join(dataDir, "agent/sessions"))) {
     return candidate("omp", dataDir, fs);
   }
+  if (base.replace(/^\./, "").toLowerCase() === "pi" && fs.isDirectory(join(dataDir, "agent/sessions"))) {
+    return candidate("pi", dataDir, fs, isDefaultDataDir(dataDir, fs.home()) ? undefined : "needs-parser");
+  }
+  if (base.toLowerCase() !== ".pip" && hasDirectPiHeader(dataDir, fs, deadline)) {
+    return candidate("pi", dataDir, fs);
+  }
   if (isDotFamily(base, "grok") && (fs.isDirectory(join(dataDir, "sessions")) || fs.exists(join(dataDir, "sessions")))) {
     return candidate("grok-cli", dataDir, fs);
   }
@@ -317,6 +390,12 @@ export function classifyDataDir(dataDir: string, fs: ScanFs, deadline?: number):
     )
   ) {
     return candidate("copilot", dataDir, fs);
+  }
+  if (
+    isDotFamily(base, "gemini")
+    && (fs.isDirectory(join(dataDir, "tmp")) || fs.exists(join(dataDir, "settings.json")))
+  ) {
+    return candidate("gemini-cli", dataDir, fs);
   }
   if (base === "antigravity-cli" || dataDir.endsWith("/.gemini/antigravity-cli")) {
     return candidate("antigravity-cli", dataDir, fs);
@@ -424,7 +503,9 @@ export function scanAgentHomes(fs: ScanFs): CollectorCandidate[] {
   for (const argv of fs.processArgv()) {
     if (Date.now() > deadline) break;
     const extracted = resolveExtractedPath(
-      extractedUserDataDir(argv) ?? extractedHomeFlag(argv),
+      extractedUserDataDir(argv)
+        ?? extractedHomeFlag(argv)
+        ?? piLaunchObservationFromCommand(argv)?.cliSessionDir,
       home,
     );
     if (!extracted) continue;
@@ -543,7 +624,10 @@ function parseInstance(value: unknown): CollectorInstance | undefined {
     discoveredAt: record.discoveredAt,
     lastSeenAt: record.lastSeenAt,
   };
-  if (isCollectorReason(record.reason)) instance.reason = record.reason;
+  if (isCollectorReason(record.reason)) {
+    instance.reason = record.reason;
+    instance.onboarded = false;
+  }
   return instance;
 }
 
@@ -576,6 +660,9 @@ function applyInstancePatch(
   for (const id of patch.ids) {
     const instance = instances.find((row) => row.id === id);
     if (!instance) continue;
+    if (instance.reason === "needs-parser" && patch.onboarded === true) {
+      throw new Error("collector instances marked needs-parser cannot be onboarded");
+    }
     if (instance.default && patch.onboarded === false) {
       if (rejectDefaultOff) throw new Error("default collector instances cannot be turned off");
       continue;
@@ -634,15 +721,24 @@ export class JsonCollectorInstanceStore {
   mergeScan(found: CollectorCandidate[], nowIso: string): CollectorInstance[] {
     for (const candidate of found) {
       const id = instanceIdFor(candidate.kind, candidate.dataDir);
-      const existing = this.#instances.find((row) => row.id === id);
+      const candidatePath = normalizePath(resolve(candidate.dataDir));
+      const existing = this.#instances.find((row) => row.id === id)
+        ?? this.#instances.find((row) => row.kind === candidate.kind
+          && normalizePath(resolve(row.dataDir)) === candidatePath);
       if (existing) {
+        /* Version-1 stores originally keyed instances by basename only. The
+           exact kind+path match migrates that row in place so operator state
+           survives while same-basename roots gain distinct identities. */
+        existing.id = id;
         existing.kind = candidate.kind;
         existing.provider = candidate.provider;
         existing.dataDir = candidate.dataDir;
         existing.default = candidate.default;
         existing.lastSeenAt = nowIso;
-        if (candidate.reason) existing.reason = candidate.reason;
-        else delete existing.reason;
+        if (candidate.reason) {
+          existing.reason = candidate.reason;
+          existing.onboarded = false;
+        } else delete existing.reason;
         continue;
       }
       const instance: CollectorInstance = {
@@ -651,7 +747,7 @@ export class JsonCollectorInstanceStore {
         provider: candidate.provider,
         label: candidate.label,
         dataDir: candidate.dataDir,
-        onboarded: candidate.default,
+        onboarded: candidate.default && candidate.reason === undefined,
         ignored: false,
         default: candidate.default,
         discoveredAt: nowIso,
@@ -699,13 +795,35 @@ export class JsonCollectorInstanceStore {
 
   onboardedRoots(kind: CollectorKind): string[] {
     return this.#instances
-      .filter((row) => row.kind === kind && row.onboarded && !row.default)
+      .filter((row) => row.kind === kind && row.onboarded && !row.default && row.reason === undefined)
       .map((row) => row.dataDir);
   }
 
   onboardedGuiRoots(): string[] {
     return this.onboardedRoots("cursor-gui");
   }
+}
+
+export interface OnboardedSessionRoots {
+  extraCursorGuiRoots: string[];
+  extraGrokCliRoots: string[];
+  extraGrokBotRoots: string[];
+  extraCopilotRoots: string[];
+  extraGeminiCliRoots: string[];
+  extraOpenCodeRoots: string[];
+  extraPiRoots: string[];
+}
+
+export function onboardedSessionRoots(store: JsonCollectorInstanceStore): OnboardedSessionRoots {
+  return {
+    extraCursorGuiRoots: store.onboardedRoots("cursor-gui"),
+    extraGrokCliRoots: store.onboardedRoots("grok-cli").filter((root) => !isGrokBotProductCache(root)),
+    extraGrokBotRoots: store.onboardedRoots("grok-bot"),
+    extraCopilotRoots: store.onboardedRoots("copilot"),
+    extraGeminiCliRoots: store.onboardedRoots("gemini-cli"),
+    extraOpenCodeRoots: store.onboardedRoots("opencode"),
+    extraPiRoots: store.onboardedRoots("pi"),
+  };
 }
 
 function json(value: unknown, status = 200): Response {
@@ -804,6 +922,9 @@ export async function handleCollectorInstancesRequest(
   }
   if (patch.onboarded === false && store.get().some((row) => ids.includes(row.id) && row.default)) {
     return requestError(400, "DEFAULT_LOCKED", "Default collector instances cannot be turned off.");
+  }
+  if (patch.onboarded === true && store.get().some((row) => ids.includes(row.id) && row.reason === "needs-parser")) {
+    return requestError(409, "PARSER_REQUIRED", "Collector instances marked needs-parser cannot be onboarded.");
   }
   try {
     const instances = await store.update(patch);

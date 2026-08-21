@@ -42,7 +42,10 @@ const empty = (): SessionsResult => ({
   muse: { value: [], errors: [] },
   antigravity: { value: [], errors: [] },
   copilot: { value: [], errors: [] },
-});
+  gemini: { value: [], errors: [] },
+  opencode: { value: [], errors: [] },
+  pi: { value: [], errors: [] },
+} as SessionsResult & { pi: SessionsResult[keyof SessionsResult] });
 
 /** A hub whose collectors behave exactly as described, with a 60ms deadline. */
 function hub(collectors: Partial<HubCollectors>): HubState {
@@ -160,6 +163,8 @@ describe("when collection runs out of time the board says so", () => {
 
     const degraded = (snapshot.issues ?? []).filter((issue) => issue.id.endsWith("-collector"));
     expect(degraded.length).toBeGreaterThan(0);
+    expect(degraded.some((issue) => issue.id.includes("gemini")), "Gemini must not disappear at the deadline")
+      .toBeTrue();
     for (const issue of degraded) {
       expect(issue.technicalDetails?.[0], `${issue.id} still leads with another component's fault`)
         .toMatch(/exceeded 60ms deadline/);
@@ -291,11 +296,14 @@ describe("a refresh the watchdog abandoned does not publish over its replacement
     try {
       let release: () => void = () => {};
       const held = new Promise<void>((resolve) => { release = resolve; });
+      let markFirstSessionsStarted: () => void = () => {};
+      const firstSessionsStarted = new Promise<void>((resolve) => { markFirstSessionsStarted = resolve; });
       let call = 0;
       const state = patientHub({
         sessions: async () => {
           call += 1;
           if (call === 1) {
+            markFirstSessionsStarted();
             await held;
             return sessionsWith("stale");
           }
@@ -305,6 +313,7 @@ describe("a refresh the watchdog abandoned does not publish over its replacement
 
       const abandoned = state.refresh();
       // Past the watchdog: the next caller stops waiting and starts its own pass.
+      await firstSessionsStarted;
       nowMs += WATCHDOG_MS + 1_000;
       await state.refresh();
       expect(idsOn(state)).toEqual(["codex:fresh"]);

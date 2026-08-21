@@ -679,6 +679,14 @@ function matchesQuery(agent, program, query) {
     agentName(agent),
     agent.displayName, agent.nickname, agent.task, agent.cwd, agent.model,
     agent.provider, agent.role, agent.sourceSessionId, agent.statusReason,
+    /* The harness label the row actually PRINTS. The raw key is already in the
+       haystack, but nine of the fourteen keys merely lower-case their label
+       while five ("Claude Code", "Grok Build", "Muse Code", "Copilot CLI",
+       "Gemini CLI") do not, so typing the string the Harness cell shows found
+       nothing on any row whose name was authored. Only the current row's own
+       label, and only when a provider survived: a record with no provider
+       answers to no harness label at all. */
+    agent.provider ? providerLabel(agent.provider) : null,
     agent.transcriptTail, agent.status,
     ACTIVITY_LABELS[deriveActivity(agent)], OUTCOME_LABELS[deriveOutcome(agent)],
     program && program.name, program && programName(program),
@@ -2925,7 +2933,22 @@ function renderSummaryWidget(id, weight = "normal", data = summaryWidgetData(id,
       el("span", { class: "verdict-chip verdict-" + data.tone }, icon(data.icon), data.value));
   } else if (id === "mix" && Array.isArray(data.mixProviders) && data.mixProviders.length) {
     valueNode = el("span", { class: "mix-row " + valueClass },
-      ...data.mixProviders.map(({ prov, n }) => el("span", { class: "mix-seg" },
+      /* Each segment carries its own accessible name.
+
+         At 900px and below — which includes both the 720 and 390 viewports —
+         `.mix-seg .prov-name` is display:none, and the segment had no aria-label,
+         no title and no visually-hidden name. What was left was a bare integer,
+         so a screen reader read the whole Mix as "3 2 1 1 5 2 1". The dot is no
+         help either: only four providers have a distinct swatch, so the rest are
+         one identical slate square.
+
+         The name is composed from the same canonical label the visible span
+         prints, so the two carriers cannot disagree, and it is recomputed on
+         every paint rather than cached — a stale count is its own kind of lie. */
+      ...data.mixProviders.map(({ prov, n }) => el("span", {
+        class: "mix-seg",
+        "aria-label": `${providerLabel(prov)}: ${n} ${n === 1 ? "session" : "sessions"}`,
+      },
         el("span", { class: "prov-dot is-" + String(prov || "prime").toLowerCase() }),
         el("span", { class: "prov-name", text: providerLabel(prov) }),
         String(n),
@@ -9955,10 +9978,19 @@ const PROVIDER_MARK = {
   muse: { src: "/icons/muse.svg" },
   copilot: { src: "/icons/copilot.svg" },
   antigravity: { src: "/icons/antigravity.png", raster: true },
+  opencode: { src: "/icons/opencode-provider.svg" },
+  pi: { src: "/icons/pi.svg" },
 };
 
 /* Harness vs Agent — two badges per row. Harness = where it ran (provider), Agent = what thought (model family).
    This keeps the harness visible even when the model overrides the icon (the old spark/grok swap hid the harness). */
+/** The key for a session whose provider did not survive. Deliberately not a
+ *  PROVIDERS member and deliberately not a valid class suffix: it is the
+ *  absence of a provider, and every surface must say so rather than guess. */
+const UNKNOWN_HARNESS = "unknown-harness";
+/** What every surface calls that absence, in one place. */
+const UNKNOWN_HARNESS_LABEL = "not recorded";
+
 const HARNESS_MARK = {
   codex: { src: "/icons/codex.webp", label: "Codex", raster: true },
   claude: { src: "/icons/claude-code.svg", label: "Claude Code" },
@@ -9967,10 +9999,13 @@ const HARNESS_MARK = {
   prime: { src: "/icons/prime-orch.svg", label: "Prime" },
   omp: { src: "/icons/omp.svg", label: "OMP" },
   grok: { src: "/icons/xai.svg", label: "Grok Build" },
-  hermes: { src: "/icons/formic-mark.svg", label: "Hermes" },
+  hermes: { label: "Hermes" },
   muse: { src: "/icons/muse.svg", label: "Muse Code" },
   antigravity: { src: "/icons/antigravity.png", label: "Antigravity", raster: true },
   copilot: { src: "/icons/copilot.svg", label: "Copilot CLI" },
+  gemini: { src: "/icons/gemini-cli.svg", label: "Gemini CLI" },
+  opencode: { src: "/icons/opencode.svg", label: "OpenCode" },
+  pi: { src: "/icons/pi.svg", label: "Pi" },
   omni: { src: "/icons/omp.svg", label: "OMP" },
 };
 const AGENT_MARK = {
@@ -9981,6 +10016,7 @@ const AGENT_MARK = {
   cursor: { src: "/icons/cursor.svg", label: "Cursor" },
   sol: { src: "/icons/openai.svg", label: "Sol" },
   luna: { src: "/icons/openai.svg", label: "Luna" },
+  terra: { src: "/icons/openai.svg", label: "Terra" },
   gemini: { src: "/icons/gemini.svg", label: "Gemini" },
 };
 
@@ -9992,7 +10028,15 @@ function harnessKeyOf(agent) {
   if (p === "factory") return "factory";
   if (p === "prime") return "prime";
   if (p === "omp") return "omp";
-  return p || "claude";
+  /* A record with no provider is NOT Claude.
+
+     This used to fall through to "claude", so an archived or degraded row that
+     reached the client without its provider printed an em dash in the Harness
+     cell (harnessUnknown was already honest) while painting Anthropic's logo
+     beside the name. Two contradictory answers to one question is worse than
+     either half alone. UNKNOWN_HARNESS has no HARNESS_MARK entry, so the text
+     fallback below renders it and says what it means. */
+  return p || UNKNOWN_HARNESS;
 }
 function agentKeyOf(agent) {
   const m = (agent.model || "").toLowerCase();
@@ -10001,12 +10045,24 @@ function agentKeyOf(agent) {
   if (/gemini/i.test(m)) return "gemini";
   if (/fable|opus|sonnet|haiku/i.test(m)) return "claude";
   if (/composer/i.test(m)) return "cursor";
-  if (/sol|luna/i.test(m)) return "sol";
-  if (/codex|openai/i.test(m)) return "openai";
+  if (/\bsol\b/i.test(m)) return "sol";
+  if (/\bluna\b/i.test(m)) return "luna";
+  if (/\bterra\b/i.test(m)) return "terra";
+  if (/(?:^|\/)gpt-/i.test(m) || /codex|openai/i.test(m)) return "openai";
   return "";
 }
 function harnessMark(agent) {
   const key = harnessKeyOf(agent);
+  if (key === UNKNOWN_HARNESS) {
+    /* One explicit text fallback, named so a screen reader hears the meaning
+       rather than a bare glyph — and no borrowed logo. */
+    return el("span", {
+      class: "provider-mark provider-mark-text harness-mark is-unknown",
+      title: "Provider not recorded for this session",
+      "aria-label": "Harness " + UNKNOWN_HARNESS_LABEL,
+      text: "?",
+    });
+  }
   const meta = HARNESS_MARK[key];
   const label = meta?.label || providerLabel(agent.provider);
   const mark = meta;
@@ -10030,7 +10086,14 @@ function harnessAgentMarks(agent) {
   const h = harnessMark(agent);
   const a = agentMark(agent);
   const home = instanceHomeOf(agent);
-  const harnessName = HARNESS_MARK[harnessKeyOf(agent)]?.label || providerLabel(agent.provider);
+  /* UNKNOWN_HARNESS is absent from HARNESS_MARK on purpose, and a missing
+     provider makes providerLabel hand back the undefined it was given — so the
+     group announced "Harness undefined" while the mark inside it already said
+     "not recorded". One harness, one answer. */
+  const hKey = harnessKeyOf(agent);
+  const harnessName = hKey === UNKNOWN_HARNESS
+    ? UNKNOWN_HARNESS_LABEL
+    : (HARNESS_MARK[hKey]?.label || providerLabel(agent.provider));
   return el("span", {
     class: "dual-marks" + (home ? " has-instance-home" : ""),
     role: "group",
@@ -10486,6 +10549,7 @@ function renderAgentRow(agent, program, opts = {}) {
   const ctxUsage = contextUsage(agent.tokens);
   const modelText = modelShort(agent.model) || "not reported";
   const ctxPct = agentContextPct(agent);
+  const ctxValueText = contextDisplayValue(agent.tokens);
   const harnessLabel = (HARNESS_MARK[harnessKeyOf(agent)]?.label || providerLabel(agent.provider) || "");
   const harnessUnknown = !agent.provider || !harnessLabel;
   const harnessText = harnessUnknown ? "\u2014" : harnessLabel;
@@ -10532,8 +10596,20 @@ function renderAgentRow(agent, program, opts = {}) {
       el("span", { class: "ri-value mono", text: modelText })),
     el("span", {
       class: "ri-cell ri-ctx" + (ctxPct == null ? " is-unknown" : ""),
-      "aria-label": contextDisplayLabel() + ": " + contextDisplayValue(agent.tokens),
-      title: ctxUsage ? ctxUsage.text : "Context window not reported for this model",
+      /* The toggle's label names a unit — "Context %" or "Context tokens" — and
+         a unit is a claim about what was measured. On a row with no reading,
+         "Context %: not reported" announces a percentage that does not exist,
+         so the unreported case drops back to the bare dimension. */
+      "aria-label": (ctxValueText === "not reported" ? "Context" : contextDisplayLabel())
+        + ": " + ctxValueText,
+      /* Two absences, two sentences. A row that declares a context window and
+         carries no compatible occupancy knows its window perfectly well;
+         telling the operator the window is unreported contradicts the very
+         figure the record supplied. Neither branch invents a percentage. */
+      title: ctxUsage ? ctxUsage.text
+        : Number.isFinite(agent.tokens?.contextWindow)
+          ? "Context occupancy not reported for this session"
+          : "Context window not reported for this model",
     },
       el("span", { class: "ri-value mono", text: ctxPct != null ? ctxPct + "%" : "\u2014" })),
     tokens.known
@@ -10576,7 +10652,9 @@ function renderAgentRow(agent, program, opts = {}) {
 
   const line1 = el("span", { class: "agent-grid" }, identity, instruments);
 
-  const rowClass = "agent-row provider-" + agent.provider +
+  /* No `provider-undefined`: a record without a provider gets no provider class
+     at all, rather than one naming a value that does not exist. */
+  const rowClass = "agent-row" + (agent.provider ? " provider-" + agent.provider : "") +
     " role-" + role.key +
     (opts.depth > 0 ? " is-child depth-" + Math.min(opts.depth, 4) : "") +
     (opts.childCount ? " is-parent" : "") +
@@ -10641,7 +10719,13 @@ function renderAgentRow(agent, program, opts = {}) {
        to LOOK at, not quieter to listen to. Program, role,
        terminal destination, staleness and the history provenance each get a
        clause, in the order a sighted operator would have read them. */
-    "aria-label": `${displayName}.${nameTag ? ` Session ${nameTag}.` : ""}${opts.programChip ? ` Program: ${stripChipLabel(opts.programChip)}.` : ""} Status: ${stateText}.${liveness ? ` Process: ${liveness.label}.` : ""}${history ? ` ${history.label}.` : ""}${lineageContradicted ? " Parent disputed: the declared parent is contradicted by the observed process chain." : ""}${agent.taskState && agent.taskStateSource ? ` Declared ${agent.taskState}.` : ""} Agent/message: ${summary || "No message reported"}. Model: ${modelText}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Span, first to last activity: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}.${role.key !== "agent" ? ` Role: ${role.label}.` : ""}${terminalCrumb ? ` Terminal: ${terminalCrumb}.` : ""}${staleFact ? ` Quiet: ${staleFact}.` : ""} ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants, ${opts.swarmOpen ? "shown" : "collapsed"}. ` : ""} Select to open the full message and session details in the inspector.`,
+    /* The row is one tabbable element, so this name IS the row for anyone
+       navigating by keyboard. It enumerated status, message, model, context,
+       tokens, span and access — and never the harness, so the one row whose
+       harness is unknown announced every other field and stayed silent about
+       the missing one. `Harness:` is stated for every row, naming the absence
+       when there is one. */
+    "aria-label": `${displayName}.${nameTag ? ` Session ${nameTag}.` : ""}${opts.programChip ? ` Program: ${stripChipLabel(opts.programChip)}.` : ""} Status: ${stateText}.${liveness ? ` Process: ${liveness.label}.` : ""}${history ? ` ${history.label}.` : ""}${lineageContradicted ? " Parent disputed: the declared parent is contradicted by the observed process chain." : ""}${agent.taskState && agent.taskStateSource ? ` Declared ${agent.taskState}.` : ""} Agent/message: ${summary || "No message reported"}. ${harnessUnknown ? `Harness ${UNKNOWN_HARNESS_LABEL}` : `Harness: ${harnessText}`}. Model: ${modelText}. Context: ${contextDisplayValue(agent.tokens)}. Tokens: ${tokens.text}. Span, first to last activity: ${elapsed !== "—" ? elapsed : "not reported"}. Access: ${CONTROL_STATE_TEXT[control] || "View only"}.${role.key !== "agent" ? ` Role: ${role.label}.` : ""}${terminalCrumb ? ` Terminal: ${terminalCrumb}.` : ""}${staleFact ? ` Quiet: ${staleFact}.` : ""} ${sourceDetail ? sourceDetail + ". " : ""}${opts.depth ? `Swarm depth ${opts.depth}. ` : ""}${opts.childCount ? `${opts.childCount} descendants, ${opts.swarmOpen ? "shown" : "collapsed"}. ` : ""} Select to open the full message and session details in the inspector.`,
     dataset: {
       fkey: "agent:" + agent.id,
       depth: String(opts.depth || 0),
@@ -12032,7 +12116,11 @@ function renderAgentDrawer(pane, view) {
 
   // Provider channel: a 1px inset rail + the lineage current-node ring both read
   // from --prov, set CSP-safely by a class (never an inline style).
-  pane.classList.add("dw-provider", "dw-provider--" + agent.provider, "dw-agent");
+  /* Only a sanitized, known provider earns a suffix class. An absent provider
+     produced `dw-provider--undefined`, which matches no rule and reads as a
+     provider named "undefined"; the base class alone paints the shared rail. */
+  pane.classList.add("dw-provider", "dw-agent");
+  if (agent.provider) pane.classList.add("dw-provider--" + agent.provider);
   const shellHead = el("div", { class: "drawer-shell-head" });
   pane.append(shellHead);
 
@@ -12066,8 +12154,12 @@ function renderAgentDrawer(pane, view) {
   const role = roleView(agent.role);
   const eyebrow = [role.key !== "agent" ? role.label : "", programName(program), sourceLine]
     .filter(Boolean).join(" · ");
-  const harnessLabel = (typeof HARNESS_MARK !== "undefined" && HARNESS_MARK[harnessKeyOf(agent)]?.label)
-    || providerLabel(agent.provider) || "";
+  /* A session whose provider did not survive says so in the Run fact, rather
+     than borrowing the fallback that used to resolve to Claude. */
+  const harnessLabel = harnessKeyOf(agent) === UNKNOWN_HARNESS
+    ? UNKNOWN_HARNESS_LABEL
+    : ((typeof HARNESS_MARK !== "undefined" && HARNESS_MARK[harnessKeyOf(agent)]?.label)
+      || providerLabel(agent.provider) || "");
   const modelLabel = modelShort(agent.model);
   const tokens = agent.tokens || {};
   const contextPct = agentContextPct(agent);
@@ -12112,7 +12204,12 @@ function renderAgentDrawer(pane, view) {
         text: liveness.label,
       }));
     }
-    if (agent.updatedAt) {
+    /* PARSEABLE, not merely present. `agoText` answers "—" for a timestamp it
+       cannot read, which printed a dash-shaped age — a reading that looks
+       merely missing rather than unreadable — and the `data-ago` hook beside it
+       handed `tickClocks` a value to recompute every second, so the panel ran a
+       live clock off nonsense. */
+    if (agent.updatedAt && !Number.isNaN(Date.parse(agent.updatedAt))) {
       processValue.append(el("span", {
         class: "drawer-session-age",
         dataset: { ago: agent.updatedAt },
@@ -12138,13 +12235,28 @@ function renderAgentDrawer(pane, view) {
         harnessAgentMarks(agent),
         el("span", { class: "drawer-session-run-label", text: runText }))));
   }
-  if (contextPct != null || contextMagnitude) {
+  /* A KNOWN window with no observed total is a fact the Inspector has to state.
+
+     The fact used to be omitted whenever there was no reading, so a model whose
+     context window Formic knows perfectly well produced a panel that simply had
+     no Context row — indistinguishable, to the operator, from a panel that had
+     never heard of context at all. Silence and "not reported" look the same to
+     a check and completely different to a person. The one thing it still must
+     not do is divide the known window by a total nobody reported. */
+  const contextUnreported = contextPct == null && !contextMagnitude;
+  if (contextPct != null || contextMagnitude || Number.isFinite(tokens.contextWindow)) {
     hasFacts = true;
     const contextLabel = [
       contextPct != null ? (contextPct === 0 ? "<1%" : contextPct + "%") : "",
       contextMagnitude,
     ].filter(Boolean).join(" · ");
-    const contextValue = el("dd", { class: "drawer-session-context-value", title: contextLabel },
+    const contextValue = contextUnreported
+      ? el("dd", {
+        class: "drawer-session-context-value is-unknown",
+        title: "This source reported no context occupancy for this session",
+        text: "not reported",
+      })
+      : el("dd", { class: "drawer-session-context-value", title: contextLabel },
       contextPct != null
         ? svgGauge(contextPct, "drawer-context-gauge", { label: `Context used: ${contextPct}%` })
         : null,
@@ -12526,6 +12638,29 @@ function renderControlBanner(agent, control) {
     el("strong", { text: brief.title }),
     " ",
     controlUnavailableText(briefControl, agent));
+  /* The refusal the server stamped, when the generic line is not already it.
+
+     D5 taught the summary to prefer `target.reason`, and that is the only place
+     it looks. A server can also refuse per capability — the reason arrives on
+     the disabled `instruct`/`focus` entry and nowhere else — and for those rows
+     the banner fell back to one generic sentence per control state. Two
+     genuinely different situations then read identically: a session whose
+     terminal was never identified and one with no control channel at all both
+     said "no safe cmux target is linked to this session", so the operator was
+     told the same thing about two problems with different answers.
+
+     Routed through `operatorReason` rather than rendered raw, so a capability
+     reason is stripped of cmux surface ids exactly as a target reason is. */
+  const refusedReason = (() => {
+    const served = operatorReason(agent);
+    if (served) return served;
+    const refused = [instructCap, focusCap].find((c) =>
+      c && !c.enabled && typeof c.reason === "string" && c.reason.trim());
+    return refused ? operatorReason({ target: { reason: refused.reason } }) : "";
+  })();
+  if (refusedReason && !String(copy.textContent || "").includes(refusedReason)) {
+    copy.append(el("p", { class: "control-banner-served-reason", text: refusedReason }));
+  }
   /* `why` earns its line everywhere except one cause, and the exception is the
      common one. Measured on the live board: cause `missing` is 245 agents, and
      there the banner says a single fact three times before reaching the remedy —
@@ -14568,6 +14703,18 @@ function renderEmpty() {
           dataset: { ago: verdict.checkedAt },
           text: "checked " + agoText(verdict.checkedAt),
         }));
+      }
+      /* When the degraded collector last worked — the fact that separates a
+         collector that BROKE from one that was never installed. The health card
+         has painted it since it existed; this line, which is the whole of what
+         a day-one operator sees, did not, so the one screen with no rows to
+         explain itself was also the one saying least about why. Separator
+         aria-hidden like its neighbour, so the reading stays one contiguous
+         phrase in the accessibility tree. */
+      const since = verdict.degraded ? degradedSinceText(state.snap) : "";
+      if (since) {
+        proof.append(el("span", { "aria-hidden": "true", text: " · " }));
+        proof.append(el("span", { text: since.replace(/^ · /, "") }));
       }
       proof.classList.toggle("is-degraded", verdict.degraded);
     }

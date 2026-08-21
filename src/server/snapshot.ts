@@ -311,7 +311,9 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
   for (const source of authoritativeSources) {
     const declared = declaredById.get(source.id);
     const nativeParentId = source.parentSourceSessionId
-      ? `${source.provider}:${source.parentSourceSessionId}`
+      ? source.provider === "opencode" && source.instanceId
+        ? `${source.instanceId}:${source.parentSourceSessionId}`
+        : `${source.provider}:${source.parentSourceSessionId}`
       : undefined;
     const claimedParentId = declared ? declared.parentAgentId : nativeParentId;
     const observedParentId = source.lineage?.observedParentAgentId;
@@ -479,7 +481,9 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
           /* Grok Bot has no process identity. A complete Mac roster does not
              prove those chats are gone — it proves we cannot see Grok Bot.app.
              Passing complete here files them finished after 45 quiet minutes. */
-          processRosterComplete: scope === "observed" && !source.id.startsWith("grok:bot:")
+          processRosterComplete: scope === "observed"
+            && !source.id.startsWith("grok:bot:")
+            && source.provider !== "opencode"
             ? input.processRosterComplete
             : undefined,
           /* Records written before this contract carry no verdict of their own. The
@@ -615,7 +619,11 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
       /* Grok Bot chats have no process identity (#105). Publishing a complete
          roster here files them finished/process-absent after 45 quiet minutes
          and they vanish from the Board tab into History under "store.db". */
-      ...(scope === "observed" && !lastKnown && input.processRosterComplete && !source.id.startsWith("grok:bot:")
+      ...(scope === "observed"
+        && !lastKnown
+        && input.processRosterComplete
+        && !source.id.startsWith("grok:bot:")
+        && source.provider !== "opencode"
         ? { processRosterComplete: true }
         : {}),
       ...(notification ? { attention: true } : {}),

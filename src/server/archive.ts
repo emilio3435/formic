@@ -280,6 +280,8 @@ function archiveCopy(
     id: agent.id,
     provider: agent.provider,
     sourceSessionId: agent.sourceSessionId,
+    sourceTitle: agent.sourceTitle,
+    rawModel: agent.rawModel,
     displayName: agent.displayName,
     /* Written down for the same reason the lifecycle verdict below is: this is
        an allow-list, and a record that has left the scan window can never be

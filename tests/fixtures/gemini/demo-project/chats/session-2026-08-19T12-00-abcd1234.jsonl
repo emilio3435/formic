@@ -1,0 +1,8 @@
+{"sessionId":"abcd1234-e5f6-7890-abcd-ef1234567890","projectHash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","startTime":"2026-08-19T12:00:00.000Z","lastUpdated":"2026-08-19T12:02:00.000Z","kind":"main","unknownMetadata":{"kept":"opaque"}}
+{"id":"msg-user-1","timestamp":"2026-08-19T12:00:05.000Z","type":"user","content":[{"text":"Inspect the pinned Gemini fixture."}],"unknownMessageField":true}
+{"id":"msg-gemini-1","timestamp":"2026-08-19T12:00:20.000Z","type":"gemini","model":"gemini-3.7-flash","content":[{"text":"I inspected the first turn."}],"thoughts":[{"subject":"Inspect","description":"Read the synthetic fixture.","timestamp":"2026-08-19T12:00:10.000Z"}],"toolCalls":[{"id":"tool-1","name":"list_directory","args":{"path":"."},"result":[{"text":"fixture-only output"}],"status":"success","timestamp":"2026-08-19T12:00:15.000Z"}],"tokens":{"input":100,"output":20,"cached":10,"thoughts":5,"tool":8,"total":125}}
+{"$set":{"summary":"Pinned schema fixture"}}
+{"id":"msg-user-rewound","timestamp":"2026-08-19T12:00:30.000Z","type":"user","content":"This turn must be rewound."}
+{"id":"msg-gemini-rewound","timestamp":"2026-08-19T12:00:40.000Z","type":"gemini","content":"This response must be rewound."}
+{"$rewindTo":"msg-user-rewound"}
+{"id":"msg-gemini-final","timestamp":"2026-08-19T12:01:50.000Z","type":"gemini","model":"gemini-3.7-flash","content":[{"text":"The replay preserves the pinned records in source order."}],"tokens":{"input":120,"output":30,"cached":12,"total":150}}

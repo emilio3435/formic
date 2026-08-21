@@ -87,7 +87,8 @@ export function createPrimeParser(): IncrementalParser {
         continue;
       }
       if (row.type === "model_change" && typeof (row as any).modelId === "string") {
-        model = (row as any).modelId;
+        const observedModel = (row as any).modelId.trim();
+        if (observedModel) model = observedModel;
         providerInside = (row as any).provider;
         continue;
       }
@@ -123,7 +124,10 @@ export function createPrimeParser(): IncrementalParser {
         }
       }
       // capture model from message if not yet set
-      if (typeof msg.model === "string" && !model) model = msg.model;
+      if (typeof msg.model === "string" && !model) {
+        const observedModel = msg.model.trim();
+        if (observedModel) model = observedModel;
+      }
       // capture usage for token accounting
       const usage = (msg as any).usage as Record<string, unknown> | undefined;
       if (usage && msg.role === "assistant" && typeof usage.input === "number" && typeof usage.output === "number") {
@@ -164,8 +168,7 @@ export function createPrimeParser(): IncrementalParser {
     const fallback = new Date(meta.mtimeMs ?? meta.nowMs ?? Date.now()).toISOString();
     const sourceUpdatedAt = updatedAt ?? fallback;
     const recency = recencyStatus(sourceUpdatedAt, meta.nowMs ?? Date.now(), meta.thresholds);
-    const agentModel = model || "prime";
-    const contextWindow = claudeContextWindow(agentModel);
+    const contextWindow = model === undefined ? undefined : claudeContextWindow(model);
     const tokens: TokenUsage = lastUsage
       ? {
           input: lastUsage.input,
@@ -204,7 +207,7 @@ export function createPrimeParser(): IncrementalParser {
       cwd,
       originCwd,
       ...sessionDeclaration,
-      model: agentModel,
+      ...(model === undefined ? {} : { model }),
       task,
       startedAt: startedAt ?? fallback,
       updatedAt: sourceUpdatedAt,

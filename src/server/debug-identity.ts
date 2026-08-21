@@ -8,7 +8,14 @@ import type {
   TargetResolution,
 } from "../shared/types";
 import { readableChatBody } from "./human-message";
+import {
+  readGeminiConversationFile,
+  replayGeminiText,
+  type GeminiConversation,
+} from "./gemini";
 import { isReplicaBlob, parseReplicaBlob } from "./grok-bot";
+import { readOpenCodeStore } from "./opencode-store";
+import { readPiSessionFile } from "./pi";
 import { routingSurfaceObservations, type RoutingSurfaceObservation } from "./targets";
 import type { CmuxSurface } from "./types";
 
@@ -133,6 +140,11 @@ export interface TranscriptLine {
   at: string | null;
   role: "user" | "assistant" | "tool" | "system" | "unknown";
   text: string;
+  sourceEntryId?: string;
+  toolCallId?: string;
+  toolName?: string;
+  sourceType?: "assistant_tool_call" | "branch_summary" | "custom_message";
+  sourceName?: string;
 }
 
 function transcriptRole(value: unknown): TranscriptLine["role"] {
@@ -603,6 +615,52 @@ function codexTranscriptLines(agent: AgentSnapshot, contents: string): Transcrip
   return emitTranscriptDrafts(drafts, agent.provider);
 }
 
+function geminiTranscriptLinesFromConversation(
+  agent: AgentSnapshot,
+  conversation: GeminiConversation,
+): TranscriptLine[] {
+  const drafts: GrokTranscriptDraft[] = [];
+  const tools = new Map<string, GrokToolDraft>();
+  for (const message of conversation.messages) {
+    const type = typeof message.type === "string" ? message.type : undefined;
+    const at = message.timestamp;
+    if (type === "user") {
+      pushSpeechDraft(drafts, "user", message.content, at);
+      continue;
+    }
+    if (type !== "gemini") continue;
+    if (Array.isArray(message.thoughts)) {
+      for (const value of message.thoughts) {
+        const thought = object(value);
+        if (!thought) continue;
+        const subject = typeof thought.subject === "string" ? thought.subject.trim() : "";
+        const description = typeof thought.description === "string" ? thought.description.trim() : "";
+        const body = [subject, description].filter(Boolean).join("\n");
+        if (body) pushThoughtDraft(drafts, body, thought.timestamp ?? at);
+      }
+    }
+    if (Array.isArray(message.toolCalls)) {
+      for (const value of message.toolCalls) {
+        const tool = object(value);
+        if (!tool) continue;
+        upsertToolDraft(drafts, tools, {
+          at: tool.timestamp ?? at,
+          callId: typeof tool.id === "string" ? tool.id : undefined,
+          title: typeof tool.name === "string" ? tool.name : undefined,
+          status: typeof tool.status === "string" ? tool.status : undefined,
+        });
+      }
+    }
+    pushSpeechDraft(drafts, "assistant", message.content, at);
+  }
+  return emitTranscriptDrafts(drafts, agent.provider);
+}
+
+function geminiTranscriptLines(agent: AgentSnapshot, contents: string): TranscriptLine[] {
+  const conversation = replayGeminiText(contents);
+  return conversation ? geminiTranscriptLinesFromConversation(agent, conversation) : [];
+}
+
 function grokTranscriptLines(
   agent: AgentSnapshot,
   contents: string,
@@ -690,6 +748,7 @@ export function transcriptLines(
      on text/output_text only so last-close cannot leak thinking or tool guts. */
   if (agent.provider === "claude") return claudeTranscriptLines(agent, contents);
   if (agent.provider === "codex") return codexTranscriptLines(agent, contents);
+  if (agent.provider === "gemini") return geminiTranscriptLines(agent, contents);
 
   const lines: TranscriptLine[] = [];
   for (const raw of contents.split("\n")) {
@@ -708,11 +767,43 @@ export function transcriptLines(
   return lines;
 }
 
+function openCodeTranscriptLines(
+  agent: AgentSnapshot,
+  source: string,
+): { lines: TranscriptLine[]; parserTruncated: boolean; missing: boolean } {
+  const session = readOpenCodeStore(source, { sessionId: agent.sourceSessionId }).sessions[0];
+  if (!session) return { lines: [], parserTruncated: false, missing: true };
+  const lines: TranscriptLine[] = [];
+  for (const event of session.events) {
+    if (event.kind === "tool") {
+      lines.push({
+        at: transcriptTimestamp(event.observedAt),
+        role: "tool",
+        text: [
+          event.title ?? event.toolName,
+          `Call: ${event.callId}`,
+          `Status: ${event.status}`,
+        ].join("\n"),
+      });
+      continue;
+    }
+    pushTranscriptLine(
+      lines,
+      event.kind === "reasoning" ? "system" : event.role,
+      event.kind === "reasoning" ? `Thought\n${event.text}` : event.text,
+      event.observedAt,
+      agent.provider,
+    );
+  }
+  return { lines, parserTruncated: session.transcriptTruncated, missing: false };
+}
+
 export async function transcriptResponse(
   snapshot: HubSnapshot,
   agentId: string,
   limit: number,
   headers: Readonly<Record<string, string>>,
+  signal?: AbortSignal,
 ): Promise<Response> {
   const responseHeaders = { ...headers, "cache-control": "no-store" };
   const agent = snapshot.programs
@@ -735,6 +826,72 @@ export async function transcriptResponse(
     );
   }
   try {
+    if (agent.provider === "gemini") {
+      const conversation = await readGeminiConversationFile(source);
+      const lines = conversation ? geminiTranscriptLinesFromConversation(agent, conversation) : [];
+      return Response.json(
+        {
+          ok: true,
+          agentId,
+          source,
+          truncated: Boolean(conversation?.partial) || lines.length > limit,
+          lines: lines.slice(-limit),
+          ...(conversation?.warnings?.length
+            ? { warning: conversation.warnings.join("; ") }
+            : {}),
+        },
+        { headers: responseHeaders },
+      );
+    }
+    if (agent.provider === "opencode") {
+      const transcript = openCodeTranscriptLines(agent, source);
+      if (transcript.missing) {
+        return Response.json(
+          {
+            ok: false,
+            error: {
+              code: "TRANSCRIPT_SESSION_GONE",
+              message: "The OpenCode session is missing from its store and is no longer available.",
+            },
+          },
+          { status: 410, headers: responseHeaders },
+        );
+      }
+      return Response.json(
+        {
+          ok: true,
+          agentId,
+          source,
+          truncated: transcript.parserTruncated || transcript.lines.length > limit,
+          lines: transcript.lines.slice(-limit),
+        },
+        { headers: responseHeaders },
+      );
+    }
+    if (agent.provider === "pi") {
+      const transcript = await readPiSessionFile(source, { signal });
+      const lines: TranscriptLine[] = (transcript.evidence?.events ?? []).map((event) => ({
+        at: event.timestamp ?? null,
+        role: event.role,
+        text: event.text,
+        ...(event.sourceEntryId ? { sourceEntryId: event.sourceEntryId } : {}),
+        ...(event.toolCallId ? { toolCallId: event.toolCallId } : {}),
+        ...(event.toolName ? { toolName: event.toolName } : {}),
+        ...(event.sourceType ? { sourceType: event.sourceType } : {}),
+        ...(event.sourceName ? { sourceName: event.sourceName } : {}),
+      }));
+      return Response.json(
+        {
+          ok: true,
+          agentId,
+          source,
+          truncated: transcript.partial || lines.length > limit,
+          lines: lines.slice(-limit),
+          ...(transcript.warnings.length > 0 ? { warning: transcript.warnings.join("; ") } : {}),
+        },
+        { headers: responseHeaders },
+      );
+    }
     const contents = await readFile(source, "utf8");
     let historyContents: string | undefined;
     if (agent.provider === "grok") {
@@ -762,6 +919,7 @@ export async function transcriptResponse(
       { headers: responseHeaders },
     );
   } catch (error) {
+    if (signal?.aborted) throw signal.reason;
     /* A transcript we could not read is not a session with nothing to say.
        Returning the same {source:null, lines:[]} envelope as the no-artifact
        branch above asserted that no evidence exists, when the truth is that the
