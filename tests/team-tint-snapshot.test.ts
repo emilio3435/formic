@@ -312,6 +312,9 @@ const emptySessions = () => ({
   muse: { value: [], errors: [] },
   antigravity: { value: [], errors: [] },
   copilot: { value: [], errors: [] },
+  gemini: { value: [], errors: [] },
+  opencode: { value: [], errors: [] },
+  pi: { value: [], errors: [] },
 });
 
 function collectedAgent(id: string, sessionId: string): CollectedAgent {

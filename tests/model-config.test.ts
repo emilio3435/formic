@@ -95,6 +95,8 @@ describe("model knowledge config", () => {
     });
     expect(shipped.claudeContextWindows).not.toHaveProperty("terra");
     expect(shipped.claudeContextWindows).not.toHaveProperty("gpt-5.6-terra");
+    expect(shipped.claudeContextWindows).not.toHaveProperty("prime");
+    expect(DEFAULT_MODEL_CONFIG.claudeContextWindows).not.toHaveProperty("prime");
     expect(claudeContextWindow("muse-spark-1.2")).toBe(1_000_000);
     expect(claudeContextWindow("GPT-5.6 Sol")).toBe(258_400);
     expect(claudeContextWindow("Claude Opus 5")).toBe(1_000_000);

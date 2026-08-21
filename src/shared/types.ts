@@ -8,8 +8,8 @@
    without adding it here fails the build rather than quietly under-counting.
    Every runtime consumer imports this list so a provider cannot be taught to
    one subsystem while remaining invisible to another. */
-export type Provider = "codex" | "omp" | "claude" | "cursor" | "factory" | "prime" | "grok" | "hermes" | "muse" | "antigravity" | "copilot";
-export const PROVIDERS = ["codex", "omp", "claude", "cursor", "factory", "prime", "grok", "hermes", "muse", "antigravity", "copilot"] as const satisfies readonly Provider[];
+export type Provider = "codex" | "omp" | "claude" | "cursor" | "factory" | "prime" | "grok" | "hermes" | "muse" | "antigravity" | "copilot" | "gemini" | "opencode" | "pi";
+export const PROVIDERS = ["codex", "omp", "claude", "cursor", "factory", "prime", "grok", "hermes", "muse", "antigravity", "copilot", "gemini", "opencode", "pi"] as const satisfies readonly Provider[];
 /* Exhaustiveness in the other direction: `satisfies` proves every entry is a
    Provider, and this proves every Provider is an entry. Adding one to the union
    without adding it to the list fails the build here rather than quietly
@@ -50,6 +50,8 @@ export type AuthoredNameSource =
   | "muse-title"
   | "antigravity-title"
   | "copilot-title"
+  | "gemini-title"
+  | "pi-title"
   | "launch-env"
   | "manifest";
 /* What a session is called, decided once by src/server/naming.ts.
@@ -187,7 +189,7 @@ export interface TokenUsage {
   cachedInput?: number;
   /** Latest call's prompt+completion size, cache reads INCLUDED. Occupancy. */
   total?: number;
-  /** Session-cumulative NEW tokens: uncached input + output + cache writes. */
+  /** Session consumption: uncached input + output + separately observed reasoning + cache writes; cache reads excluded. */
   sessionTotal?: number;
   /** Session-cumulative cache READS. Re-read context, billed at a fraction. */
   sessionCachedInput?: number;
@@ -221,6 +223,17 @@ export interface TokenUsage {
   provenance: "observed" | "estimated" | "unknown";
 }
 
+export interface SourceTitleEvidence {
+  text: string;
+  provenance: "opencode-source-title-unverified-authorship";
+}
+
+export interface RawModelEvidence {
+  modelId: string;
+  providerRoute: string;
+  rawVariant?: string;
+}
+
 export interface CostUsage {
   amount: number;
   currency: "USD";
@@ -243,7 +256,7 @@ export interface CmuxTarget {
   appServerReady?: boolean;
   /** Why Codex desktop Send is off. Enum only. */
   appServerMiss?: CodexAppMiss;
-  /** Collector instance, e.g. grok-bot:grok-bot vs grok-bot:grok-bot-2. */
+  /** Path-qualified collector instance, e.g. grok-bot:grok-bot-2--<16 hex>. */
   instanceId?: string;
   instanceLabel?: string;
   /** Mac replica cache for this Bot instance. Not the token home. */
@@ -401,6 +414,8 @@ export interface AgentSnapshot {
   instanceId?: string;
   instanceLabel?: string;
   sourceSessionId: string;
+  sourceTitle?: SourceTitleEvidence;
+  rawModel?: RawModelEvidence;
   displayName: string;
   /* What this session is called and why, resolved server-side across the whole
      fleet so uniqueness is decided once. Published ALONGSIDE `displayName`

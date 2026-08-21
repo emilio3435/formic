@@ -2,7 +2,19 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { classifyDataDir, handleCollectorInstancesRequest, instanceIdFor, JsonCollectorInstanceStore, readTextCappedSync, scanAgentHomes, type ScanFs } from "../src/server/collector-instances";
+import {
+  SUPPORTED_ALTERNATE_HOME_KINDS,
+  classifyDataDir,
+  handleCollectorInstancesRequest,
+  instanceIdFor,
+  JsonCollectorInstanceStore,
+  onboardedSessionRoots,
+  readTextCappedSync,
+  scanAgentHomes,
+  type ScanFs,
+} from "../src/server/collector-instances";
+import { collectSessionProvider } from "../src/server/collectors";
+import type { Provider } from "../src/shared/types";
 
 function underRoot(root: string, path: string): boolean {
   return path === root || path.startsWith(`${root}/`);
@@ -62,7 +74,7 @@ describe("classifyDataDir", () => {
     expect(hit?.reason).toBeUndefined();
   });
 
-  test("codex-2 sessions classify as codex and are not default", () => {
+  test("codex-2 sessions are identified but need an alternate-root parser route", () => {
     const root = mkdtempSync(join(tmpdir(), "ah-scan-"));
     const dataDir = join(root, ".codex-2");
     mkdirSync(join(dataDir, "sessions"), { recursive: true });
@@ -71,6 +83,7 @@ describe("classifyDataDir", () => {
     expect(hit?.kind).toBe("codex");
     expect(hit?.provider).toBe("codex");
     expect(hit?.default).toBe(false);
+    expect(hit?.reason).toBe("needs-parser");
   });
 
   test("~/.crush/sessions jsonl is unknown / needs-parser", () => {
@@ -115,6 +128,33 @@ describe("classifyDataDir", () => {
     expect(hit?.reason).toBeUndefined();
   });
 
+  test("settings-only ~/.gemini is Gemini CLI configuration presence, not a session row", () => {
+    const root = mkdtempSync(join(tmpdir(), "ah-scan-"));
+    const dataDir = join(root, ".gemini");
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, "settings.json"), "{}");
+    const hit = classifyDataDir(dataDir, memFs(root));
+    expect(hit).toMatchObject({
+      kind: "gemini-cli",
+      provider: "gemini",
+      default: true,
+    });
+    expect(hit?.reason).toBeUndefined();
+  });
+
+  test("extra ~/.gemini-2 with tmp is Gemini CLI and collectable", () => {
+    const root = mkdtempSync(join(tmpdir(), "ah-scan-"));
+    const dataDir = join(root, ".gemini-2");
+    mkdirSync(join(dataDir, "tmp/demo-project/chats"), { recursive: true });
+    const hit = classifyDataDir(dataDir, memFs(root));
+    expect(hit).toMatchObject({
+      kind: "gemini-cli",
+      provider: "gemini",
+      default: false,
+    });
+    expect(hit?.reason).toBeUndefined();
+  });
+
   test("default ~/.grok is default: true", () => {
     const root = mkdtempSync(join(tmpdir(), "ah-scan-"));
     const dataDir = join(root, ".grok");
@@ -123,6 +163,48 @@ describe("classifyDataDir", () => {
     expect(hit?.kind).toBe("grok-cli");
     expect(hit?.default).toBe(true);
     expect(hit?.reason).toBeUndefined();
+  });
+
+  test("PI-REPAIR-2A Pi classification distinguishes the builtin default, refused agent-home extras, and direct session roots", () => {
+    const root = mkdtempSync(join(tmpdir(), "ah-pi-root-shapes-"));
+    const builtin = join(root, ".pi");
+    const alternateAgentHome = join(root, "profile-two/.pi");
+    const direct = join(root, "pi-direct-sessions");
+    const pip = join(root, ".pip");
+    const arbitrary = join(root, "arbitrary-jsonl");
+    const nested = join(root, "nested-lookalike");
+    mkdirSync(join(builtin, "agent/sessions"), { recursive: true });
+    mkdirSync(join(alternateAgentHome, "agent/sessions"), { recursive: true });
+    for (const directory of [direct, pip, arbitrary, join(nested, "child")]) mkdirSync(directory, { recursive: true });
+    const session = [
+      "",
+      "malformed-before-header",
+      JSON.stringify({ type: "session", version: 3, id: "pi.settings-direct", timestamp: "2026-08-20T12:00:00.000Z", cwd: "/tmp/pi-settings" }),
+      JSON.stringify({ type: "message", id: "settings-user", parentId: null, timestamp: "2026-08-20T12:00:01.000Z", message: { role: "user", content: "Settings direct root.", timestamp: 1_787_227_201_000 } }),
+      JSON.stringify({ type: "message", id: "settings-answer", parentId: "settings-user", timestamp: "2026-08-20T12:00:02.000Z", message: { role: "assistant", content: [{ type: "text", text: "Settings direct answer." }], provider: "anthropic", model: "claude-opus-5", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, stopReason: "stop", timestamp: 1_787_227_202_000 } }),
+      "",
+    ].join("\n");
+    writeFileSync(join(direct, "session.jsonl"), session);
+    writeFileSync(join(pip, "session.jsonl"), session);
+    writeFileSync(join(arbitrary, "session.jsonl"), `${JSON.stringify({ type: "message", id: "not-header" })}\n`);
+    writeFileSync(join(nested, "child/session.jsonl"), session);
+    const fs = memFs(root);
+
+    expect({
+      builtin: classifyDataDir(builtin, fs),
+      alternateAgentHome: classifyDataDir(alternateAgentHome, fs),
+      direct: classifyDataDir(direct, fs),
+      pip: classifyDataDir(pip, fs),
+      arbitrary: classifyDataDir(arbitrary, fs),
+      nested: classifyDataDir(nested, fs),
+    }).toEqual({
+      builtin: expect.objectContaining({ kind: "pi", provider: "pi", default: true }),
+      alternateAgentHome: expect.objectContaining({ kind: "pi", provider: "pi", default: false, reason: "needs-parser" }),
+      direct: expect.objectContaining({ kind: "pi", provider: "pi", default: false }),
+      pip: undefined,
+      arbitrary: undefined,
+      nested: undefined,
+    });
   });
 });
 
@@ -322,6 +404,43 @@ describe("classify deadline", () => {
 });
 
 describe("JsonCollectorInstanceStore", () => {
+  test("only collector-wired alternate kinds are advertised as supported", () => {
+    expect(SUPPORTED_ALTERNATE_HOME_KINDS).toEqual([
+      "cursor-gui",
+      "grok-cli",
+      "grok-bot",
+      "copilot",
+      "gemini-cli",
+      "opencode",
+      "pi",
+    ]);
+  });
+
+  test("a persisted needs-parser row cannot remain onboarded after reopen", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ah-store-"));
+    const path = join(dir, "collector-instances.json");
+    writeFileSync(path, JSON.stringify({
+      version: 1,
+      instances: [{
+        id: "codex:dot-codex-2",
+        kind: "codex",
+        provider: "codex",
+        label: ".codex-2",
+        dataDir: "/tmp/.codex-2",
+        onboarded: true,
+        ignored: false,
+        default: false,
+        discoveredAt: "2026-08-16T00:00:00.000Z",
+        lastSeenAt: "2026-08-16T00:00:00.000Z",
+        reason: "needs-parser",
+      }],
+    }));
+
+    const store = await JsonCollectorInstanceStore.open(path);
+    expect(store.get()[0]?.onboarded).toBe(false);
+    expect(store.onboardedRoots("codex")).toEqual([]);
+  });
+
   test("empty store + scan leaves extras not onboarded", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ah-store-"));
     const store = await JsonCollectorInstanceStore.open(join(dir, "collector-instances.json"));
@@ -333,6 +452,62 @@ describe("JsonCollectorInstanceStore", () => {
     expect(store.onboardedGuiRoots()).toEqual([]);
   });
 
+  test("same-basename Gemini roots remain independently onboardable", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ah-collision-"));
+    const store = await JsonCollectorInstanceStore.open(join(dir, "collector-instances.json"));
+    const roots = [join(dir, "profile-a/.gemini"), join(dir, "profile-b/.gemini")];
+    const merged = store.mergeScan(roots.map((dataDir) => ({
+      kind: "gemini-cli" as const,
+      provider: "gemini" as const,
+      dataDir,
+      label: ".gemini",
+      default: false,
+    })), "2026-08-19T00:00:00.000Z");
+
+    expect(merged.map((row) => row.dataDir).sort()).toEqual([...roots].sort());
+    expect(new Set(merged.map((row) => row.id)).size).toBe(2);
+    await store.update({ ids: merged.map((row) => row.id), onboarded: true });
+    expect(store.onboardedRoots("gemini-cli").sort()).toEqual([...roots].sort());
+  });
+
+  test("legacy basename ids migrate by exact kind and path without losing operator state", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ah-migrate-id-"));
+    const path = join(dir, "collector-instances.json");
+    const dataDir = join(dir, "profile/.gemini");
+    writeFileSync(path, JSON.stringify({
+      version: 1,
+      instances: [{
+        id: "gemini-cli:dot-gemini",
+        kind: "gemini-cli",
+        provider: "gemini",
+        label: "My Gemini",
+        dataDir,
+        onboarded: true,
+        ignored: true,
+        default: false,
+        discoveredAt: "2026-08-16T00:00:00.000Z",
+        lastSeenAt: "2026-08-16T00:00:00.000Z",
+      }],
+    }));
+    const store = await JsonCollectorInstanceStore.open(path);
+    const [migrated] = store.mergeScan([{
+      kind: "gemini-cli", provider: "gemini", dataDir,
+      label: ".gemini", default: false,
+    }], "2026-08-19T00:00:00.000Z");
+
+    expect(migrated?.id).toBe(instanceIdFor("gemini-cli", dataDir));
+    expect(migrated?.id).not.toBe("gemini-cli:dot-gemini");
+    expect(migrated).toMatchObject({
+      label: "My Gemini",
+      onboarded: true,
+      ignored: true,
+      discoveredAt: "2026-08-16T00:00:00.000Z",
+    });
+    await store.persistLastSeen();
+    const reopened = await JsonCollectorInstanceStore.open(path);
+    expect(reopened.get()).toEqual(store.get());
+  });
+
   test("update onboarded persists across reopen", async () => {
     const dir = mkdtempSync(join(tmpdir(), "ah-store-"));
     const path = join(dir, "collector-instances.json");
@@ -341,12 +516,86 @@ describe("JsonCollectorInstanceStore", () => {
       kind: "cursor-gui", provider: "cursor", dataDir: "/Users/me/Library/Application Support/Cursor-2",
       label: "Cursor-2", default: false,
     }], "2026-08-16T00:00:00.000Z");
-    await store.update({ ids: ["cursor-gui:cursor-2"], onboarded: true });
+    const id = instanceIdFor("cursor-gui", "/Users/me/Library/Application Support/Cursor-2");
+    await store.update({ ids: [id], onboarded: true });
     const again = await JsonCollectorInstanceStore.open(path);
-    expect(again.get().find((i) => i.id === "cursor-gui:cursor-2")?.onboarded).toBe(true);
+    expect(again.get().find((i) => i.id === id)?.onboarded).toBe(true);
     expect(again.onboardedGuiRoots()).toEqual(["/Users/me/Library/Application Support/Cursor-2"]);
     expect(again.onboardedRoots("cursor-gui")).toEqual(again.onboardedGuiRoots());
     expect(again.onboardedRoots("grok-bot")).toEqual([]);
+  });
+
+  test("supported roots reach the matching session collector options", async () => {
+    const store = await JsonCollectorInstanceStore.open(join(mkdtempSync(join(tmpdir(), "ah-store-")), "collector-instances.json"));
+    const candidates = [
+      { kind: "cursor-gui" as const, provider: "cursor" as const, dataDir: "/tmp/Cursor-2", label: "Cursor-2", default: false },
+      { kind: "grok-cli" as const, provider: "grok" as const, dataDir: "/tmp/.grok-2", label: ".grok-2", default: false },
+      { kind: "grok-bot" as const, provider: null, dataDir: "/tmp/Grok Bot 2", label: "Grok Bot 2", default: false },
+      { kind: "copilot" as const, provider: "copilot" as const, dataDir: "/tmp/.copilot-2", label: ".copilot-2", default: false },
+      { kind: "gemini-cli" as const, provider: "gemini" as const, dataDir: "/tmp/.gemini-2", label: ".gemini-2", default: false },
+      { kind: "opencode" as const, provider: "opencode" as const, dataDir: "/tmp/opencode-2", label: "opencode-2", default: false },
+      { kind: "pi" as const, provider: "pi" as const, dataDir: "/tmp/pi-sessions-2", label: "pi-sessions-2", default: false },
+    ];
+    store.mergeScan(candidates, "2026-08-16T00:00:00.000Z");
+    await store.update({ ids: candidates.map((candidate) => instanceIdFor(candidate.kind, candidate.dataDir)), onboarded: true });
+
+    expect(onboardedSessionRoots(store)).toEqual({
+      extraCursorGuiRoots: ["/tmp/Cursor-2"],
+      extraGrokCliRoots: ["/tmp/.grok-2"],
+      extraGrokBotRoots: ["/tmp/Grok Bot 2"],
+      extraCopilotRoots: ["/tmp/.copilot-2"],
+      extraGeminiCliRoots: ["/tmp/.gemini-2"],
+      extraOpenCodeRoots: ["/tmp/opencode-2"],
+      extraPiRoots: ["/tmp/pi-sessions-2"],
+    });
+  });
+
+  test("PI-REPAIR-2B scanned direct Pi root survives onboarding into the production collector", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ah-pi-onboard-"));
+    const direct = join(home, "pi-direct-sessions");
+    mkdirSync(direct, { recursive: true });
+    writeFileSync(join(direct, "session.jsonl"), [
+      JSON.stringify({ type: "session", version: 3, id: "pi.settings-onboarded", timestamp: "2026-08-20T12:00:00.000Z", cwd: "/tmp/pi-onboarded" }),
+      JSON.stringify({ type: "message", id: "onboard-user", parentId: null, timestamp: "2026-08-20T12:00:01.000Z", message: { role: "user", content: "Onboard direct root.", timestamp: 1_787_227_201_000 } }),
+      JSON.stringify({ type: "message", id: "onboard-answer", parentId: "onboard-user", timestamp: "2026-08-20T12:00:02.000Z", message: { role: "assistant", content: [{ type: "text", text: "Onboarded collector answer." }], provider: "anthropic", model: "claude-opus-5", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, stopReason: "stop", timestamp: 1_787_227_202_000 } }),
+      "",
+    ].join("\n"));
+    const hits = scanAgentHomes(memFs(home, {
+      processArgv: () => [`pi --session-dir "${direct}"`],
+    }));
+    const store = await JsonCollectorInstanceStore.open(join(home, "collector-instances.json"));
+    const merged = store.mergeScan(hits, "2026-08-20T12:01:00.000Z");
+    if (merged.length > 0) await store.update({ ids: merged.map(({ id }) => id), onboarded: true });
+    const roots = onboardedSessionRoots(store);
+    const collected = await collectSessionProvider(
+      "pi" as Provider,
+      home,
+      Number.POSITIVE_INFINITY,
+      undefined,
+      { extraPiRoots: roots.extraPiRoots },
+    );
+
+    expect({
+      scanned: hits.map(({ kind, provider, dataDir, reason }) => ({ kind, provider, dataDir, reason })),
+      onboarded: roots.extraPiRoots,
+      collected: collected.value.map(({ sourceSessionId }) => sourceSessionId),
+    }).toEqual({
+      scanned: [{ kind: "pi", provider: "pi", dataDir: direct, reason: undefined }],
+      onboarded: [direct],
+      collected: ["pi.settings-onboarded"],
+    });
+  });
+
+  test("needs-parser roots cannot become working collector roots", async () => {
+    const store = await JsonCollectorInstanceStore.open(join(mkdtempSync(join(tmpdir(), "ah-store-")), "collector-instances.json"));
+    store.mergeScan([{
+      kind: "codex", provider: "codex", dataDir: "/tmp/.codex-2",
+      label: ".codex-2", default: false, reason: "needs-parser",
+    }], "2026-08-16T00:00:00.000Z");
+
+    await expect(store.update({ ids: [instanceIdFor("codex", "/tmp/.codex-2")], onboarded: true }))
+      .rejects.toThrow(/parser/i);
+    expect(store.onboardedRoots("codex")).toEqual([]);
   });
 
   test("defaults cannot be turned off", async () => {
@@ -357,7 +606,10 @@ describe("JsonCollectorInstanceStore", () => {
       dataDir: "/Users/me/Library/Application Support/Cursor",
       label: "Cursor", default: true,
     }], "2026-08-16T00:00:00.000Z");
-    await expect(store.update({ ids: ["cursor-gui:cursor"], onboarded: false }))
+    await expect(store.update({
+      ids: [instanceIdFor("cursor-gui", "/Users/me/Library/Application Support/Cursor")],
+      onboarded: false,
+    }))
       .rejects.toThrow(/default/i);
   });
 
@@ -399,7 +651,9 @@ describe("JsonCollectorInstanceStore", () => {
       dataDir: "/Users/me/Library/Application Support/Cursor-2",
       label: "Cursor-2", default: false,
     }], "2026-08-16T00:00:00.000Z");
-    const updating = store.update({ ids: ["cursor-gui:cursor-2"], onboarded: true });
+    const cursorId = instanceIdFor("cursor-gui", "/Users/me/Library/Application Support/Cursor-2");
+    const codexId = instanceIdFor("codex", "/Users/me/.codex-2");
+    const updating = store.update({ ids: [cursorId], onboarded: true });
     await writeEntered;
     store.mergeScan([{
       kind: "codex", provider: "codex",
@@ -409,9 +663,9 @@ describe("JsonCollectorInstanceStore", () => {
     releaseWrite();
     await updating;
     const ids = store.get().map((row) => row.id);
-    expect(ids).toContain("cursor-gui:cursor-2");
-    expect(ids).toContain("codex:dot-codex-2");
-    expect(store.get().find((row) => row.id === "cursor-gui:cursor-2")?.onboarded).toBe(true);
+    expect(ids).toContain(cursorId);
+    expect(ids).toContain(codexId);
+    expect(store.get().find((row) => row.id === cursorId)?.onboarded).toBe(true);
   });
 });
 
@@ -433,17 +687,37 @@ describe("handleCollectorInstancesRequest", () => {
       dataDir: "/Users/me/Library/Application Support/Cursor-2",
       label: "Cursor-2", default: false,
     }], new Date().toISOString());
+    const id = instanceIdFor("cursor-gui", "/Users/me/Library/Application Support/Cursor-2");
     const res = await handleCollectorInstancesRequest(
       new Request("http://127.0.0.1/api/collector-instances", {
         method: "POST",
         headers: { origin: "http://127.0.0.1", "content-type": "application/json" },
-        body: JSON.stringify({ ids: ["cursor-gui:cursor-2"], onboarded: true }),
+        body: JSON.stringify({ ids: [id], onboarded: true }),
       }),
       store,
       { scan: () => [] },
     );
     expect(res.status).toBe(200);
     expect(store.onboardedGuiRoots()[0]).toContain("Cursor-2");
+  });
+
+  test("POST refuses needs-parser instances", async () => {
+    const store = await JsonCollectorInstanceStore.open(join(mkdtempSync(join(tmpdir(), "ah-http-")), "c.json"));
+    store.mergeScan([{
+      kind: "codex", provider: "codex", dataDir: "/tmp/.codex-2",
+      label: ".codex-2", default: false, reason: "needs-parser",
+    }], new Date().toISOString());
+    const res = await handleCollectorInstancesRequest(
+      new Request("http://127.0.0.1/api/collector-instances", {
+        method: "POST",
+        headers: { origin: "http://127.0.0.1", "content-type": "application/json" },
+        body: JSON.stringify({ id: instanceIdFor("codex", "/tmp/.codex-2"), onboarded: true }),
+      }),
+      store,
+    );
+
+    expect(res.status).toBe(409);
+    expect((await res.json() as { error: { code: string } }).error.code).toBe("PARSER_REQUIRED");
   });
 
   test("POST /etc/passwd as a new dataDir is 400", async () => {
@@ -517,7 +791,10 @@ describe("handleCollectorInstancesRequest", () => {
       new Request("http://127.0.0.1/api/collector-instances", {
         method: "POST",
         headers: { origin: "http://127.0.0.1", "content-type": "application/json" },
-        body: JSON.stringify({ id: "cursor-gui:cursor", onboarded: false }),
+        body: JSON.stringify({
+          id: instanceIdFor("cursor-gui", "/Users/me/Library/Application Support/Cursor"),
+          onboarded: false,
+        }),
       }),
       store,
       { scan: () => [] },
@@ -547,10 +824,11 @@ describe("handleCollectorInstancesRequest", () => {
     expect(res.status).toBe(200);
     const body = await res.json() as { ok: boolean; instances: { id: string; onboarded: boolean }[] };
     expect(body.ok).toBe(true);
-    expect(body.instances[0]?.id).toBe("cursor-gui:cursor-2");
+    const id = instanceIdFor("cursor-gui", "/Users/me/Library/Application Support/Cursor-2");
+    expect(body.instances[0]?.id).toBe(id);
     expect(body.instances[0]?.onboarded).toBe(false);
     const again = await JsonCollectorInstanceStore.open(path);
-    expect(again.get().find((row) => row.id === "cursor-gui:cursor-2")).toBeDefined();
+    expect(again.get().find((row) => row.id === id)).toBeDefined();
     expect(again.get()[0]?.onboarded).toBe(false);
   });
 });

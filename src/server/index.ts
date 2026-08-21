@@ -17,7 +17,7 @@ import { HubState, loadProgramHints } from "./state";
 import { JsonProcessWitnessStore } from "./process-witness";
 import { JsonSessionNameStore } from "./session-names";
 import { JsonProgramAliasStore } from "./program-aliases";
-import { isGrokBotProductCache, JsonCollectorInstanceStore } from "./collector-instances";
+import { JsonCollectorInstanceStore, onboardedSessionRoots } from "./collector-instances";
 import { archiveLimits, JsonSettingsStore } from "./settings";
 import { JsonTriageQueueStore, NativeLunaInvestigationRunner } from "./triage";
 
@@ -68,11 +68,13 @@ const repoGroupProvenance = await JsonRepoGroupProvenanceStore.open(
 
 const state = new HubState(runner, archiveStore, programHints, {
   settingsReader: () => settingsStore.get(),
-  guiRootsReader: () => collectorInstanceStore.onboardedGuiRoots(),
-  botRootsReader: () => collectorInstanceStore.onboardedRoots("grok-bot"),
-  grokCliRootsReader: () => collectorInstanceStore.onboardedRoots("grok-cli")
-    .filter((root) => !isGrokBotProductCache(root)),
-  copilotRootsReader: () => collectorInstanceStore.onboardedRoots("copilot"),
+  guiRootsReader: () => onboardedSessionRoots(collectorInstanceStore).extraCursorGuiRoots,
+  botRootsReader: () => onboardedSessionRoots(collectorInstanceStore).extraGrokBotRoots,
+  grokCliRootsReader: () => onboardedSessionRoots(collectorInstanceStore).extraGrokCliRoots,
+  copilotRootsReader: () => onboardedSessionRoots(collectorInstanceStore).extraCopilotRoots,
+  geminiRootsReader: () => onboardedSessionRoots(collectorInstanceStore).extraGeminiCliRoots,
+  openCodeRootsReader: () => onboardedSessionRoots(collectorInstanceStore).extraOpenCodeRoots,
+  piRootsReader: () => onboardedSessionRoots(collectorInstanceStore).extraPiRoots,
   triageReader: () => triageStore.list(),
   cmuxExecutable,
   bindingStore: identityBindingStore,

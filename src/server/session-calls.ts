@@ -1,6 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { parseClaudeJsonl, parseCodexJsonl, parseOmpJsonl } from "./collectors";
+import { parseGeminiConversationFile } from "./gemini";
+import { readOpenCodeStore } from "./opencode-store";
+import { readPiSessionFile } from "./pi";
 import type { CollectedAgent } from "./types";
 import type { HubSnapshot } from "../shared/types";
 
@@ -49,8 +52,10 @@ export interface SessionCallsPayload {
     the published total. A second extraction written here would be a second
     derivation, and the whole value of the series is that it is the one the
     board actually added up. */
-function reparse(agent: { provider: string }, source: string, text: string): CollectedAgent | null {
+async function reparse(agent: { provider: string }, source: string): Promise<CollectedAgent | null> {
   const meta = { sourcePath: source };
+  if (agent.provider === "gemini") return parseGeminiConversationFile(source, meta);
+  const text = await readFile(source, "utf8");
   switch (agent.provider) {
     case "claude": return parseClaudeJsonl(text, meta);
     case "omp": return parseOmpJsonl(text, meta);
@@ -71,6 +76,7 @@ export async function sessionCallsResponse(
   snapshot: HubSnapshot,
   agentId: string,
   headers: Readonly<Record<string, string>>,
+  signal?: AbortSignal,
 ): Promise<Response> {
   const responseHeaders = { ...headers, "cache-control": "no-store" };
   const agent = snapshot.programs
@@ -105,9 +111,90 @@ export async function sessionCallsResponse(
     });
   }
 
+  if (agent.provider === "opencode") {
+    try {
+      const evidence = readOpenCodeStore(source, { sessionId: agent.sourceSessionId });
+      const session = evidence.sessions[0];
+      if (!session) {
+        return answer({
+          source, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
+          unavailable: "The OpenCode store does not contain this session in the bounded read window.",
+        });
+      }
+      if (!session.callSizesComplete) {
+        return answer({
+          source, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
+          unavailable: "The OpenCode per-call series is corrupt, invalid, truncated, or incomplete, so it cannot be published as complete.",
+        });
+      }
+      const calls = session.callSizes;
+      if (!calls || calls.length === 0) {
+        return answer({
+          source, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
+          unavailable: "The OpenCode store records no per-call usage for this session.",
+        });
+      }
+      let running = 0;
+      const prefixSums = calls.map((size) => (running += size));
+      return answer({
+        source,
+        calls,
+        sessionProcessed: running,
+        prefixSums,
+        processedSnapshots: null,
+      });
+    } catch (error) {
+      return answer({
+        source, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
+        unavailable: `The OpenCode store could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  }
+
+  if (agent.provider === "pi") {
+    try {
+      const evidence = await readPiSessionFile(source, { signal });
+      if (evidence.partial) {
+        const detail = evidence.warnings[0];
+        return answer({
+          source,
+          calls: null,
+          sessionProcessed: null,
+          prefixSums: null,
+          processedSnapshots: null,
+          unavailable: `Pi call series is unavailable because the bounded transcript is partial or incomplete${detail ? `: ${detail}` : "."}`,
+        });
+      }
+      const calls = evidence.evidence?.callSizes;
+      if (!calls || calls.length === 0) {
+        return answer({
+          source,
+          calls: null,
+          sessionProcessed: null,
+          prefixSums: null,
+          processedSnapshots: null,
+          unavailable: "The Pi transcript records no per-call usage for this session.",
+        });
+      }
+      let running = 0;
+      const prefixSums = calls.map((size) => (running += size));
+      return answer({ source, calls, sessionProcessed: running, prefixSums, processedSnapshots: null });
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason;
+      return answer({
+        source,
+        calls: null,
+        sessionProcessed: null,
+        prefixSums: null,
+        processedSnapshots: null,
+        unavailable: `The Pi transcript could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  }
+
   let parsed: CollectedAgent | null;
   try {
-    parsed = reparse(agent, source, await readFile(source, "utf8"));
+    parsed = await reparse(agent, source);
   } catch (error) {
     /* Loud, not empty. A transcript that has rotated away is a reason the
        series is missing, and reporting [] would let a caller conclude the

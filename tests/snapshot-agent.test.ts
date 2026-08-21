@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { outcomeFor, roleFor2 } from "../src/server/snapshot-agent";
+import { effortFor, outcomeFor, roleFor2 } from "../src/server/snapshot-agent";
 import type { CollectedAgent } from "../src/server/types";
 
 function agent(overrides: Partial<CollectedAgent> = {}): CollectedAgent {
@@ -25,6 +25,13 @@ describe("A6 outcomeFor toast separation", () => {
 
   test("A6.2 a healthy collected agent remains healthy", () => {
     expect(outcomeFor(agent(), false)).toBe("healthy");
+  });
+});
+
+describe("source-backed effort publication", () => {
+  test("Pi preserves absent thinking even when the model name contains an effort token", () => {
+    expect(effortFor(agent({ provider: "pi", model: "private-model-high" }))).toBeUndefined();
+    expect(effortFor(agent({ provider: "pi", model: "private-model-high", effort: "medium" }))).toBe("MEDIUM");
   });
 });
 

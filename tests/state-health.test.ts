@@ -28,6 +28,9 @@ const emptySessions = () => ({
   muse: { value: [], errors: [] },
   antigravity: { value: [], errors: [] },
   copilot: { value: [], errors: [] },
+  gemini: { value: [], errors: [] },
+  opencode: { value: [], errors: [] },
+  pi: { value: [], errors: [] },
 });
 
 const ROUTING_RACE_SESSION_ID = "routing-race-session";
@@ -1140,6 +1143,56 @@ describe("cmux collection time truth", () => {
     unsubscribe();
   });
 
+  test("a watchdog-aborted provider scan is retried without publishing the abort as source failure", async () => {
+    let nowMs = 1_000;
+    const now = spyOn(Date, "now").mockImplementation(() => nowMs);
+    const logged = spyOn(console, "error").mockImplementation(() => {});
+    let geminiCalls = 0;
+    const replacementGemini = routingRaceSource({
+      id: "gemini:11111111-1111-4111-8111-111111111111",
+      provider: "gemini",
+      sourceSessionId: "11111111-1111-4111-8111-111111111111",
+      displayName: "Gemini replacement row",
+      updatedAt: new Date(nowMs).toISOString(),
+    });
+    const collectors: HubCollectors = {
+      sessions: async () => emptySessions(),
+      sessionProvider: async (provider, _home, _windowMs, _thresholds, _options, signal) => {
+        if (provider !== "gemini") return { value: [], errors: [] };
+        geminiCalls += 1;
+        if (geminiCalls > 1) return { value: [replacementGemini], errors: [] };
+        return new Promise((resolve, reject) => {
+          if (signal?.aborted) {
+            reject(signal.reason);
+            return;
+          }
+          signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      },
+      finalizeSessions: (results) => results,
+      cmux: async () => ({ value: [], errors: [] }),
+      notifications: async () => ({ value: [], errors: [] }),
+      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+    };
+    const state = new HubState(recordingRunner([]), { has: () => false, archive: async () => {} }, [], {
+      collectors,
+      settingsReader: () => normalizeSettings(undefined),
+    });
+
+    const superseded = state.refresh();
+    while (geminiCalls === 0) await Promise.resolve();
+    nowMs += 20_000;
+    const replacement = await state.refresh();
+    await superseded;
+
+    expect(geminiCalls).toBe(2);
+    expect(replacement.controlHealth.errors.join(" ")).not.toContain("superseded by watchdog");
+    expect(replacement.totals.sourceHealth?.byProvider?.gemini.healthy).toBeTrue();
+    expect(replacement.programs.flatMap(({ agents }) => agents).map(({ id }) => id)).toContain(replacementGemini.id);
+    now.mockRestore();
+    logged.mockRestore();
+  });
+
   test("an empty prior success does not claim last-known rows after provider timeout", async () => {
     let pass = 0;
     const never = new Promise<never>(() => {});
@@ -1338,15 +1391,18 @@ describe("cmux collection time truth", () => {
     resolveOld({ value: [routingRaceSource({ displayName: "old config" })], errors: [] });
 
     const changed = await drained;
-    expect(changed.programs.flatMap(({ agents }) => agents).find(({ id }) => id === current.id)?.sourceFreshness)
-      .toBe("last-known");
-    expect(codexCalls).toBe(1);
+    const changedAgent = changed.programs.flatMap(({ agents }) => agents).find(({ id }) => id === current.id);
+    expect(changedAgent?.displayName).toBe("new config");
+    expect(changedAgent?.sourceFreshness).toBeUndefined();
+    expect(codexCalls).toBe(2);
 
     const recovered = await state.refresh();
     expect(recovered.programs.flatMap(({ agents }) => agents).find(({ id }) => id === current.id)?.displayName)
       .toBe("new config");
+    expect(codexCalls).toBe(3);
     expect(calls).toEqual([
       { windowMs: 36 * 60 * 60 * 1_000, freshMs: 5 * 60_000, quietMs: 30 * 60_000 },
+      { windowMs: 60 * 60 * 1_000, freshMs: 2 * 60_000, quietMs: 10 * 60_000 },
       { windowMs: 60 * 60 * 1_000, freshMs: 2 * 60_000, quietMs: 10 * 60_000 },
     ]);
   });
@@ -1418,6 +1474,68 @@ describe("cmux collection time truth", () => {
     await state.refresh();
     expect(state.get().triageSummaries).toEqual([{ issueId: "queue:detached", state: "blocked" }]);
     expect(state.get().issues).toEqual([]);
+  });
+  test("alternate-home collector errors degrade the matching provider health", async () => {
+    const seen = new Map<string, Record<string, readonly string[]>>();
+    const collectors: HubCollectors = {
+      sessions: async () => emptySessions(),
+      sessionProvider: async (provider, _home, _windowMs, _thresholds, options) => {
+        seen.set(provider, {
+          cursor: options?.extraCursorGuiRoots ?? [],
+          grokCli: options?.extraGrokCliRoots ?? [],
+          grokBot: options?.extraGrokBotRoots ?? [],
+          copilot: options?.extraCopilotRoots ?? [],
+          gemini: options?.extraGeminiCliRoots ?? [],
+          pi: options?.extraPiRoots ?? [],
+        });
+        const errors = provider === "cursor"
+          ? ["Cursor extra root /tmp/Cursor-2 is unreadable"]
+          : provider === "grok"
+            ? ["Grok extra root /tmp/.grok-2 is unreadable"]
+            : provider === "copilot"
+              ? ["Copilot extra root /tmp/.copilot-2 is unreadable"]
+              : provider === "gemini"
+                ? ["Gemini CLI extra root /tmp/.gemini-2 is unreadable"]
+              : provider === "pi"
+                ? ["Pi extra root /tmp/pi-sessions-2 is unreadable"]
+              : [];
+        return { value: [], errors };
+      },
+      finalizeSessions: (results) => results,
+      cmux: async () => ({ value: [], errors: [] }),
+      notifications: async () => ({ value: [], errors: [] }),
+      enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+    };
+    const runner: CommandRunner = {
+      run: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
+    };
+    const archiveStore: ArchiveStore = { has: () => false, archive: async () => {} };
+    const state = new HubState(runner, archiveStore, [], {
+      collectors,
+      guiRootsReader: () => ["/tmp/Cursor-2"],
+      grokCliRootsReader: () => ["/tmp/.grok-2"],
+      botRootsReader: () => ["/tmp/Grok Bot 2"],
+      copilotRootsReader: () => ["/tmp/.copilot-2"],
+      geminiRootsReader: () => ["/tmp/.gemini-2"],
+      piRootsReader: () => ["/tmp/pi-sessions-2"],
+    });
+
+    await state.refresh();
+
+    expect(seen.get("cursor")?.cursor).toEqual(["/tmp/Cursor-2"]);
+    expect(seen.get("grok")).toMatchObject({
+      grokCli: ["/tmp/.grok-2"],
+      grokBot: ["/tmp/Grok Bot 2"],
+    });
+    expect(seen.get("copilot")?.copilot).toEqual(["/tmp/.copilot-2"]);
+    expect(seen.get("gemini")?.gemini).toEqual(["/tmp/.gemini-2"]);
+    expect(seen.get("pi")?.pi).toEqual(["/tmp/pi-sessions-2"]);
+    expect(state.get().totals.sourceHealth?.byProvider?.cursor.healthy).toBe(false);
+    expect(state.get().totals.sourceHealth?.byProvider?.grok.healthy).toBe(false);
+    expect(state.get().totals.sourceHealth?.byProvider?.copilot.healthy).toBe(false);
+    expect(state.get().totals.sourceHealth?.byProvider?.gemini.healthy).toBe(false);
+    expect(state.get().totals.sourceHealth?.byProvider?.pi.healthy).toBe(false);
+    expect(state.get().totals.sourceHealth?.byProvider?.claude.healthy).toBe(true);
   });
   test("per-source health timestamps set on success and survive later failure", async () => {
     let codexErrors: string[] = [];
@@ -1609,6 +1727,9 @@ describe("what is recorded is what is published", () => {
         muse: { value: [], errors: [] },
         antigravity: { value: [], errors: [] },
         copilot: { value: [], errors: [] },
+        gemini: { value: [], errors: [] },
+        opencode: { value: [], errors: [] },
+        pi: { value: [], errors: [] },
       }),
       cmux: async () => ({ value: [], errors: [] }),
       notifications: async () => ({ value: [], errors: [] }),

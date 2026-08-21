@@ -54,6 +54,18 @@ describe("Prime human-facing recency", () => {
     expect(agent?.tokens).not.toHaveProperty("contextWindow");
   });
 
+  test("I-107 keeps the explicit fallback name without inventing a model or window", () => {
+    const agent = parsePrimeJsonl([
+      JSON.stringify({ type: "session", id: "prime-no-model", cwd: "/tmp/formic", timestamp: "2026-08-11T10:00:00.000Z" }),
+      JSON.stringify({ type: "model_change", modelId: "   " }),
+      JSON.stringify({ type: "message", timestamp: "2026-08-11T10:00:01.000Z", message: { role: "user", content: "No model was reported." } }),
+    ].join("\n"), { nowMs: Date.parse("2026-08-11T10:00:04.000Z") });
+
+    expect(agent?.displayName).toBe("Prime · prime-no");
+    expect(agent).not.toHaveProperty("model");
+    expect(agent?.tokens).not.toHaveProperty("contextWindow");
+  });
+
   test("preserves the reserved heartbeat session classification", () => {
     const agent = parsePrimeJsonl([
       JSON.stringify({ type: "session", id: "ant-heartbeat-monitor", timestamp: "2026-08-11T10:00:00.000Z" }),

@@ -119,15 +119,23 @@ export const IDENTITY_CAUSES = {
   },
 };
 
-/* D5. `target.reason` is the server's operator sentence and the only one the
-   client prints — but a live reason carries the cmux surface UUID it was built
+/* D5. `target.reason` is the server's operator sentence and the one the client
+   prefers; when it is absent the banner falls back to the reason stamped on a
+   disabled `instruct`/`focus` capability, routed through this same normalizer,
+   so every server sentence the operator reads passes through here — but a live
+   reason carries the cmux surface UUID it was built
    from ("cmux 8B1F… has conflicting open agent session files on ttys011"), and
    an ID in a hover is noise the reader cannot act on. Established rule, and the
    reason the banner was ID-free before: raw identifiers belong in Evidence.
 
-   Strips the ID and nothing else. Rewriting the sentence here is what the
-   ground rules forbid — two wordings for one reason is how the board came to
-   say "Conflicting identity evidence" about a folder that was merely shared. */
+   Normalizes the raw identifiers and nothing else: the cmux surface UUID and
+   the tty name are each replaced by the thing they named — "this pane", "this
+   terminal" — and every other word of the server's sentence survives. The tty
+   is an identifier under the same rule as the UUID, not an instruction: nobody
+   can act on "ttys011" without opening Evidence to learn which sessions are on
+   it. Rewriting the sentence here is what the ground rules forbid — two
+   wordings for one reason is how the board came to say "Conflicting identity
+   evidence" about a folder that was merely shared. */
 const SURFACE_UUID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}";
 /* "cmux <id>" is the SUBJECT of the server's sentence ("cmux <id> has
    conflicting open agent session files on ttys011"), so deleting the id alone
@@ -136,6 +144,14 @@ const SURFACE_UUID = "[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4
    named rather than removed. */
 const NAMED_SURFACE = new RegExp("\\bcmux\\s+" + SURFACE_UUID + "\\b", "g");
 const BARE_SURFACE = new RegExp("\\b" + SURFACE_UUID + "\\b", "g");
+/* The other raw identifier a live reason carries. Bounded on purpose: "tty" on
+   its own is an English-adjacent fragment, so the digits are required and a
+   word boundary guards the front — "prettyship" and "Kitty" are not terminals.
+   Covers the bare form the target reason stamps ("ttys011", "tty7") and the
+   device path a capability reason can carry ("/dev/ttys011"). Replaced by what
+   it named rather than removed, for the same reason the surface id is: "open
+   agent session files on" with nothing after it is not a sentence. */
+const TTY_NAME = /(?:\/dev\/)?\btty[a-zA-Z]*\d+\b/g;
 
 export function operatorReason(agent) {
   const raw = agent && agent.target && agent.target.reason;
@@ -143,6 +159,7 @@ export function operatorReason(agent) {
   return raw
     .replace(NAMED_SURFACE, "this pane")
     .replace(BARE_SURFACE, "")
+    .replace(TTY_NAME, "this terminal")
     /* What a stripped id leaves behind mid-sentence. */
     .replace(/\s+([:;,.])/g, "$1")
     .replace(/\s{2,}/g, " ")
@@ -390,6 +407,15 @@ export function cwdIdentityName(agent) {
   const normalized = agent.cwd.replace(/\/+$/, "");
   const parts = normalized.split("/").filter(Boolean);
   const provider = providerLabel(agent.provider);
+  /* No recorded provider, no folder identity. providerLabel returns its own
+     argument when the key is missing, so a record whose provider did not
+     survive archiving concatenated the value `undefined` into the string every
+     surface prints — row, Inspector heading, accessible name, rename button.
+     Returning "" hands the answer back to sourceAgentName, whose display-name
+     and task fallbacks are already honest about what they know. Any truthy
+     provider still labels itself, so the fourteen canonical names are
+     untouched. */
+  if (!provider) return "";
   if (parts.length <= 2 && (parts[0] === "Users" || parts[0] === "home")) {
     return provider + " · Home";
   }
@@ -973,7 +999,13 @@ export function sourceAgentName(agent) {
   const shortIdentity = display.length > 0 && display.length <= 56 && display.includes("·");
   if (shortIdentity) return conciseText(display);
   if (identity) return conciseText(identity);
-  return conciseText(display || agent.task || providerLabel(agent.provider) + " agent");
+  /* Last resort: nothing named this row and nothing described it. With a
+     provider that is still the harness plus "agent"; without one it used to be
+     `undefined + " agent"`. The replacement is deliberately generic rather than
+     a stand-in provider — the record's harness is unknown, and the row already
+     says so in its own cell, so the name says only that nobody named it. */
+  const harness = providerLabel(agent.provider);
+  return conciseText(display || agent.task || (harness ? harness + " agent" : "Unnamed agent"));
 }
 
 /* Why a control is held. Kept separate from the capability reasons the dock is

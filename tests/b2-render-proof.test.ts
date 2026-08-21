@@ -357,11 +357,11 @@ describe("B2 [TL;DR] render proof — prime.ts → transcriptTail → snapshot.t
     expect(agent.transcriptTail).toContain("line 99");
   });
 
-  test("11/11 healthy counts PROVIDERS (11: plus muse, antigravity, copilot) not providers+cmux", async () => {
+  test("14/14 healthy counts PROVIDERS (including Gemini CLI, OpenCode, and Pi) not providers+cmux", async () => {
     const { PROVIDERS } = await import("../src/shared/types");
-    // Exhaustive 11 — the TODAY.md bug double-counted cmux and omitted omp (4 of 4 with wrong membership)
-    expect(PROVIDERS).toEqual(["codex", "omp", "claude", "cursor", "factory", "prime", "grok", "hermes", "muse", "antigravity", "copilot"]);
-    expect(PROVIDERS.length).toBe(11);
+    // Exhaustive registry — source health counts collectors, never cmux.
+    expect(PROVIDERS).toEqual(["codex", "omp", "claude", "cursor", "factory", "prime", "grok", "hermes", "muse", "antigravity", "copilot", "gemini", "opencode", "pi"]);
+    expect(PROVIDERS.length).toBe(14);
     const _exhaustive: Set<typeof PROVIDERS[number]> = new Set(PROVIDERS); void _exhaustive;
 
     // Snapshot sourceHealth must agree: healthy = PROVIDERS.length when no errors and none absent

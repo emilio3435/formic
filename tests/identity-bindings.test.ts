@@ -568,6 +568,9 @@ describe("binding wiring through the refresh engine", () => {
         muse: { value: [], errors: [] },
         antigravity: { value: [], errors: [] },
         copilot: { value: [], errors: [] },
+        gemini: { value: [], errors: [] },
+        opencode: { value: [], errors: [] },
+        pi: { value: [], errors: [] },
       }),
       cmux: async () => ({ value: [scans[Math.min(scanNumber, scans.length - 1)]], errors: [] }),
       notifications: async () => ({ value: [], errors: [] }),
@@ -651,11 +654,11 @@ describe("durable binding store", () => {
     expect(reopened.get(SESSION_ID)).toEqual(binding(SESSION_ID, "2026-07-23T06:00:00.000Z"));
   });
 
-  test("factory, prime, grok, hermes, muse, antigravity, and copilot bindings all survive a reopen", async () => {
+  test("newer provider bindings, including Gemini CLI, all survive a reopen", async () => {
     const { files } = virtualFiles();
     const path = "/virtual/identity-bindings.json";
     const confirmedAt = "2026-07-23T06:00:00.000Z";
-    const providers = ["factory", "prime", "grok", "hermes", "muse", "antigravity", "copilot"] as const;
+    const providers = ["factory", "prime", "grok", "hermes", "muse", "antigravity", "copilot", "gemini"] as const;
     const store = await JsonIdentityBindingStore.open(path, files, () => Date.parse(confirmedAt));
 
     await store.putMany(providers.map((provider) => ({

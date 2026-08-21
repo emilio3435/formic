@@ -32,7 +32,6 @@ export const DEFAULT_MODEL_CONFIG: ModelConfig = {
     "gpt-5.4": 131_072,
     "gpt-5.6-sol": 258_400,
     "gpt-5.6-luna": 258_400,
-    prime: 1_000_000,
     "gemini-3.7-flash": 1_048_576,
     "gemini-3.7": 1_048_576,
     "gemini 3.7": 1_048_576,

@@ -1,8 +1,10 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseClaudeJsonl, parseCodexJsonl, parseOmpJsonl } from "../src/server/collectors";
+import { parseCursorChildSession } from "../src/server/cursor";
+import { parseGeminiJsonl } from "../src/server/gemini";
 import { sessionCallsResponse } from "../src/server/session-calls";
 import { buildSnapshot } from "../src/server/snapshot";
 import type { CollectedAgent } from "../src/server/types";
@@ -220,6 +222,26 @@ describe("the endpoint answers with checkable evidence", () => {
     expect(body.sessionProcessed).toBe(293_235);
   });
 
+  test("Gemini debug session calls reparse the bounded transcript with prefix sums", async () => {
+    const source = join(
+      import.meta.dir,
+      "fixtures/gemini/demo-project/chats/session-2026-08-19T12-00-abcd1234.jsonl",
+    );
+    const text = await readFile(source, "utf8");
+    const parsed = parseGeminiJsonl(text, { sourcePath: source, nowMs: Date.parse(at(9)) })!;
+    const agent = {
+      ...parsed,
+      artifacts: [{ kind: "transcript", path: source, label: "Transcript" } as never],
+    };
+
+    expect(parsed.callSizes).toEqual([125, 150]);
+    const { body } = await serve([agent], agent.id);
+    expect(body.calls).toEqual([125, 150]);
+    expect(body.sessionProcessed).toBe(275);
+    expect(body.prefixSums).toEqual([125, 275]);
+    expect(body.unavailable).toBeUndefined();
+  });
+
   test("a total that is NOT a prefix does not match one", async () => {
     /* The control, and without it the check above proves nothing: a series
        whose prefix sums covered every plausible number would "recognise"
@@ -263,6 +285,24 @@ describe("the endpoint answers with checkable evidence", () => {
     expect(body.ok).toBe(true);
     expect(body.calls).toBeNull();
     expect(body.unavailable).toMatch(/session-cumulative/i);
+  });
+
+  test("I-103 keeps Cursor callSizes absent and reports the boundary directly", async () => {
+    const cursor = parseCursorChildSession({
+      sessionId: "6514e366-df29-434b-979d-52a26168e188",
+      parentSessionId: "286ab053-e84f-4538-9292-4aa3fae6fe9b",
+      cwd: "/tmp/formic",
+      transcriptJsonl: JSON.stringify({ role: "user", message: { content: "Inspect Cursor calls." } }),
+      transcriptPath: "/tmp/cursor-child.jsonl",
+      updatedAtMs: Date.parse(at(1)),
+      nowMs: Date.parse(at(2)),
+    })!;
+
+    expect(cursor).not.toHaveProperty("callSizes");
+    const { body } = await serve([cursor], cursor.id);
+    expect(body.calls).toBeNull();
+    expect(body.sessionProcessed).toBeNull();
+    expect(body.unavailable).toMatch(/does not record per-call/i);
   });
 
   test("an agent with no transcript at all is distinguished from one with no usage", async () => {
