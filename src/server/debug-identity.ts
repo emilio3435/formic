@@ -15,6 +15,7 @@ import {
 } from "./gemini";
 import { isReplicaBlob, parseReplicaBlob } from "./grok-bot";
 import { readOpenCodeStore } from "./opencode-store";
+import { readKiloStore } from "./kilo-store";
 import { readPiSessionFile } from "./pi";
 import { routingSurfaceObservations, type RoutingSurfaceObservation } from "./targets";
 import type { CmuxSurface } from "./types";
@@ -798,6 +799,39 @@ function openCodeTranscriptLines(
   return { lines, parserTruncated: session.transcriptTruncated, missing: false };
 }
 
+function kiloTranscriptLines(
+  agent: AgentSnapshot,
+  source: string,
+): {
+  lines: TranscriptLine[];
+  parserTruncated: boolean;
+  missing: boolean;
+} {
+  const session = readKiloStore(source, { sessionId: agent.sourceSessionId }).sessions[0];
+  if (!session) return { lines: [], parserTruncated: false, missing: true };
+  const lines: TranscriptLine[] = [];
+  for (const event of session.events) {
+    if (event.kind === "tool") {
+      lines.push({
+        at: transcriptTimestamp(event.observedAt),
+        role: "tool",
+        text: [
+          event.title ?? event.toolName,
+          `Call: ${event.callId}`,
+          `Status: ${event.status}`,
+        ].join("\n"),
+      });
+      continue;
+    }
+    lines.push({
+      at: transcriptTimestamp(event.observedAt),
+      role: event.kind === "reasoning" ? "system" : event.role,
+      text: event.kind === "reasoning" ? `Thought\n${event.text}` : event.text,
+    });
+  }
+  return { lines, parserTruncated: session.transcriptTruncated, missing: false };
+}
+
 export async function transcriptResponse(
   snapshot: HubSnapshot,
   agentId: string,
@@ -852,6 +886,31 @@ export async function transcriptResponse(
             error: {
               code: "TRANSCRIPT_SESSION_GONE",
               message: "The OpenCode session is missing from its store and is no longer available.",
+            },
+          },
+          { status: 410, headers: responseHeaders },
+        );
+      }
+      return Response.json(
+        {
+          ok: true,
+          agentId,
+          source,
+          truncated: transcript.parserTruncated || transcript.lines.length > limit,
+          lines: transcript.lines.slice(-limit),
+        },
+        { headers: responseHeaders },
+      );
+    }
+    if (agent.provider === "kilo") {
+      const transcript = kiloTranscriptLines(agent, source);
+      if (transcript.missing) {
+        return Response.json(
+          {
+            ok: false,
+            error: {
+              code: "TRANSCRIPT_SESSION_GONE",
+              message: "The Kilo session is missing from its store and is no longer available.",
             },
           },
           { status: 410, headers: responseHeaders },

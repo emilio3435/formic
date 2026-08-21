@@ -357,11 +357,11 @@ describe("B2 [TL;DR] render proof — prime.ts → transcriptTail → snapshot.t
     expect(agent.transcriptTail).toContain("line 99");
   });
 
-  test("14/14 healthy counts PROVIDERS (including Gemini CLI, OpenCode, and Pi) not providers+cmux", async () => {
+  test("15/15 healthy counts PROVIDERS (including Gemini CLI, OpenCode, Pi, and Kilo) not providers+cmux", async () => {
     const { PROVIDERS } = await import("../src/shared/types");
     // Exhaustive registry — source health counts collectors, never cmux.
-    expect(PROVIDERS).toEqual(["codex", "omp", "claude", "cursor", "factory", "prime", "grok", "hermes", "muse", "antigravity", "copilot", "gemini", "opencode", "pi"]);
-    expect(PROVIDERS.length).toBe(14);
+    expect(PROVIDERS).toEqual(["codex", "omp", "claude", "cursor", "factory", "prime", "grok", "hermes", "muse", "antigravity", "copilot", "gemini", "opencode", "pi", "kilo"]);
+    expect(PROVIDERS.length).toBe(15);
     const _exhaustive: Set<typeof PROVIDERS[number]> = new Set(PROVIDERS); void _exhaustive;
 
     // Snapshot sourceHealth must agree: healthy = PROVIDERS.length when no errors and none absent

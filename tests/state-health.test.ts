@@ -31,6 +31,7 @@ const emptySessions = () => ({
   gemini: { value: [], errors: [] },
   opencode: { value: [], errors: [] },
   pi: { value: [], errors: [] },
+  kilo: { value: [], errors: [] },
 });
 
 const ROUTING_RACE_SESSION_ID = "routing-race-session";
@@ -1730,6 +1731,7 @@ describe("what is recorded is what is published", () => {
         gemini: { value: [], errors: [] },
         opencode: { value: [], errors: [] },
         pi: { value: [], errors: [] },
+        kilo: { value: [], errors: [] },
       }),
       cmux: async () => ({ value: [], errors: [] }),
       notifications: async () => ({ value: [], errors: [] }),

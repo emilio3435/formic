@@ -150,9 +150,10 @@ export function providerCollectionConfigKey(
   extraPiRoots: readonly string[] = [],
   piLaunchObservations: readonly PiLaunchObservation[] = [],
   piReadDeadlineMs?: number,
+  extraKiloRoots: readonly string[] = [],
 ): string {
   const launches = canonicalPiLaunchObservations(piLaunchObservations);
-  return `${windowMs}:${thresholds?.freshMs ?? "default"}:${thresholds?.quietMs ?? "default"}:${extraCursorGuiRoots.join(",")}:bot=${extraGrokBotRoots.join(",")}:cli=${extraGrokCliRoots.join(",")}:copilot=${extraCopilotRoots.join(",")}:gemini=${extraGeminiCliRoots.join(",")}:opencode=${extraOpenCodeRoots.join(",")}:pi=${extraPiRoots.join(",")}:piLaunch=${JSON.stringify(launches)}:piRead=${piReadDeadlineMs ?? "default"}`;
+  return `${windowMs}:${thresholds?.freshMs ?? "default"}:${thresholds?.quietMs ?? "default"}:${extraCursorGuiRoots.join(",")}:bot=${extraGrokBotRoots.join(",")}:cli=${extraGrokCliRoots.join(",")}:copilot=${extraCopilotRoots.join(",")}:gemini=${extraGeminiCliRoots.join(",")}:opencode=${extraOpenCodeRoots.join(",")}:pi=${extraPiRoots.join(",")}:kilo=${extraKiloRoots.join(",")}:piLaunch=${JSON.stringify(launches)}:piRead=${piReadDeadlineMs ?? "default"}`;
 }
 
 function cwdByPid(output: string): Map<number, string> {
@@ -299,6 +300,7 @@ export interface HubStateOptions {
   geminiRootsReader?: () => readonly string[];
   openCodeRootsReader?: () => readonly string[];
   piRootsReader?: () => readonly string[];
+  kiloRootsReader?: () => readonly string[];
   piLaunchReader?: (runner: CommandRunner, signal?: AbortSignal) => Promise<readonly PiLaunchObservation[]>;
   triageReader?: () => readonly TriageQueueSummary[];
   burnReader?: () => Promise<UsageSummary>;
@@ -381,6 +383,7 @@ export class HubState {
   private readonly geminiRootsReader?: () => readonly string[];
   private readonly openCodeRootsReader?: () => readonly string[];
   private readonly piRootsReader?: () => readonly string[];
+  private readonly kiloRootsReader?: () => readonly string[];
   private readonly piLaunchReader: (runner: CommandRunner, signal?: AbortSignal) => Promise<readonly PiLaunchObservation[]>;
   private readonly triageReader?: () => readonly TriageQueueSummary[];
   private readonly burnReader?: () => Promise<UsageSummary>;
@@ -412,6 +415,7 @@ export class HubState {
     this.geminiRootsReader = options.geminiRootsReader;
     this.openCodeRootsReader = options.openCodeRootsReader;
     this.piRootsReader = options.piRootsReader;
+    this.kiloRootsReader = options.kiloRootsReader;
     this.piLaunchReader = options.piLaunchReader ?? readPiLaunchObservations;
     this.triageReader = options.triageReader;
     this.burnReader = options.burnReader;
@@ -984,6 +988,7 @@ export class HubState {
     const extraGeminiCliRoots = this.geminiRootsReader?.() ?? [];
     const extraOpenCodeRoots = this.openCodeRootsReader?.() ?? [];
     const extraPiRoots = this.piRootsReader?.() ?? [];
+    const extraKiloRoots = this.kiloRootsReader?.() ?? [];
     const piLaunchObservations = canonicalPiLaunchObservations(
       await this.piLaunchReader(this.runner, signal),
     );
@@ -1068,6 +1073,7 @@ export class HubState {
       extraGeminiCliRoots,
       extraOpenCodeRoots,
       extraPiRoots,
+      extraKiloRoots,
       piLaunchObservations,
       piReadDeadlineMs,
     };
@@ -1092,7 +1098,7 @@ export class HubState {
       ? track("providers", (async () => {
           const configKey = providerCollectionConfigKey(
             windowMs, thresholds, extraCursorGuiRoots, extraGrokBotRoots, extraGrokCliRoots, extraCopilotRoots, extraGeminiCliRoots, extraOpenCodeRoots, extraPiRoots,
-            piLaunchObservations, piReadDeadlineMs,
+            piLaunchObservations, piReadDeadlineMs, extraKiloRoots,
           );
           const selection = await this.#providerSettlement.settle(
             providers,

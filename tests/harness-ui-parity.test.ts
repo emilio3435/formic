@@ -1,6 +1,6 @@
 /* Harness row parity — every provider gets the same row, or the row says why not.
  *
- * Five gaps were found by reading the client against the fourteen-provider
+ * Five gaps were found by reading the client against the fifteen-provider
  * roster. This file holds the four that are about what a row SAYS (FE-1, FE-2,
  * FE-5a, FE-5b); tests/harness-responsive-parity.test.ts holds the one about
  * where a row PUTS things (FE-4), and tests/settings-collectors-dom.test.ts
@@ -70,6 +70,42 @@ const serverCollectors = readFileSync(resolve(root, "src/server/collectors.ts"),
 const parityDoc = readFileSync(resolve(root, "docs/PARITY.md"), "utf8");
 
 let PROVIDERS: readonly string[];
+
+const PROVIDER_LABELS: Record<string, string> = {
+  codex: "Codex",
+  omp: "OMP",
+  claude: "Claude Code",
+  cursor: "Cursor",
+  factory: "Factory",
+  prime: "Prime",
+  grok: "Grok Build",
+  hermes: "Hermes",
+  muse: "Muse Code",
+  antigravity: "Antigravity",
+  copilot: "Copilot CLI",
+  gemini: "Gemini CLI",
+  opencode: "OpenCode",
+  pi: "Pi",
+  kilo: "Kilo",
+};
+
+const HARNESS_LABELS: Record<string, string> = {
+  codex: "Codex",
+  omp: "OMP",
+  claude: "Claude Code",
+  cursor: "Cursor",
+  factory: "Factory",
+  prime: "Prime",
+  grok: "Grok Build",
+  hermes: "Hermes",
+  muse: "Muse Code",
+  antigravity: "Antigravity",
+  copilot: "Copilot CLI",
+  gemini: "Gemini CLI",
+  opencode: "OpenCode",
+  pi: "Pi",
+  kilo: "Kilo Code",
+};
 
 beforeAll(async () => {
   // @ts-expect-error The dependency-free browser client intentionally has no declaration file.
@@ -373,7 +409,7 @@ describe("FE-1 a session with no recorded provider is never presented as Claude"
     expect(name).not.toMatch(/claude/i);
   });
 
-  test("a known harness is named on the focusable row, for all fourteen", () => {
+  test("a known harness is named on the focusable row, for all fifteen", () => {
     /* The counter-proof, over the whole roster rather than a four-row sample:
        the fix must ADD the harness to every row's name, not special-case the
        unknown one. A row that names the harness only when it is missing is a
@@ -382,7 +418,7 @@ describe("FE-1 a session with no recorded provider is never presented as Claude"
     for (const agent of allProviderRows(PROVIDERS)) {
       const name = String(renderRow(agent).attributes["aria-label"] || "");
       expect(name, `${agent.provider} row's accessible name omits its harness`)
-        .toContain("Harness: " + TF.providerLabel(agent.provider));
+        .toContain("Harness: " + HARNESS_LABELS[String(agent.provider)]);
     }
   });
 
@@ -444,50 +480,32 @@ describe("FE-1 a session with no recorded provider is never presented as Claude"
     expect(M.agentName({}), "a nameless record must still be called something").toBeTruthy();
 
     /* Counter-proof: a RECORDED provider still derives its folder identity, and
-       all fourteen canonical labels stay byte-identical. A repair that bought
+       all fifteen provider labels stay byte-identical. A repair that bought
        honesty for the unknown row by dropping cwd naming for everyone would
        pass every assertion above and fail here. */
     for (const p of PROVIDERS) {
       expect(M.sourceAgentName({ provider: p, cwd: "/synthetic/workspace/formic" }),
-        `${p} lost its folder identity`).toBe(TF.providerLabel(p) + " · formic");
+        `${p} lost its folder identity`).toBe(PROVIDER_LABELS[p] + " · formic");
     }
   });
 });
 
-/* ================= FE-2 — one operator label per provider ================= */
+/* ================= FE-2 — provider labels and visible harness labels ================= */
 
-describe("FE-2 every PROVIDERS member has one operator label shared by every surface", () => {
-  /* Five maps carry a provider's name and they did not agree. PROVIDER_LABELS is
+describe("FE-2 every PROVIDERS member has explicit provider and harness labels", () => {
+  /* Five maps carry a provider or harness name and they did not agree. PROVIDER_LABELS is
      an untyped object literal, which is exactly why it was the one that slipped:
      the four typed Record<Provider, string> maps failed the build when Gemini was
      added and this one silently returned the raw key. So one board printed
      "gemini" in the Mix beside "Gemini CLI" in the filter, the row and the
-     Inspector. */
+     Inspector. Kilo deliberately keeps its provider/name/search label "Kilo"
+     while the visible harness mark, cell, facet, and Inspector say "Kilo Code". */
 
-  /** The canonical roster. The column these strings head is titled Harness, so
-   *  the qualified form is the correct one — "Claude" names a model family as
-   *  readily as a harness, and the board has a separate Agent mark for that. */
-  const CANONICAL: Record<string, string> = {
-    codex: "Codex",
-    omp: "OMP",
-    claude: "Claude Code",
-    cursor: "Cursor",
-    factory: "Factory",
-    prime: "Prime",
-    grok: "Grok Build",
-    hermes: "Hermes",
-    muse: "Muse Code",
-    antigravity: "Antigravity",
-    copilot: "Copilot CLI",
-    gemini: "Gemini CLI",
-    opencode: "OpenCode",
-    pi: "Pi",
-  };
-
-  test("the canonical roster covers PROVIDERS exactly — no member, no extra", () => {
+  test("both label rosters cover PROVIDERS exactly — no member, no extra", () => {
     /* Written over PROVIDERS rather than over the map's own keys: a catalog that
        audits itself cannot notice the provider nobody added to it. */
-    expect([...PROVIDERS].sort()).toEqual(Object.keys(CANONICAL).sort());
+    expect([...PROVIDERS].sort()).toEqual(Object.keys(PROVIDER_LABELS).sort());
+    expect([...PROVIDERS].sort()).toEqual(Object.keys(HARNESS_LABELS).sort());
   });
 
   test("providerLabel never leaks a raw provider key", () => {
@@ -500,13 +518,22 @@ describe("FE-2 every PROVIDERS member has one operator label shared by every sur
     }
   });
 
-  test("every label map answers with the one canonical string", () => {
+  test("every label map answers with its provider or harness contract", () => {
     for (const p of PROVIDERS) {
-      const want = CANONICAL[p];
-      expect(TF.providerLabel(p), `providerLabel(${p})`).toBe(want);
-      expect(M.HARNESS_MARK[p]?.label, `HARNESS_MARK.${p}.label`).toBe(want);
-      expect(NAMING.PROVIDER_DISPLAY_NAMES[p], `client PROVIDER_DISPLAY_NAMES.${p}`).toBe(want);
+      expect(TF.providerLabel(p), `providerLabel(${p})`).toBe(PROVIDER_LABELS[p]);
+      expect(M.HARNESS_MARK[p]?.label, `HARNESS_MARK.${p}.label`).toBe(HARNESS_LABELS[p]);
+      expect(NAMING.PROVIDER_DISPLAY_NAMES[p], `client PROVIDER_DISPLAY_NAMES.${p}`)
+        .toBe(PROVIDER_LABELS[p]);
     }
+  });
+
+  test("Kilo alone preserves the accepted provider-name versus harness-label boundary", () => {
+    expect(PROVIDERS.filter((p) => PROVIDER_LABELS[p] !== HARNESS_LABELS[p])).toEqual(["kilo"]);
+    expect({
+      provider: TF.providerLabel("kilo"),
+      clientName: NAMING.PROVIDER_DISPLAY_NAMES.kilo,
+      harness: M.HARNESS_MARK.kilo?.label,
+    }).toEqual({ provider: "Kilo", clientName: "Kilo", harness: "Kilo Code" });
   });
 
   test("the server NAMES a session with the canonical label, for every provider", async () => {
@@ -523,7 +550,7 @@ describe("FE-2 every PROVIDERS member has one operator label shared by every sur
         "/synthetic",
       );
       expect(named.name, `the server named a ${p} session "${named.name}"`)
-        .toBe(`${CANONICAL[p]} · formic`);
+        .toBe(`${PROVIDER_LABELS[p]} · formic`);
     }
   });
 
@@ -543,7 +570,7 @@ describe("FE-2 every PROVIDERS member has one operator label shared by every sur
         meta: {},
       } as never);
       expect(withCwd.displayName, `makeAgent named a ${p} session "${withCwd.displayName}"`)
-        .toBe(`${CANONICAL[p]} · formic`);
+        .toBe(`${PROVIDER_LABELS[p]} · formic`);
 
       /* And the last-resort fallback, which is the one an operator sees when a
          session has neither a folder nor a task. */
@@ -553,7 +580,7 @@ describe("FE-2 every PROVIDERS member has one operator label shared by every sur
         meta: {},
       } as never);
       expect(bare.displayName, `makeAgent's ${p} fallback is "${bare.displayName}"`)
-        .toBe(`${CANONICAL[p]} session`);
+        .toBe(`${PROVIDER_LABELS[p]} session`);
     }
   });
 
@@ -587,10 +614,12 @@ describe("FE-2 every PROVIDERS member has one operator label shared by every sur
     expect(TF.providerLabel("codex")).toBe("Codex");
     expect(TF.providerLabel("opencode")).toBe("OpenCode");
     expect(TF.providerLabel("pi")).toBe("Pi");
+    expect(TF.providerLabel("kilo")).toBe("Kilo");
+    expect(M.HARNESS_MARK.kilo?.label).toBe("Kilo Code");
   });
 
-  test("all fourteen print that one string in the rendered row, drawer and Mix", () => {
-    /* Every provider, through the three surfaces that actually paint the label —
+  test("all fifteen print the correct provider or harness string in the row, drawer and Mix", () => {
+    /* Every provider, through the three surfaces that actually paint a label —
        not four hand-picked ones, and not the label function standing in for the
        surfaces that call it. The rows carry display names like "worker-3" on
        purpose: a fixture whose name repeats the label would let each assertion
@@ -602,11 +631,10 @@ describe("FE-2 every PROVIDERS member has one operator label shared by every sur
 
     for (const [i, agent] of rows.entries()) {
       const p = String(agent.provider);
-      const want = CANONICAL[p];
-      expect(harnessCellText(renderRow(agent)), `row .ri-harness for ${p}`).toBe(want);
-      expect(textOf(renderDrawer(agent)), `Inspector for ${p}`).toContain(want);
+      expect(harnessCellText(renderRow(agent)), `row .ri-harness for ${p}`).toBe(HARNESS_LABELS[p]);
+      expect(textOf(renderDrawer(agent)), `Inspector for ${p}`).toContain(HARNESS_LABELS[p]);
       const segText = textOf(segs[i]) + " " + String(segs[i].attributes["aria-label"] || "");
-      expect(segText, `Mix segment for ${p}`).toContain(want);
+      expect(segText, `Mix segment for ${p}`).toContain(PROVIDER_LABELS[p]);
     }
   });
 
@@ -628,7 +656,7 @@ describe("FE-2 every PROVIDERS member has one operator label shared by every sur
     const byValue = new Map(options.map((o: { value: string; label: string }) => [o.value, o.label]));
     for (const p of PROVIDERS) {
       expect(byValue.has(p), `the Harness lens never offers ${p}`).toBe(true);
-      expect(byValue.get(p), `the ${p} lens option leaked a raw key`).toBe(CANONICAL[p]);
+      expect(byValue.get(p), `the ${p} lens option leaked a raw key`).toBe(HARNESS_LABELS[p]);
     }
   });
 
@@ -642,11 +670,15 @@ describe("FE-2 every PROVIDERS member has one operator label shared by every sur
     const prog = { id: "prog_synthetic", name: progName, agents: rows };
 
     /* NEUTRALITY, PROVEN MECHANICALLY. Every searchable string is checked
-       against every provider key and every canonical label. Eyeballing this is
+       against every provider key and every provider or harness label. Eyeballing this is
        how "comparison" survived — it contains `omp`, so an OMP search matched
-       all fourteen rows and the cross-provider negative below could never fail.
+       all fifteen rows and the cross-provider negative below could never fail.
        If the inputs are not neutral, the positive assertions are worthless, so
        this runs first. */
+    const labels = new Set([
+      ...Object.values(PROVIDER_LABELS),
+      ...Object.values(HARNESS_LABELS),
+    ]);
     for (const agent of rows) {
       for (const s of searchableStrings(agent, progName)) {
         const low = s.toLowerCase();
@@ -654,9 +686,9 @@ describe("FE-2 every PROVIDERS member has one operator label shared by every sur
           expect(low, `a searchable string "${s}" contains the provider key "${key}"`)
             .not.toContain(key);
         }
-        for (const p of PROVIDERS) {
-          expect(low, `a searchable string "${s}" seeds the label "${CANONICAL[p]}"`)
-            .not.toContain(CANONICAL[p].toLowerCase());
+        for (const label of labels) {
+          expect(low, `a searchable string "${s}" seeds the label "${label}"`)
+            .not.toContain(label.toLowerCase());
         }
       }
     }
@@ -665,8 +697,8 @@ describe("FE-2 every PROVIDERS member has one operator label shared by every sur
        the ONLY path left for it to travel is the real label seam. */
     for (const agent of rows) {
       const p = String(agent.provider);
-      expect(M.matchesQuery(agent, prog, CANONICAL[p].toLowerCase()),
-        `searching "${CANONICAL[p]}" does not find its own ${p} row`).toBe(true);
+      expect(M.matchesQuery(agent, prog, HARNESS_LABELS[p].toLowerCase()),
+        `searching "${HARNESS_LABELS[p]}" does not find its own ${p} row`).toBe(true);
     }
   });
 
@@ -700,10 +732,10 @@ describe("FE-2 every PROVIDERS member has one operator label shared by every sur
         if (other === own) continue;
         /* Skip labels that are substrings of the row's own label — "Pi" inside
            a longer word is a matcher artefact, not a leak. */
-        if (CANONICAL[own].toLowerCase().includes(CANONICAL[other].toLowerCase())) continue;
+        if (HARNESS_LABELS[own].toLowerCase().includes(HARNESS_LABELS[other].toLowerCase())) continue;
         expect(
-          M.matchesQuery(agent, prog, CANONICAL[other].toLowerCase()),
-          `the ${own} row answers to "${CANONICAL[other]}"`,
+          M.matchesQuery(agent, prog, HARNESS_LABELS[other].toLowerCase()),
+          `the ${own} row answers to "${HARNESS_LABELS[other]}"`,
         ).toBe(false);
       }
     }
@@ -711,8 +743,8 @@ describe("FE-2 every PROVIDERS member has one operator label shared by every sur
     /* A providerless record answers to no harness label at all. */
     for (const p of PROVIDERS) {
       expect(
-        M.matchesQuery(R20_MISSING_PROVIDER, prog, CANONICAL[p].toLowerCase()),
-        `the providerless row answers to "${CANONICAL[p]}"`,
+        M.matchesQuery(R20_MISSING_PROVIDER, prog, HARNESS_LABELS[p].toLowerCase()),
+        `the providerless row answers to "${HARNESS_LABELS[p]}"`,
       ).toBe(false);
     }
   });
@@ -746,7 +778,8 @@ describe("FE-2 every PROVIDERS member has one operator label shared by every sur
     expect([...parsed.keys()].sort(), "the documented roster is not the code's roster")
       .toEqual([...PROVIDERS].sort());
     for (const p of PROVIDERS) {
-      expect(parsed.get(p), `docs/PARITY.md documents ${p} as "${parsed.get(p)}"`).toBe(CANONICAL[p]);
+      expect(parsed.get(p), `docs/PARITY.md documents ${p} as "${parsed.get(p)}"`)
+        .toBe(PROVIDER_LABELS[p]);
     }
   });
 });
@@ -778,7 +811,7 @@ describe("FE-5a a Mix segment keeps its provider name when the visible text coll
       .toMatch(/@media \(max-width: 900px\) \{[^@]*\.mix-seg \.prov-name \{[^}]*display:\s*none/);
   });
 
-  test("all fourteen segments carry an aria-label with the canonical label and count", () => {
+  test("all fifteen segments carry an aria-label with the canonical label and count", () => {
     /* At 900px and below — which includes BOTH the 720 and 390 screenshot
        viewports — the visible name is display:none and the segment is left as a
        bare integer. A screen reader reads the whole Mix as "3 2 1 1 5 2 1".
@@ -940,7 +973,7 @@ describe("FE-5a a Mix segment keeps its provider name when the visible text coll
 /* ================= FE-5b — the Inspector's provider channel ================= */
 
 describe("FE-5b the Inspector channel is provider-specific or a declared shared fallback", () => {
-  /* The PUBLIC proof is the rendered drawer for all fourteen providers. The
+  /* The PUBLIC proof is the rendered drawer for all fifteen providers. The
      stylesheet and ledger reads below are SUPPORT only: they answer "was the
      shared fallback declared on purpose", which no rendered node can show,
      and they are scoped so a colour named in a comment cannot satisfy them. */
@@ -992,7 +1025,7 @@ describe("FE-5b the Inspector channel is provider-specific or a declared shared 
        `--prov` rule of its own today; changing it is a deliberate edit here. */
     const EXPECTED_FALLBACK = [
       "antigravity", "copilot", "factory", "gemini", "grok",
-      "hermes", "muse", "opencode", "pi", "prime",
+      "hermes", "kilo", "muse", "opencode", "pi", "prime",
     ];
     const uncovered = PROVIDERS.filter((p) => !declared.has(p));
     expect([...uncovered].sort(), "the set of providers relying on the shared channel changed")
@@ -1613,7 +1646,7 @@ describe("controls follow the server's attestation, not the provider", () => {
   test("no client-side per-provider shortcut decides these states", () => {
     /* The same agent shape, relabelled provider by provider, must resolve to the
        same control state every time. A provider-specific predicate would show up
-       here as one harness disagreeing with the other thirteen. */
+       here as one harness disagreeing with the other fourteen. */
     for (const p of PROVIDERS) {
       expect(M.deriveControlState({ ...R16_OPENCODE_OBSERVED_ONLY, provider: p }), p).toBe("observed-only");
       expect(M.deriveControlState({ ...R15_GEMINI_LINKED, provider: p }), p).toBe("linked");
@@ -1622,7 +1655,7 @@ describe("controls follow the server's attestation, not the provider", () => {
 
   test("every control state renders the same way on the row and in the Inspector, for every provider", () => {
     /* deriveControlState is one function; what an operator meets is a row's
-       accessible name and a drawer. Calling the function fourteen times proves
+       accessible name and a drawer. Calling the function fifteen times proves
        the FUNCTION is provider-neutral and says nothing about whether the two
        surfaces agree — a row reading "Ready" beside a drawer that refuses to
        send is the failure this pins. */
@@ -1796,7 +1829,7 @@ describe("controls follow the server's attestation, not the provider", () => {
        on today's board — so it never executed. A guard that cannot be reached
        is a guard that is not there, and it was being counted as coverage.
 
-       It renders the real command dock for all fourteen providers across all
+       It renders the real command dock for all fifteen providers across all
        four control states and makes one claim: the verbs are named in exactly
        one casing. A lowercase twin would let the exact-name lookups elsewhere
        be satisfied by a control the product does not render. */
@@ -1928,7 +1961,7 @@ describe("a source that was never installed is not a source that broke", () => {
 
   test("nothing installed at all still reports calm and still says something", () => {
     /* The day-one screen. A newcomer running one harness must not be told that
-       something is broken because they have not installed the other thirteen —
+       something is broken because they have not installed the other fourteen —
        and the line must not go silent either, because QUICKSTART sends them here
        to look for exactly this proof that the board is working. */
     const verdict = M.emptyBoardVerdict(ALL_ABSENT_BOARD());
@@ -2348,7 +2381,7 @@ describe("every row is reachable and returns focus by its own key", () => {
        contract, and the first divergence between the copies would be invisible.
 
        What this file adds is the part that is about HARNESS PARITY rather than
-       about the handler: that the navigable set is the fourteen-provider board,
+       about the handler: that the navigable set is the fifteen-provider board,
        and that each provider's row key is stable enough to be returned to. */
     expect(press("ArrowDown").handled, "the provider rows are not navigable at all").toBe(true);
     expect(press("ArrowDown").prevented, "row navigation did not consume the keystroke").toBe(true);
@@ -2508,10 +2541,10 @@ test("FE-SOURCE-REPAIR-2 the canonical harness label a row prints finds that row
   }));
   const progName = "Authored lane board";
   const prog = { id: "prog_synthetic", name: progName, agents: NEUTRAL };
-  /* The five whose canonical label is not merely their raw key in prettier
+  /* The six whose harness label is not merely their raw key in prettier
      case. For these the label seam is the only remaining path, and that is
      proven mechanically below rather than asserted by inspection. */
-  const QUALIFIED = ["claude", "grok", "muse", "copilot", "gemini"];
+  const QUALIFIED = ["claude", "grok", "muse", "copilot", "gemini", "kilo"];
 
   expect(NEUTRAL.length, "the authored cohort no longer covers the whole roster").toBe(PROVIDERS.length);
 
@@ -2520,7 +2553,7 @@ test("FE-SOURCE-REPAIR-2 the canonical harness label a row prints finds that row
     /* The query is read off the RENDERED row rather than a table in this file,
        so it is exactly the string an operator can see and would type. */
     const label = harnessCellText(renderRow(agent));
-    expect(label, `the ${p} row prints no harness label to search for`).toBe(TF.providerLabel(p));
+    expect(label, `the ${p} row prints no harness label to search for`).toBe(HARNESS_LABELS[p]);
 
     if (QUALIFIED.includes(p)) {
       const elsewhere = [
@@ -2539,7 +2572,7 @@ test("FE-SOURCE-REPAIR-2 the canonical harness label a row prints finds that row
   /* And widening the haystack must not make search answer yes to everything: a
      record with no provider answers to no harness label at all. */
   for (const p of PROVIDERS) {
-    const label = TF.providerLabel(p);
+    const label = HARNESS_LABELS[p];
     expect(M.matchesQuery(R20_MISSING_PROVIDER, prog, label.toLowerCase()),
       `the providerless row answers to "${label}"`).toBe(false);
   }

@@ -163,6 +163,7 @@ export const PROVIDER_LABELS = {
   gemini: "Gemini CLI",
   opencode: "OpenCode",
   pi: "Pi",
+  kilo: "Kilo",
 };
 export const HARNESS_LABELS = PROVIDER_LABELS;
 export const providerLabel = (p) => PROVIDER_LABELS[p] || p;

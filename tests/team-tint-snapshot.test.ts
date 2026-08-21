@@ -315,6 +315,7 @@ const emptySessions = () => ({
   gemini: { value: [], errors: [] },
   opencode: { value: [], errors: [] },
   pi: { value: [], errors: [] },
+  kilo: { value: [], errors: [] },
 });
 
 function collectedAgent(id: string, sessionId: string): CollectedAgent {

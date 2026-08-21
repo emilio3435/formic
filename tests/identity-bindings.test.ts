@@ -571,6 +571,7 @@ describe("binding wiring through the refresh engine", () => {
         gemini: { value: [], errors: [] },
         opencode: { value: [], errors: [] },
         pi: { value: [], errors: [] },
+        kilo: { value: [], errors: [] },
       }),
       cmux: async () => ({ value: [scans[Math.min(scanNumber, scans.length - 1)]], errors: [] }),
       notifications: async () => ({ value: [], errors: [] }),

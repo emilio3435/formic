@@ -527,6 +527,7 @@ test("the cmux refresh tick supplies manifests and workspace env to the snapshot
       gemini: { value: [], errors: [] },
       opencode: { value: [], errors: [] },
       pi: { value: [], errors: [] },
+      kilo: { value: [], errors: [] },
     }),
     cmux: async () => ({
       value: [{

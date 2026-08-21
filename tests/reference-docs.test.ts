@@ -1105,7 +1105,7 @@ describe("day one on a machine without cmux", () => {
   });
 
   test("QUICKSTART names every collector the code has, with the path it reads", () => {
-    expect(providers.length, "the Provider union changed shape; re-read the roster").toBe(14);
+    expect(providers.length, "the Provider union changed shape; re-read the roster").toBe(15);
     const table = quickstart.slice(quickstart.indexOf("| Collector |"));
     for (const provider of providers) {
       expect(table.toLowerCase(), `QUICKSTART's collector table omits "${provider}"`)
@@ -1126,7 +1126,7 @@ describe("day one on a machine without cmux", () => {
     expect(quickstart, "QUICKSTART no longer names absence separately from health")
       .toMatch(/not installed/i);
     expect(quickstart, "QUICKSTART stopped telling the reader cmux is not a collector")
-      .toMatch(/cmux is not one of the (?:four|five|six|eight|ten|eleven|twelve|thirteen)/i);
+      .toMatch(/cmux is not one of the (?:four|five|six|eight|ten|eleven|twelve|thirteen|fourteen|fifteen)/i);
     /* Extra copies stay the same provider. Deleting this sentence would send
        a reader looking for a ninth collector instead of Settings. */
     expect(quickstart, "QUICKSTART stopped saying extra homes opt in under Settings")
@@ -1970,11 +1970,11 @@ describe("ANT-GUIDE tells a reader how to find their own blind spot", () => {
   test("the collectors it tells them to compare against are the real ones", () => {
     const union = read("src/shared/types.ts").match(/export type Provider = ([^;]+);/)?.[1] ?? "";
     const names = [...union.matchAll(/"([a-z]+)"/g)].map((m) => m[1]);
-    expect(names.length, "the Provider union changed shape").toBe(14);
+    expect(names.length, "the Provider union changed shape").toBe(15);
     const g = guide();
     /* The guide names them in reader-facing form, so check the mapping rather
        than the identifiers. */
-    for (const shown of ["Claude Code", "Codex", "Cursor", "OMP", "Factory", "Prime", "Grok", "Hermes", "Muse", "Antigravity", "Copilot", "Gemini CLI", "OpenCode", "Pi"]) {
+    for (const shown of ["Claude Code", "Codex", "Cursor", "OMP", "Factory", "Prime", "Grok", "Hermes", "Muse", "Antigravity", "Copilot", "Gemini CLI", "OpenCode", "Pi", "Kilo"]) {
       expect(g, `the guide stopped listing ${shown} among the collectors to compare against`)
         .toContain(shown);
     }

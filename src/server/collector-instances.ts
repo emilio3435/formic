@@ -12,7 +12,7 @@ export type CollectorKind =
   | "cursor-gui" | "cursor-cli" | "codex" | "claude" | "factory"
   | "prime" | "omp" | "grok-cli" | "hermes" | "grok-bot"
   | "muse" | "antigravity-cli" | "antigravity-desktop" | "antigravity-ide"
-  | "copilot" | "gemini-cli" | "opencode" | "pi" | "burnbar" | "cmux-hooks" | "unknown";
+  | "copilot" | "gemini-cli" | "opencode" | "pi" | "kilo" | "burnbar" | "cmux-hooks" | "unknown";
 
 export const SUPPORTED_ALTERNATE_HOME_KINDS = [
   "cursor-gui",
@@ -22,6 +22,7 @@ export const SUPPORTED_ALTERNATE_HOME_KINDS = [
   "gemini-cli",
   "opencode",
   "pi",
+  "kilo",
 ] as const satisfies readonly CollectorKind[];
 
 const SUPPORTED_ALTERNATE_HOME_KIND_SET = new Set<CollectorKind>(SUPPORTED_ALTERNATE_HOME_KINDS);
@@ -65,17 +66,20 @@ const PROVIDER_FOR = {
   "gemini-cli": "gemini",
   "opencode": "opencode",
   "pi": "pi",
+  "kilo": "kilo",
   "grok-bot": null,
   "burnbar": null,
   "cmux-hooks": null,
   "unknown": null,
 } as const satisfies Record<CollectorKind, Provider | null>;
 
-const NAME_TOKEN_RE = /^(?:claude|codex|cursor|grok|hermes|factory|prime|omp|droid|aider|continue|opencode|gemini|muse|antigravity|windsurf|copilot|crush|amp|pi(?:$|-\d))/i;
-const AGENT_MENTION_RE = /(?:claude|codex|cursor|grok|hermes|factory|prime|omp|droid|aider|continue|opencode|gemini|muse|antigravity|windsurf|copilot|crush|amp)|(?:^|[^A-Za-z0-9_-])pi(?:$|[^A-Za-z0-9_-])/i;
+const NAME_TOKEN_RE = /^(?:claude|codex|cursor|grok|hermes|factory|prime|omp|droid|aider|continue|opencode|kilo|gemini|muse|antigravity|windsurf|copilot|crush|amp|pi(?:$|-\d))/i;
+const AGENT_MENTION_RE = /(?:claude|codex|cursor|grok|hermes|factory|prime|omp|droid|aider|continue|opencode|kilo|gemini|muse|antigravity|windsurf|copilot|crush|amp)|(?:^|[^A-Za-z0-9_-])pi(?:$|[^A-Za-z0-9_-])/i;
 const SESSION_DIR_NAMES = new Set(["sessions", "projects", "chats", "conversations"]);
 const SKIP_WALK_NAMES = new Set(["node_modules", "Caches", "Logs"]);
 const OPENCODE_DATABASE = /^opencode(?:-[A-Za-z0-9][A-Za-z0-9._-]*)?\.db$/;
+const KILO_DATABASE = /^kilo(?:-[A-Za-z0-9][A-Za-z0-9._-]*)?\.db$/;
+const KILO_LEGACY_DATABASE = /^opencode-[A-Za-z0-9][A-Za-z0-9._-]*\.db$/;
 
 export function defaultHomes(home: string): ReadonlyArray<{ kind: CollectorKind; dataDir: string }> {
   return [
@@ -93,6 +97,7 @@ export function defaultHomes(home: string): ReadonlyArray<{ kind: CollectorKind;
     { kind: "gemini-cli", dataDir: join(home, ".gemini") },
     { kind: "opencode", dataDir: join(home, ".local/share/opencode") },
     { kind: "pi", dataDir: join(home, ".pi") },
+    { kind: "kilo", dataDir: join(home, ".local/share/kilo") },
     { kind: "antigravity-cli", dataDir: join(home, ".gemini/antigravity-cli") },
     { kind: "antigravity-desktop", dataDir: join(home, ".gemini/antigravity") },
     { kind: "antigravity-ide", dataDir: join(home, ".gemini/antigravity-ide") },
@@ -334,8 +339,18 @@ function unknownSignalCount(dataDir: string, fs: ScanFs, deadline?: number): num
 /* First match in the spec table wins. Existence only — never open sqlite or blobs. */
 export function classifyDataDir(dataDir: string, fs: ScanFs, deadline?: number): CollectorCandidate | undefined {
   const base = basename(dataDir);
+  const names = fs.readdir(dataDir);
 
-  if (fs.readdir(dataDir).some((name) => OPENCODE_DATABASE.test(name) && fs.exists(join(dataDir, name)))) {
+  if (names.some((name) => KILO_DATABASE.test(name) && fs.exists(join(dataDir, name)))) {
+    return candidate("kilo", dataDir, fs);
+  }
+  if (
+    (base === "kilo" || samePath(dataDir, join(fs.home(), ".local/share/kilo")))
+    && names.some((name) => KILO_LEGACY_DATABASE.test(name) && fs.exists(join(dataDir, name)))
+  ) {
+    return candidate("kilo", dataDir, fs);
+  }
+  if (names.some((name) => OPENCODE_DATABASE.test(name) && fs.exists(join(dataDir, name)))) {
     return candidate("opencode", dataDir, fs);
   }
   if (base.startsWith("Cursor") && fs.exists(join(dataDir, "User/globalStorage/state.vscdb"))) {
@@ -812,6 +827,7 @@ export interface OnboardedSessionRoots {
   extraGeminiCliRoots: string[];
   extraOpenCodeRoots: string[];
   extraPiRoots: string[];
+  extraKiloRoots: string[];
 }
 
 export function onboardedSessionRoots(store: JsonCollectorInstanceStore): OnboardedSessionRoots {
@@ -823,6 +839,7 @@ export function onboardedSessionRoots(store: JsonCollectorInstanceStore): Onboar
     extraGeminiCliRoots: store.onboardedRoots("gemini-cli"),
     extraOpenCodeRoots: store.onboardedRoots("opencode"),
     extraPiRoots: store.onboardedRoots("pi"),
+    extraKiloRoots: store.onboardedRoots("kilo"),
   };
 }
 

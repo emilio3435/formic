@@ -85,6 +85,9 @@ const SAMPLES: Record<Provider | "pi", { path?: string; command: string }> = {
   pi: {
     command: "pi --session-id pi.native_2026-08-20",
   },
+  kilo: {
+    command: "kilo --session ses_0123456789abcdefghijklmnop",
+  },
 };
 
 describe("every provider is visible to the process scanner", () => {

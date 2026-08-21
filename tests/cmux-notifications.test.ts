@@ -112,6 +112,7 @@ const emptySessions = () => ({
   gemini: { value: [], errors: [] },
   opencode: { value: [], errors: [] },
   pi: { value: [], errors: [] },
+  kilo: { value: [], errors: [] },
 });
 
 async function eventually(assertion: () => void): Promise<void> {

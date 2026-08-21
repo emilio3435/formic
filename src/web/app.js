@@ -680,13 +680,15 @@ function matchesQuery(agent, program, query) {
     agent.displayName, agent.nickname, agent.task, agent.cwd, agent.model,
     agent.provider, agent.role, agent.sourceSessionId, agent.statusReason,
     /* The harness label the row actually PRINTS. The raw key is already in the
-       haystack, but nine of the fourteen keys merely lower-case their label
-       while five ("Claude Code", "Grok Build", "Muse Code", "Copilot CLI",
-       "Gemini CLI") do not, so typing the string the Harness cell shows found
-       nothing on any row whose name was authored. Only the current row's own
-       label, and only when a provider survived: a record with no provider
-       answers to no harness label at all. */
-    agent.provider ? providerLabel(agent.provider) : null,
+       haystack, but nine of the fifteen keys merely lower-case their harness
+       label while six ("Claude Code", "Grok Build", "Muse Code", "Copilot CLI",
+       "Gemini CLI", "Kilo Code") do not, so typing the string the Harness cell
+       shows found nothing on any row whose name was authored. Only the current
+       row's own label, and only when a provider survived: a record with no
+       provider answers to no harness label at all. */
+    agent.provider
+      ? (HARNESS_MARK[harnessKeyOf(agent)]?.label || providerLabel(agent.provider))
+      : null,
     agent.transcriptTail, agent.status,
     ACTIVITY_LABELS[deriveActivity(agent)], OUTCOME_LABELS[deriveOutcome(agent)],
     program && program.name, program && programName(program),
@@ -9980,6 +9982,7 @@ const PROVIDER_MARK = {
   antigravity: { src: "/icons/antigravity.png", raster: true },
   opencode: { src: "/icons/opencode-provider.svg" },
   pi: { src: "/icons/pi.svg" },
+  kilo: { src: "/icons/kilo-provider.svg" },
 };
 
 /* Harness vs Agent — two badges per row. Harness = where it ran (provider), Agent = what thought (model family).
@@ -10006,6 +10009,7 @@ const HARNESS_MARK = {
   gemini: { src: "/icons/gemini-cli.svg", label: "Gemini CLI" },
   opencode: { src: "/icons/opencode.svg", label: "OpenCode" },
   pi: { src: "/icons/pi.svg", label: "Pi" },
+  kilo: { src: "/icons/kilo.svg", label: "Kilo Code" },
   omni: { src: "/icons/omp.svg", label: "OMP" },
 };
 const AGENT_MARK = {
@@ -10039,6 +10043,7 @@ function harnessKeyOf(agent) {
   return p || UNKNOWN_HARNESS;
 }
 function agentKeyOf(agent) {
+  if ((agent.rawModel?.providerRoute || "").toLowerCase() === "kilo") return "kilo";
   const m = (agent.model || "").toLowerCase();
   if (/grok/i.test(m)) return "grok";
   if (/muse-spark|spark/i.test(m)) return "spark";
@@ -15602,7 +15607,7 @@ Object.assign(globalThis.TheAntHill, {
   renderCmuxNotifySection, cmuxNotifyRow, notifyPanelPaintSig,
   renderNotificationCenter,
   clearCmuxNotification, applySyncAck, syncRequest, syncFailureText, syncPending,
-  HARNESS_MARK, AGENT_MARK, harnessKeyOf, agentKeyOf,
+  HARNESS_MARK, PROVIDER_MARK, AGENT_MARK, harnessKeyOf, agentKeyOf,
 });
 
 if (typeof document !== "undefined" && typeof window !== "undefined") {

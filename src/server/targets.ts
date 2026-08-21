@@ -73,7 +73,8 @@ export function sourceSessionHasProviderCollision(
   const providers = providersBySession.get(sessionId.toLowerCase());
   return (providers?.size ?? 0) > 1
     || (providers?.get("opencode") ?? 0) > 1
-    || (providers?.get("pi") ?? 0) > 1;
+    || (providers?.get("pi") ?? 0) > 1
+    || (providers?.get("kilo") ?? 0) > 1;
 }
 
 function sourceSessionClaims(surface: CmuxSurface): SessionIdentityClaim[] {
@@ -220,6 +221,9 @@ function resolveAgentTargetInternal(
   }
 
   const providersBySession = indexSessionIdentityProviders(sources);
+  const sameProviderOwners = providersBySession
+    .get(agent.sourceSessionId.toLowerCase())
+    ?.get(agent.provider) ?? 0;
   if (
     agent.provider === "pi"
     && (providersBySession.get(agent.sourceSessionId.toLowerCase())?.get("pi") ?? 0) > 1
@@ -247,7 +251,9 @@ function resolveAgentTargetInternal(
     });
     return finish(target(sharedHostSurface, "shared-host", SHARED_HOST_REASON, agent));
   }
-  const hookRecord = hookRecordFor(agent.provider, agent.sourceSessionId);
+  const hookRecord = agent.provider === "kilo" && sameProviderOwners > 1
+    ? undefined
+    : hookRecordFor(agent.provider, agent.sourceSessionId);
   if (hookRecord) {
     const matches = routableSurfaces.filter((surface) => surface.surfaceId === hookRecord.surfaceId);
     const quarantine = quarantined(matches);
@@ -323,6 +329,12 @@ function resolveAgentTargetInternal(
     steps?.push({ tier: "recorded", outcome: "no-match", detail: "Recorded cmux target IDs matched no ready surface; falling through to session evidence." });
   } else {
     steps?.push({ tier: "recorded", outcome: "skipped", detail: "No recorded cmux target IDs on this source." });
+  }
+
+  if (agent.provider === "kilo" && sameProviderOwners > 1) {
+    const reason = `${sameProviderOwners} Kilo instances claim source session ${agent.sourceSessionId}; an instance-qualified target is required.`;
+    steps?.push({ tier: "session", outcome: "ambiguous", detail: reason });
+    return finish({ resolution: "ambiguous", reason });
   }
 
   const sessionMatches = routableSurfaces.filter((surface) =>

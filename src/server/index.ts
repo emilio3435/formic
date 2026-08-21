@@ -75,6 +75,7 @@ const state = new HubState(runner, archiveStore, programHints, {
   geminiRootsReader: () => onboardedSessionRoots(collectorInstanceStore).extraGeminiCliRoots,
   openCodeRootsReader: () => onboardedSessionRoots(collectorInstanceStore).extraOpenCodeRoots,
   piRootsReader: () => onboardedSessionRoots(collectorInstanceStore).extraPiRoots,
+  kiloRootsReader: () => onboardedSessionRoots(collectorInstanceStore).extraKiloRoots,
   triageReader: () => triageStore.list(),
   cmuxExecutable,
   bindingStore: identityBindingStore,

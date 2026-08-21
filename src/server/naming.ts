@@ -91,6 +91,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<Provider, string> = {
   gemini: "Gemini CLI",
   opencode: "OpenCode",
   pi: "Pi",
+  kilo: "Kilo",
 };
 
 /* Strings that arrive in a name-shaped field but are not names. Each was

@@ -198,6 +198,7 @@ const HOME_MARK = {
   codex: "/icons/codex.webp",
   opencode: "/icons/opencode.svg",
   pi: "/icons/pi.svg",
+  kilo: "/icons/kilo.svg",
   burnbar: "/icons/history.svg",
 };
 
@@ -228,6 +229,7 @@ const PROVIDER_FOR_KIND = {
   "gemini-cli": "gemini",
   opencode: "opencode",
   pi: "pi",
+  kilo: "kilo",
 };
 
 /* The name this tile shows.
@@ -384,6 +386,7 @@ function renderCollectorsBlock() {
 }
 
 export {
+  HOME_MARK,
   collectorInstanceList,
   shortCollectorDir,
   collectorGroups,

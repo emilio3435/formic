@@ -326,6 +326,7 @@ describe("hub naming candidates", () => {
           gemini: { value: [], errors: [] },
           opencode: { value: [], errors: [] },
           pi: { value: [], errors: [] },
+          kilo: { value: [], errors: [] },
         }),
         cmux: async () => ({ value: [], errors: [] }),
         notifications: async () => ({ value: [], errors: [] }),

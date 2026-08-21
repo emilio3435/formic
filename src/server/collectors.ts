@@ -48,6 +48,7 @@ export interface CollectSessionsOptions {
   extraGeminiCliRoots?: readonly string[];
   extraOpenCodeRoots?: readonly string[];
   extraPiRoots?: readonly string[];
+  extraKiloRoots?: readonly string[];
   piLaunchObservations?: readonly import("./pi").PiLaunchObservation[];
   piCliSessionDir?: string;
   piLaunchCwd?: string;
@@ -111,6 +112,7 @@ const PROVIDER_NAMES: Record<Provider, string> = {
   gemini: "Gemini CLI",
   opencode: "OpenCode",
   pi: "Pi",
+  kilo: "Kilo",
 };
 
 const NON_TASK_PREFIXES = [
@@ -329,7 +331,7 @@ function taskDisplayName(task?: string): string | undefined {
 /* Which launcher a provider's explicit name came from. Each provider has
    exactly one place an authored name can originate, so this is a lookup rather
    than a per-call-site argument. */
-const AUTHORED_BY: Record<Exclude<Provider, "opencode">, AuthoredNameSource> = {
+const AUTHORED_BY: Record<Exclude<Provider, "opencode" | "kilo">, AuthoredNameSource> = {
   codex: "codex-nickname",
   omp: "omp-title",
   claude: "claude-subagent",
@@ -346,7 +348,7 @@ const AUTHORED_BY: Record<Exclude<Provider, "opencode">, AuthoredNameSource> = {
 };
 
 function authoredByFor(provider: Provider): AuthoredNameSource | undefined {
-  return provider === "opencode" ? undefined : AUTHORED_BY[provider];
+  return provider === "opencode" || provider === "kilo" ? undefined : AUTHORED_BY[provider];
 }
 
 function statusFrom(
@@ -1317,6 +1319,7 @@ function hookProcessAlive(
 function attachHookFacts(
   result: CollectionResult<CollectedAgent[]>,
   records: ReadonlyMap<string, HookSessionRecord>,
+  kiloOwnersBySession: ReadonlyMap<string, number>,
   starts: ReadonlyMap<number, number> | undefined,
   observedParents: ReadonlyMap<string, string> | undefined,
   knownAgentIds: ReadonlySet<string>,
@@ -1324,7 +1327,10 @@ function attachHookFacts(
   return {
     ...result,
     value: result.value.map((agent) => {
-      const record = records.get(`${agent.provider}:${agent.sourceSessionId.toLowerCase()}`);
+      const sessionId = agent.sourceSessionId.toLowerCase();
+      const record = agent.provider === "kilo" && kiloOwnersBySession.get(sessionId) !== 1
+        ? undefined
+        : records.get(`${agent.provider}:${sessionId}`);
       if (!record) return agent;
       const observedAlive = hookProcessAlive(record, starts);
       const retainedAlive = agent.processIds?.includes(record.pid) ? agent.processAlive : undefined;
@@ -1474,6 +1480,10 @@ export async function collectSessionProvider(
       const { collectPiSessions } = await import("./pi");
       return collectPiSessions(home, windowMs, thresholds, options, signal);
     }
+    case "kilo": {
+      const { collectKiloSessions } = await import("./kilo");
+      return collectKiloSessions(home, { extraDataDirs: options.extraKiloRoots ?? [] });
+    }
   }
 }
 
@@ -1489,6 +1499,11 @@ export function finalizeSessionProviders(
   const knownAgentIds = new Set(
     PROVIDERS.flatMap((provider) => results[provider].value.map((agent) => agent.id)),
   );
+  const kiloOwnersBySession = new Map<string, number>();
+  for (const agent of results.kilo.value) {
+    const sessionId = agent.sourceSessionId.toLowerCase();
+    kiloOwnersBySession.set(sessionId, (kiloOwnersBySession.get(sessionId) ?? 0) + 1);
+  }
   const processLineage = hookRecords.length > 0
     && (options.processLineageExec !== undefined || !options.hookProcessStarts)
     ? readProcessLineage(hookRecords, options.processLineageExec)
@@ -1500,7 +1515,14 @@ export function finalizeSessionProviders(
     provider,
     provider === "cursor"
       ? results[provider]
-      : attachHookFacts(results[provider], recordsBySession, starts, processLineage?.observedParents, knownAgentIds),
+      : attachHookFacts(
+          results[provider],
+          recordsBySession,
+          kiloOwnersBySession,
+          starts,
+          processLineage?.observedParents,
+          knownAgentIds,
+        ),
   ])) as SessionProviderResults;
 }
 

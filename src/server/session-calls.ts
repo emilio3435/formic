@@ -3,6 +3,7 @@ import { isAbsolute } from "node:path";
 import { parseClaudeJsonl, parseCodexJsonl, parseOmpJsonl } from "./collectors";
 import { parseGeminiConversationFile } from "./gemini";
 import { readOpenCodeStore } from "./opencode-store";
+import { readKiloStore } from "./kilo-store";
 import { readPiSessionFile } from "./pi";
 import type { CollectedAgent } from "./types";
 import type { HubSnapshot } from "../shared/types";
@@ -111,27 +112,30 @@ export async function sessionCallsResponse(
     });
   }
 
-  if (agent.provider === "opencode") {
+  if (agent.provider === "opencode" || agent.provider === "kilo") {
     try {
-      const evidence = readOpenCodeStore(source, { sessionId: agent.sourceSessionId });
+      const evidence = agent.provider === "kilo"
+        ? readKiloStore(source, { sessionId: agent.sourceSessionId })
+        : readOpenCodeStore(source, { sessionId: agent.sourceSessionId });
       const session = evidence.sessions[0];
+      const label = agent.provider === "kilo" ? "Kilo" : "OpenCode";
       if (!session) {
         return answer({
           source, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
-          unavailable: "The OpenCode store does not contain this session in the bounded read window.",
+          unavailable: `The ${label} store does not contain this session in the bounded read window.`,
         });
       }
       if (!session.callSizesComplete) {
         return answer({
           source, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
-          unavailable: "The OpenCode per-call series is corrupt, invalid, truncated, or incomplete, so it cannot be published as complete.",
+          unavailable: `The ${label} per-call series is corrupt, invalid, truncated, or incomplete, so it cannot be published as complete.`,
         });
       }
       const calls = session.callSizes;
       if (!calls || calls.length === 0) {
         return answer({
           source, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
-          unavailable: "The OpenCode store records no per-call usage for this session.",
+          unavailable: `The ${label} store records no per-call usage for this session.`,
         });
       }
       let running = 0;
@@ -146,7 +150,7 @@ export async function sessionCallsResponse(
     } catch (error) {
       return answer({
         source, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
-        unavailable: `The OpenCode store could not be read: ${error instanceof Error ? error.message : String(error)}`,
+        unavailable: `The ${agent.provider === "kilo" ? "Kilo" : "OpenCode"} store could not be read: ${error instanceof Error ? error.message : String(error)}`,
       });
     }
   }

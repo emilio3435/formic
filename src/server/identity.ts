@@ -37,9 +37,10 @@ const PROVIDER_BINARIES: Record<Provider, string> = {
   gemini: "gemini",
   opencode: "opencode",
   pi: "pi",
+  kilo: "kilo",
 };
 const AGENT_BINARIES = Object.values(PROVIDER_BINARIES).join("|");
-const RESUME_PROVIDERS = PROVIDERS.join("|");
+const RESUME_PROVIDERS = PROVIDERS.filter((provider) => provider !== "kilo").join("|");
 /* Cursor's current launcher runs a generic `agent` executable with the
    versioned Cursor Agent entrypoint as an argument. Recognize only that pair:
    it admits the pid to open-file inspection but does not itself claim a
@@ -217,6 +218,13 @@ export function identitiesFromCommand(command: string): IdentityHint[] {
       /(?:^|\s)(?:--session(?:\s+|=)|-s\s+)(ses_[0-9A-Za-z]{26})(?=\s|$)/,
     );
     if (session) hints.push({ provider: "opencode", value: session[1], full: true });
+  }
+  const kilo = command.match(/^\s*(?:\S*\/)?kilo(?=\s|$)([^\n]*)/i);
+  if (kilo && !/(?:^|\s)--(?:cloud-)?fork(?:=\S+)?(?=\s|$)/i.test(kilo[1])) {
+    const session = kilo[1].match(
+      /(?:^|\s)(?:--session(?:\s+|=)|-s\s+)(ses_[0-9A-Za-z]{26})(?=\s|$)/,
+    );
+    if (session) hints.push({ provider: "kilo", value: session[1], full: true });
   }
   const resume = command.match(
     new RegExp(`\\/cmux-agent-resume\\/(${RESUME_PROVIDERS})-([0-9a-f-]{8,36})(?:\\.zsh)?(?:\\s|$)`, "i"),
@@ -402,9 +410,9 @@ function resolveCommandHint(
       rejectionReason: `multiple active Pi sources (${matches.length}) claim source session ${hint.value}`,
     };
   }
-  if (hint.provider === "opencode" && matches.length > 1) {
+  if ((hint.provider === "opencode" || hint.provider === "kilo") && matches.length > 1) {
     return {
-      rejectionReason: `multiple OpenCode instances (${matches.length}) claim source session ${hint.value}`,
+      rejectionReason: `multiple ${hint.provider === "kilo" ? "Kilo" : "OpenCode"} instances (${matches.length}) claim source session ${hint.value}`,
     };
   }
   /* A resumed Claude transcript keeps the original runtime session ID while

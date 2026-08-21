@@ -224,6 +224,7 @@ describe("agent message provenance", () => {
         gemini: { value: [], errors: [] },
         opencode: { value: [], errors: [] },
         pi: { value: [], errors: [] },
+        kilo: { value: [], errors: [] },
       });
       const collectors: HubCollectors = {
         sessions: async () => sessions(),
