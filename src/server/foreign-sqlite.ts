@@ -36,6 +36,10 @@ interface StoreFingerprint {
   shm?: string;
 }
 
+export interface ForeignSqliteReadOptions {
+  initialize?: (database: Database) => void;
+}
+
 function sqliteCode(error: unknown): string | undefined {
   if (!error || typeof error !== "object") return undefined;
   const code = (error as { code?: unknown }).code;
@@ -128,10 +132,26 @@ function readWithDatabase<T>(
   path: string,
   immutable: boolean,
   reader: (database: Database) => T,
+  initialize?: (database: Database) => void,
 ): T {
   const database = new Database(databaseUri(path, immutable), { readonly: true });
   try {
-    return reader(database);
+    initialize?.(database);
+    database.exec("BEGIN DEFERRED");
+    try {
+      const value = reader(database);
+      database.exec("COMMIT");
+      return value;
+    } catch (error) {
+      if (database.inTransaction) {
+        try {
+          database.exec("ROLLBACK");
+        } catch {
+          // Preserve the callback failure; close() still releases the reader.
+        }
+      }
+      throw error;
+    }
   } finally {
     database.close();
   }
@@ -151,14 +171,18 @@ function sameStore(left: StoreFingerprint, right: StoreFingerprint): boolean {
  * The callback must return detached data; the database is closed before this
  * function returns.
  */
-export function readForeignSqlite<T>(path: string, reader: (database: Database) => T): T {
+export function readForeignSqlite<T>(
+  path: string,
+  reader: (database: Database) => T,
+  options: ForeignSqliteReadOptions = {},
+): T {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const before = inspectStore(path);
     const sidecarsAbsent = before.wal === undefined && before.shm === undefined;
     if (sidecarsAbsent && walHeader(path)) {
       let value: T;
       try {
-        value = readWithDatabase(path, true, reader);
+        value = readWithDatabase(path, true, reader, options.initialize);
       } catch (error) {
         throw classify(error);
       }
@@ -169,7 +193,7 @@ export function readForeignSqlite<T>(path: string, reader: (database: Database) 
     }
 
     try {
-      return readWithDatabase(path, false, reader);
+      return readWithDatabase(path, false, reader, options.initialize);
     } catch (error) {
       const failure = classify(error);
       if (failure.kind === "unreadable" && sqliteCode(error) === "SQLITE_CANTOPEN" && attempt === 0) {
