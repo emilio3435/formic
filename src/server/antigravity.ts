@@ -18,6 +18,14 @@ type SurfaceLabel = "CLI" | "Desktop" | "IDE";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const UNKNOWN_TOKENS: TokenUsage = { scope: "unknown", provenance: "unknown" };
 const PLACEHOLDER_MODEL = /placeholder/i;
+/* Current Antigravity CLI stores the selected model only inside gen_metadata
+   protobuf blobs: top-level field 19 is the base model id and field 28 the
+   model+effort variant. trajectory_meta.last_selected_agent_model, when a
+   store still has it, remains the preferred source. */
+const BLOB_MODEL_FIELD_BASE = 19;
+const BLOB_MODEL_FIELD_VARIANT = 28;
+const BLOB_MODEL_VALUE = /^[A-Za-z0-9][A-Za-z0-9._-]{1,63}$/;
+const BLOB_SCAN_MAX_BYTES = 8_000_000;
 const USER_TYPES = new Set(["USER_INPUT"]);
 const ASSISTANT_TYPES = new Set(["PLANNER_RESPONSE"]);
 const IGNORED_TYPES = new Set(["VIEW_FILE", "EPHEMERAL_MESSAGE", "CONVERSATION_HISTORY"]);
@@ -168,6 +176,60 @@ function parseTranscript(jsonl: string): {
   return { messages, task, tail, startedAt, updatedAt, cwd };
 }
 
+function blobModel(blob: Uint8Array): string | undefined {
+  if (blob.byteLength > BLOB_SCAN_MAX_BYTES) return undefined;
+  let base: string | undefined;
+  let variant: string | undefined;
+  // The live CLI wraps the generation message in a top-level field, so the
+  // model fields sit one level down; depth 2 covers both shapes without
+  // letting arbitrary bytes recurse unboundedly.
+  const walk = (bytes: Uint8Array, depth: number): void => {
+    let at = 0;
+    const varint = (): number | undefined => {
+      let value = 0;
+      for (let shift = 0; shift < 35; shift += 7) {
+        if (at >= bytes.length) return undefined;
+        const byte = bytes[at]!;
+        at += 1;
+        value += (byte & 0x7f) * 2 ** shift;
+        if ((byte & 0x80) === 0) return value;
+      }
+      return undefined;
+    };
+    while (at < bytes.length) {
+      const tag = varint();
+      if (tag === undefined) break;
+      const field = Math.floor(tag / 8);
+      const wire = tag % 8;
+      if (wire === 0) {
+        if (varint() === undefined) break;
+      } else if (wire === 1) {
+        at += 8;
+      } else if (wire === 5) {
+        at += 4;
+      } else if (wire === 2) {
+        const length = varint();
+        if (length === undefined || at + length > bytes.length) break;
+        const body = bytes.subarray(at, at + length);
+        if (field === BLOB_MODEL_FIELD_BASE || field === BLOB_MODEL_FIELD_VARIANT) {
+          const value = new TextDecoder().decode(body);
+          if (BLOB_MODEL_VALUE.test(value)) {
+            if (field === BLOB_MODEL_FIELD_BASE) base = value;
+            else variant = value;
+          }
+        } else if (depth < 2) {
+          walk(body, depth + 1);
+        }
+        at += length;
+      } else {
+        break;
+      }
+    }
+  };
+  walk(blob, 0);
+  return base ?? variant;
+}
+
 function readDbHints(path: string): { cwd?: string; model?: string } {
   return readForeignSqlite(path, (database) => {
     const tables = new Set(
@@ -196,6 +258,20 @@ function readDbHints(path: string): { cwd?: string; model?: string } {
       if (candidate && !PLACEHOLDER_MODEL.test(candidate)) model = candidate;
     } catch {
       // trajectory_meta is optional for the existence fixture.
+    }
+    if (!model) {
+      try {
+        const rows = database.query("select data from gen_metadata order by idx").all() as JsonRecord[];
+        for (const row of rows) {
+          const data = row.data;
+          if (!(data instanceof Uint8Array)) continue;
+          const candidate = blobModel(data);
+          // Later rows win: the newest generation reflects the last selected model.
+          if (candidate && !PLACEHOLDER_MODEL.test(candidate)) model = candidate;
+        }
+      } catch {
+        // gen_metadata is absent on legacy stores and optional fixtures.
+      }
     }
     return { cwd, model };
   });

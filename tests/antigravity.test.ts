@@ -222,3 +222,116 @@ test("agy --conversation names the session", () => {
     `/Users/me/.gemini/antigravity/conversations/${ID}.db`,
   )).toEqual({ provider: "antigravity", value: ID, full: true });
 });
+
+/* Current Antigravity CLI schema: trajectory_meta lost its model column and the
+   selected model now lives inside gen_metadata protobuf blobs — field 19 holds
+   the base model id ("gemini-3.7-flash") and field 28 the model+effort variant
+   ("gemini-3.7-flash-high"). These fixtures encode that wire format exactly. */
+function protoField(field: number, value: string | Uint8Array): Uint8Array {
+  const bytes = typeof value === "string" ? new TextEncoder().encode(value) : value;
+  const head: number[] = [];
+  let tag = (field << 3) | 2;
+  while (tag > 0x7f) { head.push((tag & 0x7f) | 0x80); tag >>>= 7; }
+  head.push(tag);
+  let length = bytes.length;
+  while (length > 0x7f) { head.push((length & 0x7f) | 0x80); length >>>= 7; }
+  head.push(length);
+  return Uint8Array.from([...head, ...bytes]);
+}
+
+function concatBytes(...parts: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const part of parts) { out.set(part, at); at += part.length; }
+  return out;
+}
+
+function writeCurrentSchemaDb(path: string, blobs: Uint8Array[], cwd = CWD): void {
+  const db = new Database(path);
+  db.run("create table trajectory_meta (trajectory_id text, cascade_id text, trajectory_type integer, source integer)");
+  db.run("create table trajectory_metadata_blob (id text primary key default 'main', data blob)");
+  db.run("create table gen_metadata (idx integer primary key, data blob, size integer not null default 0)");
+  db.run("insert into trajectory_meta(trajectory_id, cascade_id, trajectory_type, source) values (?, ?, 4, 1)", [
+    "208761a1-8733-4596-b6df-3dcba849df62",
+    ID,
+  ]);
+  db.run("insert into trajectory_metadata_blob(id, data) values ('main', ?)", [`noise file://${cwd} more-noise`]);
+  blobs.forEach((blob, index) => {
+    db.run("insert into gen_metadata(idx, data, size) values (?, ?, ?)", [index, blob, blob.length]);
+  });
+  db.close();
+}
+
+test("current-schema store resolves the model from the latest gen_metadata blob", async () => {
+  const home = await fixtureHome();
+  const desktop = join(home, ".gemini/antigravity");
+  await mkdir(join(desktop, "conversations"), { recursive: true });
+  const noise = concatBytes(
+    Uint8Array.from([0x08, 0x05]), // field 1 varint — must be skipped
+    protoField(20, concatBytes(protoField(1, "used_non_gemini_model"), protoField(2, "false"))), // annotation map entry
+  );
+  writeCurrentSchemaDb(join(desktop, "conversations", `${ID}.db`), [
+    concatBytes(noise, protoField(19, "gemini-3.6-flash")),
+    // Live CLI stores wrap the generation message in top-level field 1;
+    // the model id is field 19 one level down.
+    protoField(1, concatBytes(protoField(19, "gemini-3.7-flash"), noise)),
+  ]);
+  await writeTranscript(desktop, ID);
+
+  const result = await collectAntigravitySessions([desktop], NOW_MS, WINDOW_MS);
+  expect(result.errors).toEqual([]);
+  expect(result.value).toHaveLength(1);
+  expect(result.value[0]?.model).toBe("gemini-3.7-flash");
+  expect(result.value[0]?.tokens).toMatchObject({ scope: "unknown", provenance: "unknown", contextWindow: 1_048_576 });
+});
+
+test("the field-28 model+effort variant is used only when the base model field is absent", async () => {
+  const home = await fixtureHome();
+  const desktop = join(home, ".gemini/antigravity");
+  await mkdir(join(desktop, "conversations"), { recursive: true });
+  writeCurrentSchemaDb(join(desktop, "conversations", `${ID}.db`), [
+    protoField(28, "gemini-3.7-flash-high"),
+  ]);
+  await writeTranscript(desktop, ID);
+
+  const result = await collectAntigravitySessions([desktop], NOW_MS, WINDOW_MS);
+  expect(result.errors).toEqual([]);
+  expect(result.value[0]?.model).toBe("gemini-3.7-flash-high");
+  expect(result.value[0]?.tokens).toMatchObject({ contextWindow: 1_048_576 });
+});
+
+test("the legacy trajectory_meta model column still wins over blob evidence", async () => {
+  const home = await fixtureHome();
+  const desktop = join(home, ".gemini/antigravity");
+  await mkdir(join(desktop, "conversations"), { recursive: true });
+  const path = join(desktop, "conversations", `${ID}.db`);
+  writeConversationDb(path, CWD, "gemini-3.1-pro");
+  const db = new Database(path);
+  db.run("create table gen_metadata (idx integer primary key, data blob, size integer not null default 0)");
+  db.run("insert into gen_metadata(idx, data, size) values (0, ?, 0)", [protoField(19, "gemini-3.7-flash")]);
+  db.close();
+  await writeTranscript(desktop, ID);
+
+  const result = await collectAntigravitySessions([desktop], NOW_MS, WINDOW_MS);
+  expect(result.errors).toEqual([]);
+  expect(result.value[0]?.model).toBe("gemini-3.1-pro");
+});
+
+test("malformed, placeholder, or modelless blobs leave the model honestly unknown", async () => {
+  const home = await fixtureHome();
+  const desktop = join(home, ".gemini/antigravity");
+  await mkdir(join(desktop, "conversations"), { recursive: true });
+  writeCurrentSchemaDb(join(desktop, "conversations", `${ID}.db`), [
+    Uint8Array.from([0x9a, 0x01, 0x50, 0x61]), // field 19 claims 80 bytes, blob truncates — must not crash
+    Uint8Array.from([0xff, 0xff, 0xff, 0xff, 0xff, 0xff]), // unterminated varint junk
+    protoField(19, "placeholder-model"), // filtered by the existing placeholder rule
+    protoField(20, concatBytes(protoField(1, "last_step_index"), protoField(2, "3"))), // no model field at all
+  ]);
+  await writeTranscript(desktop, ID);
+
+  const result = await collectAntigravitySessions([desktop], NOW_MS, WINDOW_MS);
+  expect(result.errors).toEqual([]);
+  expect(result.value).toHaveLength(1);
+  expect(result.value[0]?.model).toBeUndefined();
+  expect(result.value[0]?.tokens).toEqual({ scope: "unknown", provenance: "unknown" });
+});
