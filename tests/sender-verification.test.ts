@@ -225,6 +225,7 @@ describe("agent message provenance", () => {
         opencode: { value: [], errors: [] },
         pi: { value: [], errors: [] },
         kilo: { value: [], errors: [] },
+        kimi: { value: [], errors: [] },
       });
       const collectors: HubCollectors = {
         sessions: async () => sessions(),

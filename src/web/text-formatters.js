@@ -164,6 +164,7 @@ export const PROVIDER_LABELS = {
   opencode: "OpenCode",
   pi: "Pi",
   kilo: "Kilo",
+  kimi: "Kimi Code",
 };
 export const HARNESS_LABELS = PROVIDER_LABELS;
 export const providerLabel = (p) => PROVIDER_LABELS[p] || p;

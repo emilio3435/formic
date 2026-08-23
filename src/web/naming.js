@@ -43,6 +43,7 @@ export const PROVIDER_DISPLAY_NAMES = {
   opencode: "OpenCode",
   pi: "Pi",
   kilo: "Kilo",
+  kimi: "Kimi Code",
 };
 
 /* Strings that arrive in a name-shaped field but are not names: OMP's periodic

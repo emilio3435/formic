@@ -12,6 +12,7 @@ import type { CmuxSurface, CollectedAgent, CollectionResult, CommandRunner } fro
 import { livenessOfAny, processAliveFrom } from "./process-liveness";
 
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+const KIMI_SESSION_ID = "session_[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 /* The process name each provider runs under, spelled out as a total map so the
    build fails when a Provider is added without saying what to look for.
 
@@ -38,9 +39,16 @@ const PROVIDER_BINARIES: Record<Provider, string> = {
   opencode: "opencode",
   pi: "pi",
   kilo: "kilo",
+  kimi: "kimi",
 };
-const AGENT_BINARIES = Object.values(PROVIDER_BINARIES).join("|");
-const RESUME_PROVIDERS = PROVIDERS.filter((provider) => provider !== "kilo").join("|");
+const AGENT_BINARIES = Object.entries(PROVIDER_BINARIES)
+  .filter(([provider]) => provider !== "kimi")
+  .map(([, binary]) => binary)
+  .join("|");
+const RESUME_PROVIDERS = PROVIDERS
+  .filter((provider) => provider !== "kilo" && provider !== "kimi")
+  .join("|");
+const KIMI_PROCESS = /^\s*(?:\S*\/)?kimi(?:\s|$)/i;
 /* Cursor's current launcher runs a generic `agent` executable with the
    versioned Cursor Agent entrypoint as an argument. Recognize only that pair:
    it admits the pid to open-file inspection but does not itself claim a
@@ -176,6 +184,13 @@ export function identityFromSessionPath(path: string): IdentityHint | null {
 
 export function identitiesFromCommand(command: string): IdentityHint[] {
   const hints: IdentityHint[] = [];
+  const kimi = command.match(/^\s*(?:\S*\/)?kimi(?=\s|$)([^\n]*)/i);
+  if (kimi) {
+    const session = kimi[1].match(
+      new RegExp(`(?:^|\\s)(?:--session|-S|--resume|-r)\\s+(${KIMI_SESSION_ID})(?=\\s|$)`, "i"),
+    );
+    if (session) hints.push({ provider: "kimi", value: session[1].toLowerCase(), full: true });
+  }
   const exactPatterns: [Provider, RegExp][] = [
     ["codex", new RegExp(`(?:^|[\\s/])codex\\s+resume\\s+(${UUID})(?:\\s|$)`, "i")],
     ["omp", new RegExp(`(?:^|[\\s/])omp\\b[^\\n]{0,160}?\\s(?:-r|--resume)\\s+(${UUID})(?:\\s|$)`, "i")],
@@ -264,6 +279,7 @@ export function isRecognizedAgentProcess(command: string): boolean {
     `(?:^|\\s)(?:\\S*\\/)?(?:${AGENT_BINARIES})(?:\\.(?:js|mjs|cjs))?(?:\\s|$)`,
     "i",
   ).test(command) ||
+    KIMI_PROCESS.test(command) ||
     CURSOR_VERSIONED_WRAPPER.test(command) ||
     MUSE_VERSIONED_BINARY.test(command) ||
     new RegExp(
@@ -410,9 +426,12 @@ function resolveCommandHint(
       rejectionReason: `multiple active Pi sources (${matches.length}) claim source session ${hint.value}`,
     };
   }
-  if ((hint.provider === "opencode" || hint.provider === "kilo") && matches.length > 1) {
+  if ((hint.provider === "opencode" || hint.provider === "kilo" || hint.provider === "kimi") && matches.length > 1) {
+    const label = hint.provider === "kilo"
+      ? "Kilo"
+      : hint.provider === "kimi" ? "Kimi Code" : "OpenCode";
     return {
-      rejectionReason: `multiple ${hint.provider === "kilo" ? "Kilo" : "OpenCode"} instances (${matches.length}) claim source session ${hint.value}`,
+      rejectionReason: `multiple ${label} instances (${matches.length}) claim source session ${hint.value}`,
     };
   }
   /* A resumed Claude transcript keeps the original runtime session ID while

@@ -113,6 +113,7 @@ const emptySessions = () => ({
   opencode: { value: [], errors: [] },
   pi: { value: [], errors: [] },
   kilo: { value: [], errors: [] },
+  kimi: { value: [], errors: [] },
 });
 
 async function eventually(assertion: () => void): Promise<void> {

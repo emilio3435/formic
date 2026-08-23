@@ -92,6 +92,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<Provider, string> = {
   opencode: "OpenCode",
   pi: "Pi",
   kilo: "Kilo",
+  kimi: "Kimi Code",
 };
 
 /* Strings that arrive in a name-shaped field but are not names. Each was

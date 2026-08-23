@@ -46,6 +46,7 @@ const empty = (): SessionsResult => ({
   opencode: { value: [], errors: [] },
   pi: { value: [], errors: [] },
   kilo: { value: [], errors: [] },
+  kimi: { value: [], errors: [] },
 } as SessionsResult & { pi: SessionsResult[keyof SessionsResult] });
 
 /** A hub whose collectors behave exactly as described, with a 60ms deadline. */

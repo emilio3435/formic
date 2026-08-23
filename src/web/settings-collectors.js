@@ -199,6 +199,7 @@ const HOME_MARK = {
   opencode: "/icons/opencode.svg",
   pi: "/icons/pi.svg",
   kilo: "/icons/kilo.svg",
+  kimi: "/icons/kimi.svg",
   burnbar: "/icons/history.svg",
 };
 
@@ -230,6 +231,7 @@ const PROVIDER_FOR_KIND = {
   opencode: "opencode",
   pi: "pi",
   kilo: "kilo",
+  kimi: "kimi",
 };
 
 /* The name this tile shows.

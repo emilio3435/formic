@@ -88,6 +88,9 @@ const SAMPLES: Record<Provider | "pi", { path?: string; command: string }> = {
   kilo: {
     command: "kilo --session ses_0123456789abcdefghijklmnop",
   },
+  kimi: {
+    command: `kimi --session ${ID}`,
+  },
 };
 
 describe("every provider is visible to the process scanner", () => {

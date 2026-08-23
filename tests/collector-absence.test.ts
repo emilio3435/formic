@@ -159,7 +159,7 @@ describe("a provider that was never installed is absent, not degraded", () => {
     expect(absent.healthy + absent.degraded + absent.absent).toBe(absent.total);
   });
 
-  test("the fresh-clone board: two providers installed, the rest absent", () => {
+  test("the fresh-clone board: three providers installed, the rest absent", () => {
     const summary = health({
       agents: [], surfaces: [], archiveStore,
       /* A virgin HOME has no omp directory either — proved above by "an empty
@@ -171,11 +171,11 @@ describe("a provider that was never installed is absent, not degraded", () => {
       cmuxReachable: false,
     });
 
-    // Two present, the rest named absent. The known set is still the total.
+    // Three present, the rest named absent. The known set is still the total.
     expect(summary).toMatchObject({
-      healthy: 2,
+      healthy: 3,
       degraded: 0,
-      absent: PROVIDERS.length - 2,
+      absent: PROVIDERS.length - 3,
       total: PROVIDERS.length,
     });
     expect(summary.healthy + summary.degraded + summary.absent).toBe(summary.total);

@@ -4,6 +4,7 @@ import { parseClaudeJsonl, parseCodexJsonl, parseOmpJsonl } from "./collectors";
 import { parseGeminiConversationFile } from "./gemini";
 import { readOpenCodeStore } from "./opencode-store";
 import { readKiloStore } from "./kilo-store";
+import { readKimiWireFile } from "./kimi";
 import { readPiSessionFile } from "./pi";
 import type { CollectedAgent } from "./types";
 import type { HubSnapshot } from "../shared/types";
@@ -110,6 +111,34 @@ export async function sessionCallsResponse(
       source: null, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
       unavailable: "This agent has no transcript on disk, so its calls cannot be re-derived.",
     });
+  }
+
+  if ((agent.provider as string) === "kimi") {
+    try {
+      const evidence = await readKimiWireFile(source, { signal });
+      if (evidence.usageIncomplete) {
+        return answer({
+          source, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
+          unavailable: "Kimi call series is unavailable because the transcript usage is partial or incomplete.",
+        });
+      }
+      const calls = evidence.callSizes;
+      if (!calls || calls.length === 0) {
+        return answer({
+          source, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
+          unavailable: "The Kimi transcript records no per-call usage for this session.",
+        });
+      }
+      let running = 0;
+      const prefixSums = calls.map((size) => (running += size));
+      return answer({ source, calls, sessionProcessed: running, prefixSums, processedSnapshots: null });
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason;
+      return answer({
+        source, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
+        unavailable: `The Kimi transcript could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
   }
 
   if (agent.provider === "opencode" || agent.provider === "kilo") {

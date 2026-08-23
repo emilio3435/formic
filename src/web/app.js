@@ -9983,6 +9983,7 @@ const PROVIDER_MARK = {
   opencode: { src: "/icons/opencode-provider.svg" },
   pi: { src: "/icons/pi.svg" },
   kilo: { src: "/icons/kilo-provider.svg" },
+  kimi: { src: "/icons/kimi.svg" },
 };
 
 /* Harness vs Agent — two badges per row. Harness = where it ran (provider), Agent = what thought (model family).
@@ -10010,6 +10011,7 @@ const HARNESS_MARK = {
   opencode: { src: "/icons/opencode.svg", label: "OpenCode" },
   pi: { src: "/icons/pi.svg", label: "Pi" },
   kilo: { src: "/icons/kilo.svg", label: "Kilo Code" },
+  kimi: { src: "/icons/kimi.svg", label: "Kimi Code" },
   omni: { src: "/icons/omp.svg", label: "OMP" },
 };
 const AGENT_MARK = {
@@ -10043,7 +10045,8 @@ function harnessKeyOf(agent) {
   return p || UNKNOWN_HARNESS;
 }
 function agentKeyOf(agent) {
-  if ((agent.rawModel?.providerRoute || "").toLowerCase() === "kilo") return "kilo";
+  const providerRoute = agent.rawModel?.providerRoute;
+  if (providerRoute === "kilo" || providerRoute === "kimi") return providerRoute;
   const m = (agent.model || "").toLowerCase();
   if (/grok/i.test(m)) return "grok";
   if (/muse-spark|spark/i.test(m)) return "spark";

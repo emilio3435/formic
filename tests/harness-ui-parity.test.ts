@@ -1,6 +1,6 @@
 /* Harness row parity — every provider gets the same row, or the row says why not.
  *
- * Five gaps were found by reading the client against the fifteen-provider
+ * Five gaps were found by reading the client against the sixteen-provider
  * roster. This file holds the four that are about what a row SAYS (FE-1, FE-2,
  * FE-5a, FE-5b); tests/harness-responsive-parity.test.ts holds the one about
  * where a row PUTS things (FE-4), and tests/settings-collectors-dom.test.ts
@@ -87,6 +87,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   opencode: "OpenCode",
   pi: "Pi",
   kilo: "Kilo",
+  kimi: "Kimi Code",
 };
 
 const HARNESS_LABELS: Record<string, string> = {
@@ -105,6 +106,7 @@ const HARNESS_LABELS: Record<string, string> = {
   opencode: "OpenCode",
   pi: "Pi",
   kilo: "Kilo Code",
+  kimi: "Kimi Code",
 };
 
 beforeAll(async () => {
@@ -409,7 +411,7 @@ describe("FE-1 a session with no recorded provider is never presented as Claude"
     expect(name).not.toMatch(/claude/i);
   });
 
-  test("a known harness is named on the focusable row, for all fifteen", () => {
+  test("a known harness is named on the focusable row, for all sixteen", () => {
     /* The counter-proof, over the whole roster rather than a four-row sample:
        the fix must ADD the harness to every row's name, not special-case the
        unknown one. A row that names the harness only when it is missing is a
@@ -480,7 +482,7 @@ describe("FE-1 a session with no recorded provider is never presented as Claude"
     expect(M.agentName({}), "a nameless record must still be called something").toBeTruthy();
 
     /* Counter-proof: a RECORDED provider still derives its folder identity, and
-       all fifteen provider labels stay byte-identical. A repair that bought
+       all sixteen provider labels stay byte-identical. A repair that bought
        honesty for the unknown row by dropping cwd naming for everyone would
        pass every assertion above and fail here. */
     for (const p of PROVIDERS) {
@@ -618,7 +620,7 @@ describe("FE-2 every PROVIDERS member has explicit provider and harness labels",
     expect(M.HARNESS_MARK.kilo?.label).toBe("Kilo Code");
   });
 
-  test("all fifteen print the correct provider or harness string in the row, drawer and Mix", () => {
+  test("all sixteen print the correct provider or harness string in the row, drawer and Mix", () => {
     /* Every provider, through the three surfaces that actually paint a label —
        not four hand-picked ones, and not the label function standing in for the
        surfaces that call it. The rows carry display names like "worker-3" on
@@ -672,7 +674,7 @@ describe("FE-2 every PROVIDERS member has explicit provider and harness labels",
     /* NEUTRALITY, PROVEN MECHANICALLY. Every searchable string is checked
        against every provider key and every provider or harness label. Eyeballing this is
        how "comparison" survived — it contains `omp`, so an OMP search matched
-       all fifteen rows and the cross-provider negative below could never fail.
+       all sixteen rows and the cross-provider negative below could never fail.
        If the inputs are not neutral, the positive assertions are worthless, so
        this runs first. */
     const labels = new Set([
@@ -811,7 +813,7 @@ describe("FE-5a a Mix segment keeps its provider name when the visible text coll
       .toMatch(/@media \(max-width: 900px\) \{[^@]*\.mix-seg \.prov-name \{[^}]*display:\s*none/);
   });
 
-  test("all fifteen segments carry an aria-label with the canonical label and count", () => {
+  test("all sixteen segments carry an aria-label with the canonical label and count", () => {
     /* At 900px and below — which includes BOTH the 720 and 390 screenshot
        viewports — the visible name is display:none and the segment is left as a
        bare integer. A screen reader reads the whole Mix as "3 2 1 1 5 2 1".
@@ -973,7 +975,7 @@ describe("FE-5a a Mix segment keeps its provider name when the visible text coll
 /* ================= FE-5b — the Inspector's provider channel ================= */
 
 describe("FE-5b the Inspector channel is provider-specific or a declared shared fallback", () => {
-  /* The PUBLIC proof is the rendered drawer for all fifteen providers. The
+  /* The PUBLIC proof is the rendered drawer for all sixteen providers. The
      stylesheet and ledger reads below are SUPPORT only: they answer "was the
      shared fallback declared on purpose", which no rendered node can show,
      and they are scoped so a colour named in a comment cannot satisfy them. */
@@ -1025,7 +1027,7 @@ describe("FE-5b the Inspector channel is provider-specific or a declared shared 
        `--prov` rule of its own today; changing it is a deliberate edit here. */
     const EXPECTED_FALLBACK = [
       "antigravity", "copilot", "factory", "gemini", "grok",
-      "hermes", "kilo", "muse", "opencode", "pi", "prime",
+      "hermes", "kilo", "kimi", "muse", "opencode", "pi", "prime",
     ];
     const uncovered = PROVIDERS.filter((p) => !declared.has(p));
     expect([...uncovered].sort(), "the set of providers relying on the shared channel changed")
@@ -1655,7 +1657,7 @@ describe("controls follow the server's attestation, not the provider", () => {
 
   test("every control state renders the same way on the row and in the Inspector, for every provider", () => {
     /* deriveControlState is one function; what an operator meets is a row's
-       accessible name and a drawer. Calling the function fifteen times proves
+       accessible name and a drawer. Calling the function sixteen times proves
        the FUNCTION is provider-neutral and says nothing about whether the two
        surfaces agree — a row reading "Ready" beside a drawer that refuses to
        send is the failure this pins. */
@@ -1829,7 +1831,7 @@ describe("controls follow the server's attestation, not the provider", () => {
        on today's board — so it never executed. A guard that cannot be reached
        is a guard that is not there, and it was being counted as coverage.
 
-       It renders the real command dock for all fifteen providers across all
+       It renders the real command dock for all sixteen providers across all
        four control states and makes one claim: the verbs are named in exactly
        one casing. A lowercase twin would let the exact-name lookups elsewhere
        be satisfied by a control the product does not render. */
@@ -2381,7 +2383,7 @@ describe("every row is reachable and returns focus by its own key", () => {
        contract, and the first divergence between the copies would be invisible.
 
        What this file adds is the part that is about HARNESS PARITY rather than
-       about the handler: that the navigable set is the fifteen-provider board,
+       about the handler: that the navigable set is the sixteen-provider board,
        and that each provider's row key is stable enough to be returned to. */
     expect(press("ArrowDown").handled, "the provider rows are not navigable at all").toBe(true);
     expect(press("ArrowDown").prevented, "row navigation did not consume the keystroke").toBe(true);

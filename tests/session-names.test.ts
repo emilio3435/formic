@@ -327,6 +327,7 @@ describe("hub naming candidates", () => {
           opencode: { value: [], errors: [] },
           pi: { value: [], errors: [] },
           kilo: { value: [], errors: [] },
+          kimi: { value: [], errors: [] },
         }),
         cmux: async () => ({ value: [], errors: [] }),
         notifications: async () => ({ value: [], errors: [] }),

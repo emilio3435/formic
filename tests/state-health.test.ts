@@ -32,6 +32,7 @@ const emptySessions = () => ({
   opencode: { value: [], errors: [] },
   pi: { value: [], errors: [] },
   kilo: { value: [], errors: [] },
+  kimi: { value: [], errors: [] },
 });
 
 const ROUTING_RACE_SESSION_ID = "routing-race-session";
@@ -1732,6 +1733,7 @@ describe("what is recorded is what is published", () => {
         opencode: { value: [], errors: [] },
         pi: { value: [], errors: [] },
         kilo: { value: [], errors: [] },
+        kimi: { value: [], errors: [] },
       }),
       cmux: async () => ({ value: [], errors: [] }),
       notifications: async () => ({ value: [], errors: [] }),

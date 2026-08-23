@@ -316,6 +316,7 @@ const emptySessions = () => ({
   opencode: { value: [], errors: [] },
   pi: { value: [], errors: [] },
   kilo: { value: [], errors: [] },
+  kimi: { value: [], errors: [] },
 });
 
 function collectedAgent(id: string, sessionId: string): CollectedAgent {

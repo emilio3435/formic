@@ -47,6 +47,7 @@ function sameCwd(left?: string, right?: string): boolean {
 type SessionIdentitySource = Pick<CollectedAgent, "provider" | "sourceSessionId">;
 
 const PI_SESSION_ID = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
+const KIMI_SESSION_ID = /^session_[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export type SessionIdentityProviderIndex = ReadonlyMap<
   string,
@@ -74,7 +75,8 @@ export function sourceSessionHasProviderCollision(
   return (providers?.size ?? 0) > 1
     || (providers?.get("opencode") ?? 0) > 1
     || (providers?.get("pi") ?? 0) > 1
-    || (providers?.get("kilo") ?? 0) > 1;
+    || (providers?.get("kilo") ?? 0) > 1
+    || (providers?.get("kimi") ?? 0) > 1;
 }
 
 function sourceSessionClaims(surface: CmuxSurface): SessionIdentityClaim[] {
@@ -89,6 +91,7 @@ export function surfaceClaimsSourceSession(
   providersBySession: SessionIdentityProviderIndex,
 ): boolean {
   if (agent.provider === "pi" && !PI_SESSION_ID.test(agent.sourceSessionId)) return false;
+  if (agent.provider === "kimi" && !KIMI_SESSION_ID.test(agent.sourceSessionId)) return false;
   const sessionId = agent.sourceSessionId.toLowerCase();
   const claims = sourceSessionClaims(surface).filter(
     (claim) => claim.sessionId.toLowerCase() === sessionId,
@@ -224,18 +227,16 @@ function resolveAgentTargetInternal(
   const sameProviderOwners = providersBySession
     .get(agent.sourceSessionId.toLowerCase())
     ?.get(agent.provider) ?? 0;
-  if (
-    agent.provider === "pi"
-    && (providersBySession.get(agent.sourceSessionId.toLowerCase())?.get("pi") ?? 0) > 1
-  ) {
+  if ((agent.provider === "pi" || agent.provider === "kimi") && sameProviderOwners > 1) {
+    const label = agent.provider === "kimi" ? "Kimi Code" : "Pi";
     steps?.push({
       tier: "session",
       outcome: "ambiguous",
-      detail: "Pi source session ID is duplicated; exact target selection is disabled.",
+      detail: `${label} source session ID is duplicated; exact target selection is disabled.`,
     });
     return finish({
       resolution: "ambiguous",
-      reason: "Pi source session ID is duplicated; controls are disabled.",
+      reason: `${label} source session ID is duplicated; controls are disabled.`,
     });
   }
 
@@ -251,7 +252,7 @@ function resolveAgentTargetInternal(
     });
     return finish(target(sharedHostSurface, "shared-host", SHARED_HOST_REASON, agent));
   }
-  const hookRecord = agent.provider === "kilo" && sameProviderOwners > 1
+  const hookRecord = (agent.provider === "kilo" || agent.provider === "kimi") && sameProviderOwners > 1
     ? undefined
     : hookRecordFor(agent.provider, agent.sourceSessionId);
   if (hookRecord) {

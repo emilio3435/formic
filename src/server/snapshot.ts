@@ -311,7 +311,7 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
   for (const source of authoritativeSources) {
     const declared = declaredById.get(source.id);
     const nativeParentId = source.parentSourceSessionId
-      ? (source.provider === "opencode" || source.provider === "kilo") && source.instanceId
+      ? (source.provider === "opencode" || source.provider === "kilo" || source.provider === "kimi") && source.instanceId
         ? `${source.instanceId}:${source.parentSourceSessionId}`
         : `${source.provider}:${source.parentSourceSessionId}`
       : undefined;
@@ -485,6 +485,7 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
             && !source.id.startsWith("grok:bot:")
             && source.provider !== "opencode"
             && source.provider !== "kilo"
+            && source.provider !== "kimi"
             ? input.processRosterComplete
             : undefined,
           /* Records written before this contract carry no verdict of their own. The
@@ -626,6 +627,7 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
         && !source.id.startsWith("grok:bot:")
         && source.provider !== "opencode"
         && source.provider !== "kilo"
+        && source.provider !== "kimi"
         ? { processRosterComplete: true }
         : {}),
       ...(notification ? { attention: true } : {}),

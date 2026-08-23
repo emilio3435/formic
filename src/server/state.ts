@@ -151,9 +151,10 @@ export function providerCollectionConfigKey(
   piLaunchObservations: readonly PiLaunchObservation[] = [],
   piReadDeadlineMs?: number,
   extraKiloRoots: readonly string[] = [],
+  extraKimiRoots: readonly string[] = [],
 ): string {
   const launches = canonicalPiLaunchObservations(piLaunchObservations);
-  return `${windowMs}:${thresholds?.freshMs ?? "default"}:${thresholds?.quietMs ?? "default"}:${extraCursorGuiRoots.join(",")}:bot=${extraGrokBotRoots.join(",")}:cli=${extraGrokCliRoots.join(",")}:copilot=${extraCopilotRoots.join(",")}:gemini=${extraGeminiCliRoots.join(",")}:opencode=${extraOpenCodeRoots.join(",")}:pi=${extraPiRoots.join(",")}:kilo=${extraKiloRoots.join(",")}:piLaunch=${JSON.stringify(launches)}:piRead=${piReadDeadlineMs ?? "default"}`;
+  return `${windowMs}:${thresholds?.freshMs ?? "default"}:${thresholds?.quietMs ?? "default"}:${extraCursorGuiRoots.join(",")}:bot=${extraGrokBotRoots.join(",")}:cli=${extraGrokCliRoots.join(",")}:copilot=${extraCopilotRoots.join(",")}:gemini=${extraGeminiCliRoots.join(",")}:opencode=${extraOpenCodeRoots.join(",")}:pi=${extraPiRoots.join(",")}:kilo=${extraKiloRoots.join(",")}:kimi=${extraKimiRoots.join(",")}:piLaunch=${JSON.stringify(launches)}:piRead=${piReadDeadlineMs ?? "default"}`;
 }
 
 function cwdByPid(output: string): Map<number, string> {
@@ -301,6 +302,7 @@ export interface HubStateOptions {
   openCodeRootsReader?: () => readonly string[];
   piRootsReader?: () => readonly string[];
   kiloRootsReader?: () => readonly string[];
+  kimiRootsReader?: () => readonly string[];
   piLaunchReader?: (runner: CommandRunner, signal?: AbortSignal) => Promise<readonly PiLaunchObservation[]>;
   triageReader?: () => readonly TriageQueueSummary[];
   burnReader?: () => Promise<UsageSummary>;
@@ -384,6 +386,7 @@ export class HubState {
   private readonly openCodeRootsReader?: () => readonly string[];
   private readonly piRootsReader?: () => readonly string[];
   private readonly kiloRootsReader?: () => readonly string[];
+  private readonly kimiRootsReader?: () => readonly string[];
   private readonly piLaunchReader: (runner: CommandRunner, signal?: AbortSignal) => Promise<readonly PiLaunchObservation[]>;
   private readonly triageReader?: () => readonly TriageQueueSummary[];
   private readonly burnReader?: () => Promise<UsageSummary>;
@@ -416,6 +419,7 @@ export class HubState {
     this.openCodeRootsReader = options.openCodeRootsReader;
     this.piRootsReader = options.piRootsReader;
     this.kiloRootsReader = options.kiloRootsReader;
+    this.kimiRootsReader = options.kimiRootsReader;
     this.piLaunchReader = options.piLaunchReader ?? readPiLaunchObservations;
     this.triageReader = options.triageReader;
     this.burnReader = options.burnReader;
@@ -989,6 +993,7 @@ export class HubState {
     const extraOpenCodeRoots = this.openCodeRootsReader?.() ?? [];
     const extraPiRoots = this.piRootsReader?.() ?? [];
     const extraKiloRoots = this.kiloRootsReader?.() ?? [];
+    const extraKimiRoots = this.kimiRootsReader?.() ?? [];
     const piLaunchObservations = canonicalPiLaunchObservations(
       await this.piLaunchReader(this.runner, signal),
     );
@@ -1074,8 +1079,10 @@ export class HubState {
       extraOpenCodeRoots,
       extraPiRoots,
       extraKiloRoots,
+      extraKimiRoots,
       piLaunchObservations,
       piReadDeadlineMs,
+      kimiReadDeadlineMs: piReadDeadlineMs,
     };
     const controlTimeoutMs = this.refreshAggregateTimeoutMs
       ?? Math.max(MIN_CONTROL_AGGREGATE_TIMEOUT_MS, providerWaitMs);
@@ -1098,7 +1105,7 @@ export class HubState {
       ? track("providers", (async () => {
           const configKey = providerCollectionConfigKey(
             windowMs, thresholds, extraCursorGuiRoots, extraGrokBotRoots, extraGrokCliRoots, extraCopilotRoots, extraGeminiCliRoots, extraOpenCodeRoots, extraPiRoots,
-            piLaunchObservations, piReadDeadlineMs, extraKiloRoots,
+            piLaunchObservations, piReadDeadlineMs, extraKiloRoots, extraKimiRoots,
           );
           const selection = await this.#providerSettlement.settle(
             providers,
@@ -1122,7 +1129,9 @@ export class HubState {
             const current = selection.current[provider];
             if (current) return [provider, current];
             const seconds = providerWaitMs / 1_000;
-            const label = `${provider[0]!.toUpperCase()}${provider.slice(1)}`;
+            const label = provider === "kimi"
+              ? "Kimi Code"
+              : `${provider[0]!.toUpperCase()}${provider.slice(1)}`;
             const fallback = selection.lastKnown[provider];
             const hasFallbackRows = (fallback?.value.length ?? 0) > 0;
             const reason = `${label} collection exceeded the ${seconds}s provider wait; `

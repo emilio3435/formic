@@ -528,6 +528,7 @@ test("the cmux refresh tick supplies manifests and workspace env to the snapshot
       opencode: { value: [], errors: [] },
       pi: { value: [], errors: [] },
       kilo: { value: [], errors: [] },
+      kimi: { value: [], errors: [] },
     }),
     cmux: async () => ({
       value: [{

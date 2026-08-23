@@ -12,7 +12,7 @@ export type CollectorKind =
   | "cursor-gui" | "cursor-cli" | "codex" | "claude" | "factory"
   | "prime" | "omp" | "grok-cli" | "hermes" | "grok-bot"
   | "muse" | "antigravity-cli" | "antigravity-desktop" | "antigravity-ide"
-  | "copilot" | "gemini-cli" | "opencode" | "pi" | "kilo" | "burnbar" | "cmux-hooks" | "unknown";
+  | "copilot" | "gemini-cli" | "opencode" | "pi" | "kilo" | "kimi" | "burnbar" | "cmux-hooks" | "unknown";
 
 export const SUPPORTED_ALTERNATE_HOME_KINDS = [
   "cursor-gui",
@@ -23,6 +23,7 @@ export const SUPPORTED_ALTERNATE_HOME_KINDS = [
   "opencode",
   "pi",
   "kilo",
+  "kimi",
 ] as const satisfies readonly CollectorKind[];
 
 const SUPPORTED_ALTERNATE_HOME_KIND_SET = new Set<CollectorKind>(SUPPORTED_ALTERNATE_HOME_KINDS);
@@ -67,14 +68,15 @@ const PROVIDER_FOR = {
   "opencode": "opencode",
   "pi": "pi",
   "kilo": "kilo",
+  "kimi": "kimi",
   "grok-bot": null,
   "burnbar": null,
   "cmux-hooks": null,
   "unknown": null,
 } as const satisfies Record<CollectorKind, Provider | null>;
 
-const NAME_TOKEN_RE = /^(?:claude|codex|cursor|grok|hermes|factory|prime|omp|droid|aider|continue|opencode|kilo|gemini|muse|antigravity|windsurf|copilot|crush|amp|pi(?:$|-\d))/i;
-const AGENT_MENTION_RE = /(?:claude|codex|cursor|grok|hermes|factory|prime|omp|droid|aider|continue|opencode|kilo|gemini|muse|antigravity|windsurf|copilot|crush|amp)|(?:^|[^A-Za-z0-9_-])pi(?:$|[^A-Za-z0-9_-])/i;
+const NAME_TOKEN_RE = /^(?:claude|codex|cursor|grok|hermes|factory|prime|omp|droid|aider|continue|opencode|kilo|kimi|gemini|muse|antigravity|windsurf|copilot|crush|amp|pi(?:$|-\d))/i;
+const AGENT_MENTION_RE = /(?:claude|codex|cursor|grok|hermes|factory|prime|omp|droid|aider|continue|opencode|kilo|kimi|gemini|muse|antigravity|windsurf|copilot|crush|amp)|(?:^|[^A-Za-z0-9_-])pi(?:$|[^A-Za-z0-9_-])/i;
 const SESSION_DIR_NAMES = new Set(["sessions", "projects", "chats", "conversations"]);
 const SKIP_WALK_NAMES = new Set(["node_modules", "Caches", "Logs"]);
 const OPENCODE_DATABASE = /^opencode(?:-[A-Za-z0-9][A-Za-z0-9._-]*)?\.db$/;
@@ -98,6 +100,7 @@ export function defaultHomes(home: string): ReadonlyArray<{ kind: CollectorKind;
     { kind: "opencode", dataDir: join(home, ".local/share/opencode") },
     { kind: "pi", dataDir: join(home, ".pi") },
     { kind: "kilo", dataDir: join(home, ".local/share/kilo") },
+    { kind: "kimi", dataDir: join(home, ".kimi-code") },
     { kind: "antigravity-cli", dataDir: join(home, ".gemini/antigravity-cli") },
     { kind: "antigravity-desktop", dataDir: join(home, ".gemini/antigravity") },
     { kind: "antigravity-ide", dataDir: join(home, ".gemini/antigravity-ide") },
@@ -341,6 +344,9 @@ export function classifyDataDir(dataDir: string, fs: ScanFs, deadline?: number):
   const base = basename(dataDir);
   const names = fs.readdir(dataDir);
 
+  if (fs.exists(join(dataDir, "session_index.jsonl")) && fs.isDirectory(join(dataDir, "sessions"))) {
+    return candidate("kimi", dataDir, fs);
+  }
   if (names.some((name) => KILO_DATABASE.test(name) && fs.exists(join(dataDir, name)))) {
     return candidate("kilo", dataDir, fs);
   }
@@ -828,6 +834,7 @@ export interface OnboardedSessionRoots {
   extraOpenCodeRoots: string[];
   extraPiRoots: string[];
   extraKiloRoots: string[];
+  extraKimiRoots: string[];
 }
 
 export function onboardedSessionRoots(store: JsonCollectorInstanceStore): OnboardedSessionRoots {
@@ -840,6 +847,7 @@ export function onboardedSessionRoots(store: JsonCollectorInstanceStore): Onboar
     extraOpenCodeRoots: store.onboardedRoots("opencode"),
     extraPiRoots: store.onboardedRoots("pi"),
     extraKiloRoots: store.onboardedRoots("kilo"),
+    extraKimiRoots: store.onboardedRoots("kimi"),
   };
 }
 

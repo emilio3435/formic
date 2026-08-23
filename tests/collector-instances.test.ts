@@ -414,6 +414,7 @@ describe("JsonCollectorInstanceStore", () => {
       "opencode",
       "pi",
       "kilo",
+      "kimi",
     ]);
   });
 
@@ -537,6 +538,7 @@ describe("JsonCollectorInstanceStore", () => {
       { kind: "opencode" as const, provider: "opencode" as const, dataDir: "/tmp/opencode-2", label: "opencode-2", default: false },
       { kind: "pi" as const, provider: "pi" as const, dataDir: "/tmp/pi-sessions-2", label: "pi-sessions-2", default: false },
       { kind: "kilo" as const, provider: "kilo" as const, dataDir: "/tmp/kilo-2", label: "kilo-2", default: false },
+      { kind: "kimi" as const, provider: "kimi" as const, dataDir: "/tmp/kimi-2", label: "kimi-2", default: false },
     ];
     store.mergeScan(candidates, "2026-08-16T00:00:00.000Z");
     await store.update({ ids: candidates.map((candidate) => instanceIdFor(candidate.kind, candidate.dataDir)), onboarded: true });
@@ -550,6 +552,7 @@ describe("JsonCollectorInstanceStore", () => {
       extraOpenCodeRoots: ["/tmp/opencode-2"],
       extraPiRoots: ["/tmp/pi-sessions-2"],
       extraKiloRoots: ["/tmp/kilo-2"],
+      extraKimiRoots: ["/tmp/kimi-2"],
     });
   });
 

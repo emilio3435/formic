@@ -16,6 +16,7 @@ import {
 import { isReplicaBlob, parseReplicaBlob } from "./grok-bot";
 import { readOpenCodeStore } from "./opencode-store";
 import { readKiloStore } from "./kilo-store";
+import { readKimiWireFile } from "./kimi";
 import { readPiSessionFile } from "./pi";
 import { routingSurfaceObservations, type RoutingSurfaceObservation } from "./targets";
 import type { CmuxSurface } from "./types";
@@ -860,6 +861,25 @@ export async function transcriptResponse(
     );
   }
   try {
+    if ((agent.provider as string) === "kimi") {
+      const transcript = await readKimiWireFile(source, { signal });
+      const lines: TranscriptLine[] = transcript.events.map((event) => ({
+        at: event.at,
+        role: event.role,
+        text: event.text,
+      }));
+      return Response.json(
+        {
+          ok: true,
+          agentId,
+          source,
+          truncated: lines.length > limit,
+          lines: lines.slice(-limit),
+          ...(transcript.warnings.length > 0 ? { warning: transcript.warnings.join("; ") } : {}),
+        },
+        { headers: responseHeaders },
+      );
+    }
     if (agent.provider === "gemini") {
       const conversation = await readGeminiConversationFile(source);
       const lines = conversation ? geminiTranscriptLinesFromConversation(agent, conversation) : [];
