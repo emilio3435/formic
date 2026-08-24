@@ -227,6 +227,98 @@ describe("the Grok collector follows the real nested layout", () => {
     expect(result.value).toHaveLength(1);
     expect(result.value[0]?.parentSourceSessionId).toBeUndefined();
   });
+
+  test("a cold scan bounds open files instead of dropping a large Grok fleet", () => {
+    const home = mkdtempSync(join(tmpdir(), "anthill-grok-fd-bound-"));
+    const sessions = join(home, ".grok/sessions/%2FUsers%2Fant%2FDeveloper%2Fformic");
+    const sessionCount = 400;
+    mkdirSync(sessions, { recursive: true });
+    for (let index = 0; index < sessionCount; index += 1) {
+      const id = `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
+      const session = join(sessions, id);
+      mkdirSync(session);
+      writeFileSync(join(session, "summary.json"), JSON.stringify({
+        generated_title: `Grok session ${index}`,
+        created_at: "2026-08-22T12:00:00.000Z",
+        last_active_at: "2026-08-22T12:00:01.000Z",
+      }));
+      writeFileSync(join(session, "signals.json"), JSON.stringify({
+        primaryModelId: "grok-4.6",
+      }));
+      writeFileSync(join(session, "updates.jsonl"), `${JSON.stringify({
+        timestamp: "2026-08-22T12:00:01.000Z",
+        params: {
+          update: {
+            sessionUpdate: "user_message_chunk",
+            content: { type: "text", text: `Collect Grok session ${index}.` },
+          },
+        },
+      })}\n`);
+    }
+
+    const probe = Bun.spawnSync([
+      "bash",
+      "-c",
+      'ulimit -n 16; exec "$1" "$2" "$3" "$4" "$5"',
+      "grok-fd-probe",
+      process.execPath,
+      join(import.meta.dir, "fixtures", "collector-fd-probe.ts"),
+      home,
+      String(sessionCount),
+      "grok",
+    ], { stdout: "pipe", stderr: "pipe" });
+
+    expect(probe.exitCode, probe.stderr.toString()).toBe(0);
+    expect(JSON.parse(probe.stdout.toString())).toEqual({
+      agents: sessionCount,
+      errors: 0,
+    });
+  });
+
+  test("a streamed update row can cross the bounded read chunk", async () => {
+    const home = mkdtempSync(join(tmpdir(), "anthill-grok-chunk-boundary-"));
+    const session = join(home, ".grok/sessions/%2FUsers%2Fant%2FDeveloper%2Fformic", ID);
+    mkdirSync(session, { recursive: true });
+    writeFileSync(join(session, "updates.jsonl"), [
+      JSON.stringify({
+        timestamp: "2026-08-22T12:00:00.000Z",
+        params: {
+          update: {
+            sessionUpdate: "user_message_chunk",
+            content: { type: "text", text: "Keep Grok memory bounded." },
+          },
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-08-22T12:00:01.000Z",
+        params: {
+          update: {
+            sessionUpdate: "tool_call_update",
+            content: { padding: "x".repeat(1_100_000) },
+          },
+        },
+      }),
+      JSON.stringify({
+        timestamp: "2026-08-22T12:00:02.000Z",
+        params: {
+          update: {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Grok memory is bounded." },
+          },
+        },
+      }),
+    ].join("\n") + "\n");
+
+    const result = await collectSessionProvider("grok", home, Number.POSITIVE_INFINITY);
+
+    expect(result.errors).toEqual([]);
+    expect(result.value[0]).toMatchObject({
+      task: "Keep Grok memory bounded.",
+      transcriptTail: "Grok memory is bounded.",
+      lastUserMessage: "Keep Grok memory bounded.",
+      lastAgentMessage: "Grok memory is bounded.",
+    });
+  });
 });
 
 describe("Grok hook and presentation contracts", () => {

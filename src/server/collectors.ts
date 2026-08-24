@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, type Stats } from "node:fs";
 import { open, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
@@ -36,6 +36,11 @@ import { readHookSessionStores, type HookSessionRecord } from "./cmux-hook-sessi
 import { readProcessLineage, type ProcessLineageExec } from "./process-lineage";
 import { livenessOf, processAliveFrom } from "./process-liveness";
 import { observeClaudeRow, ThreadClock, threadFromMessages } from "./thread-clock";
+import {
+  appendJsonFileRange,
+  JSONL_READ_CHUNK_BYTES,
+  sameFileSnapshot,
+} from "./jsonl-reader";
 
 export const DEFAULT_SESSION_WINDOW_MS = 36 * 60 * 60 * 1_000;
 export interface CollectSessionsOptions {
@@ -60,6 +65,7 @@ export interface CollectSessionsOptions {
 }
 export type SessionProviderResult = CollectionResult<CollectedAgent[]>;
 export type SessionProviderResults = Record<Provider, SessionProviderResult>;
+const MAX_BUFFERED_TRANSCRIPT_APPEND_BYTES = JSONL_READ_CHUNK_BYTES;
 const fileCache = new Map<string, {
   provider: Provider;
   dev: number;
@@ -1199,6 +1205,42 @@ async function readFileRange(path: string, offset: number, length: number): Prom
   }
 }
 
+async function parseStableTranscript(
+  provider: Provider,
+  path: string,
+  initialDetails: Stats,
+  parser: (jsonl: string, meta: ParseMetadata) => CollectedAgent | null,
+  thresholds?: LifecycleThresholds,
+): Promise<{
+  details: Stats;
+  remainder: Buffer;
+  parser: IncrementalParser;
+  agent: CollectedAgent | null;
+}> {
+  let details = initialDetails;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const incremental = parserFor(provider, parser);
+    const remainder = await appendJsonFileRange(
+      path,
+      0,
+      details.size,
+      Buffer.alloc(0),
+      (rows) => incremental.append(rows),
+    );
+    const after = await stat(path);
+    if (sameFileSnapshot(details, after)) {
+      return {
+        details,
+        remainder,
+        parser: incremental,
+        agent: incremental.result({ sourcePath: path, mtimeMs: details.mtimeMs, thresholds }),
+      };
+    }
+    details = after;
+  }
+  throw new Error("transcript changed during collection");
+}
+
 function retainProcessEvidence(
   agent: CollectedAgent | null,
   previous: CollectedAgent | null | undefined,
@@ -1212,6 +1254,26 @@ function retainProcessEvidence(
     processAlive: previous.processAlive,
     transcriptOpen: previous.transcriptOpen,
   };
+}
+
+function cacheStableTranscript(
+  provider: Provider,
+  path: string,
+  parsed: Awaited<ReturnType<typeof parseStableTranscript>>,
+  previous?: CollectedAgent | null,
+): CollectedAgent | null {
+  const agent = retainProcessEvidence(parsed.agent, previous);
+  fileCache.set(path, {
+    provider,
+    dev: parsed.details.dev,
+    ino: parsed.details.ino,
+    mtimeMs: parsed.details.mtimeMs,
+    size: parsed.details.size,
+    remainder: parsed.remainder,
+    parser: parsed.parser,
+    agent,
+  });
+  return agent;
 }
 
 async function collectProvider(
@@ -1232,77 +1294,77 @@ async function collectProvider(
   for (const [path, cached] of fileCache) {
     if (cached.provider === provider && !currentPaths.has(path)) fileCache.delete(path);
   }
-  await Promise.all(
-    files.map(async (path) => {
-      try {
-        let details = await stat(path);
-        const cached = fileCache.get(path);
-        if (cached &&
-          cached.dev === details.dev &&
-          cached.ino === details.ino &&
-          cached.mtimeMs === details.mtimeMs &&
-          cached.size === details.size) {
-          if (cached.agent) agents.push(withCurrentStatus(cached.agent, Date.now(), thresholds));
-          return;
-        }
-        const canAppend = cached &&
-          cached.provider === provider &&
-          cached.dev === details.dev &&
-          cached.ino === details.ino &&
-          details.size > cached.size;
-        const incremental = canAppend ? cached.parser : parserFor(provider, parser);
-        const offset = canAppend ? cached.size : 0;
-        const prefix = canAppend ? cached.remainder : Buffer.alloc(0);
-        let chunk = await readFileRange(path, offset, details.size - offset);
-        let after = await stat(path);
-        if (after.dev !== details.dev || after.ino !== details.ino ||
-          after.size !== details.size || after.mtimeMs !== details.mtimeMs) {
-          details = after;
-          chunk = await readFileRange(path, 0, details.size);
-          after = await stat(path);
-          if (after.dev !== details.dev || after.ino !== details.ino ||
-            after.size !== details.size || after.mtimeMs !== details.mtimeMs) {
-            throw new Error("transcript changed during collection");
-          }
-          const reset = parserFor(provider, parser);
-          const complete = completeJsonRecords(chunk);
-          reset.append(complete.rows);
-          const parsed = reset.result({ sourcePath: path, mtimeMs: details.mtimeMs, thresholds });
-          fileCache.set(path, {
-            provider,
-            dev: details.dev,
-            ino: details.ino,
-            mtimeMs: details.mtimeMs,
-            size: details.size,
-            remainder: complete.remainder,
-            parser: reset,
-            agent: parsed,
-          });
-          if (parsed) agents.push(parsed);
-          return;
-        }
-        const complete = completeJsonRecords(Buffer.concat([prefix, chunk]));
-        incremental.append(complete.rows);
-        const parsed = retainProcessEvidence(
-          incremental.result({ sourcePath: path, mtimeMs: details.mtimeMs, thresholds }),
+  /* Providers still collect in parallel, but one provider no longer opens and
+     materializes every recent transcript at once. On the production fleet that
+     was 409 files / 1.75 GB of JSONL, multiplied into 6–33 GB by Buffer, UTF-8
+     string and parsed-object copies before the first pass could publish. */
+  for (const path of files) {
+    try {
+      const details = await stat(path);
+      const cached = fileCache.get(path);
+      if (cached &&
+        cached.dev === details.dev &&
+        cached.ino === details.ino &&
+        cached.mtimeMs === details.mtimeMs &&
+        cached.size === details.size) {
+        if (cached.agent) agents.push(withCurrentStatus(cached.agent, Date.now(), thresholds));
+        continue;
+      }
+      const canAppend = cached &&
+        cached.provider === provider &&
+        cached.dev === details.dev &&
+        cached.ino === details.ino &&
+        details.size > cached.size;
+      const appendLength = canAppend ? details.size - cached.size : 0;
+      if (!canAppend || appendLength > MAX_BUFFERED_TRANSCRIPT_APPEND_BYTES) {
+        const parsed = await parseStableTranscript(provider, path, details, parser, thresholds);
+        const agent = cacheStableTranscript(
+          provider,
+          path,
+          parsed,
           canAppend ? cached.agent : undefined,
         );
-        fileCache.set(path, {
-          provider,
-          dev: details.dev,
-          ino: details.ino,
-          mtimeMs: details.mtimeMs,
-          size: details.size,
-          remainder: complete.remainder,
-          parser: incremental,
-          agent: parsed,
-        });
-        if (parsed) agents.push(parsed);
-      } catch (error) {
-        errors.push(`${provider} ${path}: ${error instanceof Error ? error.message : String(error)}`);
+        if (agent) agents.push(agent);
+        continue;
       }
-    }),
-  );
+      const chunk = await readFileRange(path, cached.size, appendLength);
+      const after = await stat(path);
+      if (!sameFileSnapshot(details, after)) {
+        const parsed = await parseStableTranscript(provider, path, after, parser, thresholds);
+        const stillAppending = cached.provider === provider
+          && cached.dev === parsed.details.dev
+          && cached.ino === parsed.details.ino
+          && parsed.details.size > cached.size;
+        const agent = cacheStableTranscript(
+          provider,
+          path,
+          parsed,
+          stillAppending ? cached.agent : undefined,
+        );
+        if (agent) agents.push(agent);
+        continue;
+      }
+      const complete = completeJsonRecords(Buffer.concat([cached.remainder, chunk]));
+      cached.parser.append(complete.rows);
+      const parsed = retainProcessEvidence(
+        cached.parser.result({ sourcePath: path, mtimeMs: details.mtimeMs, thresholds }),
+        cached.agent,
+      );
+      fileCache.set(path, {
+        provider,
+        dev: details.dev,
+        ino: details.ino,
+        mtimeMs: details.mtimeMs,
+        size: details.size,
+        remainder: complete.remainder,
+        parser: cached.parser,
+        agent: parsed,
+      });
+      if (parsed) agents.push(parsed);
+    } catch (error) {
+      errors.push(`${provider} ${path}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
   return { value: agents, errors, ...(absent ? { absent: true } : {}) };
 }
 

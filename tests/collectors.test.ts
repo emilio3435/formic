@@ -976,7 +976,76 @@ describe("collector identity and usage truth", () => {
     expect((await collectSessions(home)).codex.value[0]?.sourceSessionId).toBe("session-b");
   });
 
-  test("incremental appends retain exact process evidence for the next identity scan", async () => {
+  test("a cold scan bounds open transcript files instead of dropping a large fleet", () => {
+    const home = mkdtempSync(join(tmpdir(), "mountain-collector-fd-bound-"));
+    const sessions = join(home, ".codex", "sessions", "2026", "08", "22");
+    const sessionCount = 400;
+    mkdirSync(sessions, { recursive: true });
+    for (let index = 0; index < sessionCount; index += 1) {
+      writeFileSync(join(sessions, `session-${index}.jsonl`), `${JSON.stringify({
+        type: "session_meta",
+        timestamp: new Date().toISOString(),
+        payload: {
+          id: `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+          cwd: "/tmp/formic",
+        },
+      })}\n`);
+    }
+
+    const probe = Bun.spawnSync([
+      "bash",
+      "-c",
+      'ulimit -n 64; exec "$1" "$2" "$3" "$4"',
+      "collector-fd-probe",
+      process.execPath,
+      join(import.meta.dir, "fixtures", "collector-fd-probe.ts"),
+      home,
+      String(sessionCount),
+    ], { stdout: "pipe", stderr: "pipe" });
+
+    expect(probe.exitCode, probe.stderr.toString()).toBe(0);
+    expect(JSON.parse(probe.stdout.toString())).toEqual({
+      agents: sessionCount,
+      errors: 0,
+    });
+  });
+
+  test("a cold scan preserves JSON records that cross the bounded read chunk", async () => {
+    const home = mkdtempSync(join(tmpdir(), "mountain-collector-chunk-boundary-"));
+    const sessions = join(home, ".codex", "sessions");
+    const path = join(sessions, "session.jsonl");
+    mkdirSync(sessions, { recursive: true });
+    writeFileSync(path, [
+      JSON.stringify({
+        type: "session_meta",
+        timestamp: "2026-08-22T12:00:00.000Z",
+        payload: { id: "11111111-2222-4333-8444-555555555555", cwd: "/tmp/formic" },
+      }),
+      JSON.stringify({ type: "ignored", padding: "x".repeat(1_100_000) }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-08-22T12:00:01.000Z",
+        payload: { type: "user_message", message: "Keep the fleet bounded." },
+      }),
+    ].join("\n") + "\n");
+
+    const first = (await collectSessions(home)).codex.value[0];
+    expect(first?.task).toBe("Keep the fleet bounded.");
+
+    appendFileSync(path, `${JSON.stringify({
+      type: "response_item",
+      timestamp: "2026-08-22T12:00:02.000Z",
+      payload: {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "The fleet is bounded." }],
+      },
+    })}\n`);
+    const updated = (await collectSessions(home)).codex.value[0];
+    expect(updated?.lastAgentMessage).toBe("The fleet is bounded.");
+  });
+
+  test("large incremental reparses retain exact process evidence for the next identity scan", async () => {
     const home = mkdtempSync(join(tmpdir(), "mountain-collector-process-"));
     const sessions = join(home, ".codex", "sessions");
     const path = join(sessions, "session.jsonl");
@@ -993,11 +1062,14 @@ describe("collector identity and usage truth", () => {
     first.processIds = [4242];
     first.processAlive = true;
 
-    appendFileSync(path, `${JSON.stringify({
-      type: "event_msg",
-      timestamp: new Date().toISOString(),
-      payload: { type: "task_complete" },
-    })}\n`);
+    appendFileSync(path, [
+      JSON.stringify({ type: "ignored", padding: "x".repeat(1_100_000) }),
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: new Date().toISOString(),
+        payload: { type: "task_complete" },
+      }),
+    ].join("\n") + "\n");
     const updated = (await collectSessions(home)).codex.value[0];
 
     expect(updated).toMatchObject({
