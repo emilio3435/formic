@@ -6624,9 +6624,10 @@ a.artifact-path:hover { text-decoration: underline; }
   padding: 1.5px;                       /* ring thickness */
   border-radius: inherit;
   background-image: conic-gradient(from var(--alert-sweep),
-    transparent 0 72%,
-    color-mix(in srgb, var(--alert-ink) 95%, transparent) 90%,
-    transparent 100%);
+    transparent 0 80%,
+    color-mix(in srgb, var(--alert-ink) 40%, transparent) 89%,
+    var(--alert-ink) 92%,
+    transparent 92.5%);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
