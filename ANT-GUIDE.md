@@ -396,10 +396,12 @@ refused rather than sent on the strength of where the agent *used to* be.
 
 None of these are degraded states. A board that says `All clear` and still greys
 out Send on one row is working exactly as designed: everything it can verify, it
-did, and the one thing it could not verify it declined to guess. **The board is
-never the reason you cannot reach an agent — it is the reason you do not reach
-the wrong one.** Focus stays on throughout precisely so you always have a way in:
-go and look, and type there yourself.
+did, and the one thing it could not verify it declined to guess. On collectors
+that permit a unique working-directory target, Focus stays on so you can go and
+look, then type there yourself. Gemini CLI, OpenCode, Pi, Kilo, and Kimi Code are
+exact-identity-only: all three controls, including Focus, stay off until cmux
+attests the session. In that state Formic has no terminal it can safely take you
+to, so it will not substitute a guessed pane for the agent you meant to reach.
 
 **To get Send and Interrupt back:** start the agent *inside* a cmux pane and
 leave it there, and keep the session running. Identification works first from
@@ -539,11 +541,14 @@ and only one of them has a button.
 
 **The same figure has a second boundary, and it is the one worth building a
 habit around.** The window narrows it in *time*; this narrows it in *which
-tools*. The board reads Claude Code, Codex, Cursor, OMP, Factory, Prime, Grok,
-Hermes, Muse, Antigravity, Copilot, Gemini CLI, OpenCode, Pi, Kilo, and Kimi Code. Extra homes of those same tools opt in under **Settings → Collectors**; they are not new providers. Anything else you run that costs money — a scheduled job, a CLI
-added since, a provider someone set up on a Friday — spends real money and
-has no agent row or session. Usage names that gap under **Unmodelled billed
-providers**.
+tools*. The board reads Claude Code, Codex, Cursor, OMP, Factory, Prime, Grok Build,
+Hermes, Muse Code, Antigravity, Copilot CLI, Gemini CLI, OpenCode, Pi, Kilo, and Kimi
+Code. **Settings → Collectors** can onboard alternate homes for Cursor, Grok
+CLI/Bot, Copilot, Gemini CLI, OpenCode, Pi, Kilo, and Kimi Code; those extra
+homes are not new providers. Other discovered homes remain `needs-parser`.
+Anything else you run that costs money — a scheduled job, a CLI added since, a
+provider someone set up on a Friday — spends real money and has no agent row or
+session. Usage names that gap under **Unmodelled billed providers**.
 
 **So read the provider list.** On the **Usage** tab, under the cost, is a
 breakdown by provider. That list comes from your billing source rather than from
@@ -586,7 +591,7 @@ board rather than a list anyone can hand you.
 2. Read the **by provider** list under the cost.
 3. Check **Unmodelled billed providers**. Formic compares the billing list
    against the sixteen collectors: **Claude Code, Codex, Cursor, OMP, Factory,
-   Prime, Grok, Hermes, Muse, Antigravity, Copilot, Gemini CLI, OpenCode, Pi, Kilo, and Kimi Code**.
+   Prime, Grok Build, Hermes, Muse Code, Antigravity, Copilot CLI, Gemini CLI, OpenCode, Pi, Kilo, and Kimi Code**.
 4. Anything named there is **billed and unwatched** — real money with no agent
    row or session, now disclosed rather than silently absent.
 
@@ -657,7 +662,7 @@ about this band, so it is stated for each:
 | **Tokens** | What the fleet has consumed, over the board's scan window. | Every token counted **once**: the sum of each session's own total across the sessions the collectors harvested. A leading `≥` means the figure is a floor — some eligible sessions did not report, and the card says how many. It is **not** the number beside a single session in the row list: that one is *occupancy*, the size of the latest call including cache reads, and summing occupancies across sessions is a different quantity entirely (measured live: 75.8M consumed against 0.9M occupancy, 83× apart). It is also not *processed* flow, which counts cache re-reads again and runs several times larger; that stays in the drawer. **No window tag of its own** — the scan window is stated once above the cards. If the collectors have not finished a full scan yet, the card does not render at all rather than showing a partial number. |
 | **Context** | How full a typical session's context window is. The average leads; the toggle beside it switches the headline to the median, and that choice is remembered per browser. | The mean (or median) `ctx%` across **live sessions only** (working or waiting) that report a window; finished and unverified sessions are excluded, and the card says `29/32 reporting` when the reading does not cover every eligible session. The **peak** is a tick on the dial and is named in the dial's accessible label — it used to be the headline, which presented one session's extremum as a reading about the fleet: measured live at peak 84% while the typical session sat at 25%. It still decides the card's alarm colour, because one session about to run out of room is worth reacting to. With no fleet reading at all the card does not render, rather than printing `0%`. |
 | **Health** | One verdict for the whole system. | Not a count. See the health section below. |
-| **Mix** | Which harnesses and models the fleet is running, at a glance. | Live sessions counted per provider (Claude, Codex, Cursor, Factory, OMP, Prime, Grok, Hermes, Muse, Antigravity, Copilot, Gemini CLI, OpenCode, Pi, Kilo, Kimi Code) as colored marks with counts, with the top models named beneath. Counts what the collectors harvested this scan — nothing external, no logos, status carried by shape+label+color like every other card. Off by default; enable it in **Customize summary**. |
+| **Mix** | Which harnesses and models the fleet is running, at a glance. | Live sessions counted per provider (Claude Code, Codex, Cursor, OMP, Factory, Prime, Grok Build, Hermes, Muse Code, Antigravity, Copilot CLI, Gemini CLI, OpenCode, Pi, Kilo, and Kimi Code) as colored marks with counts, with the top models named beneath. Counts what the collectors harvested this scan — nothing external, no logos, status carried by shape+label+color like every other card. Off by default; enable it in **Customize summary**. |
 | **Spend** | The fleet's measured cost, with its provenance stated. | The same BurnBar figures the Burn card reads: the last hour's cost with a leading `≥` when the figure is a floor, `cost unavailable` when the provenance says so — it never fabricates a `$0.00` for an hour nobody could price. Off by default; enable it in **Customize summary**. |
 
 Hide, show, and reorder these with **Customize summary**.
@@ -846,6 +851,10 @@ the row still reads healthy.
 → *Fix:* start agents inside cmux panes and leave them there. Identification
 needs the session's transcript file open on that pane, or its ID in the command
 that launched it.
+
+For Gemini CLI, OpenCode, Pi, Kilo, and Kimi Code, a working-directory match is
+not enough even for Focus. If all three controls are greyed out, start the agent
+inside cmux and keep it there until cmux can attest the exact session identity.
 
 **The session's process is gone.** The pane outlives the agent, and by the time
 you get there it usually belongs to your shell again. An instruction to a dead

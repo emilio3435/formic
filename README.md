@@ -9,7 +9,7 @@ bash scripts/install-formic.sh
 ```
 
 Or from a checkout you already have: `bun start`. Open http://127.0.0.1:4701.
-Start Claude, Codex, Cursor, or Copilot CLI in any folder — a row appears in a few seconds. Official Muse, Copilot, and Antigravity marks ship in `src/web/icons/`.
+Start any supported harness in a folder and a row appears in a few seconds. The 16 first-class collectors are Claude Code, Codex, Cursor, Factory, OMP, Prime, Grok Build, Hermes, Muse Code, Antigravity, Copilot CLI, Gemini CLI, OpenCode, Pi, Kilo, and Kimi Code.
 
 [cmux](https://github.com/manaflow-ai/cmux) is optional. Without it the board still watches. Focus, Send, and Interrupt stay off: Formic will not type into a terminal it cannot identify.
 
@@ -23,4 +23,4 @@ Cost only when Formic has a real source. No source reads `unavailable`, never `$
 
 MIT. See [LICENSE](./LICENSE).
 
-Field-level source coverage: [docs/PARITY.md](docs/PARITY.md).
+Setup and collector locations: [QUICKSTART.md](QUICKSTART.md). Field-level source coverage and honest gaps: [docs/PARITY.md](docs/PARITY.md).

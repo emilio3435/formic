@@ -1,13 +1,14 @@
 # What changed on 2 August, and what you can lean on
 
-> **15 August correction — the provider roster now includes Hermes and Grok.**
-> Hermes interactive JSONL sessions are collected as agents.
+> **24 August correction — the provider roster now has sixteen collectors.**
+> Gemini CLI, OpenCode, Pi, Kilo, and Kimi Code join the eleven-provider roster
+> audited on 19 August. Hermes interactive JSONL sessions are collected as agents.
 > Hermes cron is collected separately as scheduled spend on Usage.
 > A cron job has no Focus, Send, lifecycle, or Board row because it is not an agent.
-> Health can still read `12 of 12 collectors healthy` because it checks the twelve provider homes;
-> Usage separately lists any billed name outside that roster under **Unmodelled billed providers**.
-> The dated Hermes statements below describe the 2 August
-> roster before this collector existed.
+> Health can still read `16 of 16 collectors healthy` because it checks those
+> sixteen provider sources; Usage separately lists billed names outside that
+> roster under **Unmodelled billed providers**. The dated statements below still
+> describe the smaller 2 August roster.
 
 > **3 August, 14:00 — two corrections landed on top of everything below.** Both
 > were found by asking what a number's *membership* was rather than whether it
