@@ -147,10 +147,17 @@ describe("the sweep stands down where motion is unwelcome", () => {
     expect(focusRule).toContain("inset 0 0 0 1px color-mix(in srgb, var(--alert-ink) 85%, transparent)");
     expect(focusRule).toContain("inset 0 0 0 3px var(--color-interactive)");
     expect(focusRule.indexOf("var(--alert-ink)")).toBeLessThan(focusRule.indexOf("var(--color-interactive)"));
-    /* Both rings stay INSET — the whole point of the change is that this mark
-       never paints outside the row's own border box, focused or not. The
-       lookbehind is load-bearing: without it the space inside `inset 0 0 0 1px`
-       satisfies a leading `[\s,]` and every inset layer reads as a violation. */
+    /* Both ALERT layers stay inset — the mark itself never paints outside the
+       row's own border box, focused or not. The third layer in the composite
+       does spread: `--color-focus-ring` resolves to an outset
+       `0 0 0 3px rgba(91,79,209,.28)`, exactly as it does on every other
+       focused row. So this guard is deliberately LITERAL — it forbids an
+       outward alert ring written into this rule, which is the real regression,
+       and says nothing about the shared token's own geometry.
+
+       The lookbehind is load-bearing: without it the space inside
+       `inset 0 0 0 1px` satisfies a leading `[\s,]` and every inset layer
+       reads as a violation. */
     expect(focusRule).not.toMatch(/(?<!inset )0 0 0 \d+px/);
     const focusSweep = styles.match(/\.agent-row\.is-alert-hot:focus-visible::after \{[^}]*\}/)?.[0] ?? "";
     expect(focusSweep).not.toBe("");

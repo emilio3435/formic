@@ -6607,10 +6607,15 @@ a.artifact-path:hover { text-decoration: underline; }
    two lines below, so the shorthand would trip a rule whose intent that guard
    actually protects. Identical paint, and the guard keeps its teeth.
 
-   The row is already `position: relative`, so `inset: 0` traces its exact
-   border box; with `box-sizing: border-box` and the 4px identity rail, both
-   the ring and this layer sit INSIDE the rail. That is intended — the rail is
-   identity, the ring is status, and they must not be confusable. */
+   The row is already `position: relative`, so it is this layer's containing
+   block — and an absolutely positioned box resolves `inset: 0` against that
+   block's PADDING box, never its border box. THAT is the mechanism that lands
+   the comet inside the 4px identity rail and short of the 1px border-bottom,
+   covering neither; `box-sizing` has nothing to do with it. Inset box-shadow
+   is drawn from the padding edge as well, which is why the static ring and
+   this comet are coincident rather than a hairline apart. Sitting inside the
+   rail is intended — the rail is identity, the ring is status, and the two
+   must not be confusable. */
 .agent-row.is-alert-hot::after {
   content: "";
   position: absolute;
@@ -6662,9 +6667,12 @@ a.artifact-path:hover { text-decoration: underline; }
    Ink outermost. Inset shadows paint first-listed on top, so the 1px alert
    ring holds the edge and the 3px interactive spread shows through beneath it
    as a 2px band — the same 2px ring every other focused row wears, moved in by
-   a hairline to make room. Both stay INSET: this mark never paints outside the
-   row's own border box, focused or not, which is the whole point of the
-   change. */
+   a hairline to make room. Both ALERT layers stay inset, so the mark itself
+   still never paints outside the row's own border box, focused or not — which
+   is the whole point of the change. The third layer is not ours and does
+   spread: `--color-focus-ring` resolves to `0 0 0 3px rgba(91,79,209,.28)`,
+   outset, exactly as it is on every other focused row on the board. Borrowing
+   the shared ring means wearing its geometry too. */
 .agent-row.is-alert-hot:focus-visible {
   box-shadow:
     inset 0 0 0 1px color-mix(in srgb, var(--alert-ink) 85%, transparent),
