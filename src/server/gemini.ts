@@ -1,5 +1,5 @@
-import { createReadStream } from "node:fs";
-import { open, readdir, stat } from "node:fs/promises";
+import { createReadStream, type Dirent } from "node:fs";
+import { open, opendir, stat } from "node:fs/promises";
 import { basename, isAbsolute, join } from "node:path";
 import type { TokenUsage } from "../shared/types";
 import { instanceIdFor, readTextCappedSync } from "./collector-instances";
@@ -21,11 +21,16 @@ const MAX_PUBLISHED_MESSAGES = 512;
 export const MAX_GEMINI_RECORD_BYTES = 8 * 1024 * 1024;
 export const MAX_GEMINI_REPLAY_MESSAGES = 4_096;
 export const MAX_GEMINI_REPLAY_BYTES = 16 * 1024 * 1024;
+export const GEMINI_DIRECTORY_LIMITS = {
+  projects: 128,
+  chats: 1_024,
+} as const;
 
 export interface GeminiConversation {
   metadata: JsonRecord;
   messages: JsonRecord[];
   firstUserMessage?: JsonRecord;
+  unreadableRecordAfterLastAssistant?: boolean;
   partial?: boolean;
   warnings?: string[];
 }
@@ -96,7 +101,107 @@ function describe(error: unknown): string {
 }
 
 function checkAbort(signal: AbortSignal | undefined): void {
-  if (signal?.aborted) throw signal.reason ?? new Error("Gemini collection cancelled");
+  if (signal?.aborted) throw signal.reason;
+}
+
+function compareEntryNames(left: Dirent, right: Dirent): number {
+  return left.name < right.name ? -1 : left.name > right.name ? 1 : 0;
+}
+
+type GeminiDirectoryKind = "projects" | "chats" | "subagents";
+
+interface GeminiDirectoryReader {
+  read(): Promise<Dirent | null>;
+  close(): Promise<void>;
+}
+
+function directoryAdmissionLimit(kind: GeminiDirectoryKind): number {
+  return kind === "projects" ? GEMINI_DIRECTORY_LIMITS.projects : GEMINI_DIRECTORY_LIMITS.chats;
+}
+
+function eligibleDirectoryEntry(kind: GeminiDirectoryKind, entry: Dirent): boolean {
+  if (kind === "projects") return entry.isDirectory() && PROJECT_ID.test(entry.name);
+  if (kind === "chats") {
+    return (entry.isFile() && SESSION_FILE.test(entry.name))
+      || (entry.isDirectory() && UUID.test(entry.name));
+  }
+  return entry.isFile() && entry.name.endsWith(".jsonl");
+}
+
+async function admitOpenedGeminiDirectory(
+  directory: GeminiDirectoryReader,
+  kind: GeminiDirectoryKind,
+  signal?: AbortSignal,
+  onRetainedSize?: (size: number) => void,
+): Promise<{ entries: Dirent[]; truncated: boolean }> {
+  const admitted: Dirent[] = [];
+  const limit = directoryAdmissionLimit(kind);
+  let inspected = 0;
+  let truncated = false;
+  let failed = false;
+  try {
+    while (inspected < limit) {
+      checkAbort(signal);
+      const entry = await directory.read();
+      checkAbort(signal);
+      if (!entry) break;
+      inspected += 1;
+      if (eligibleDirectoryEntry(kind, entry)) {
+        admitted.push(entry);
+      }
+      onRetainedSize?.(admitted.length);
+    }
+    if (inspected === limit) {
+      checkAbort(signal);
+      const omitted = await directory.read();
+      checkAbort(signal);
+      truncated = omitted !== null;
+    }
+    checkAbort(signal);
+  } catch (error) {
+    failed = true;
+    throw error;
+  } finally {
+    let closeError: unknown;
+    try {
+      await directory.close();
+    } catch (error) {
+      closeError = error;
+    }
+    checkAbort(signal);
+    if (!failed && closeError !== undefined) throw closeError;
+  }
+  admitted.sort(compareEntryNames);
+  return { entries: admitted, truncated };
+}
+
+async function admitGeminiDirectory(
+  path: string,
+  kind: GeminiDirectoryKind,
+  signal?: AbortSignal,
+): Promise<{ entries: Dirent[]; truncated: boolean }> {
+  checkAbort(signal);
+  let directory;
+  try {
+    directory = await opendir(path);
+  } catch (error) {
+    checkAbort(signal);
+    throw error;
+  }
+  return admitOpenedGeminiDirectory(directory, kind, signal);
+}
+
+export async function admitGeminiDirectoryForTests(
+  directory: GeminiDirectoryReader,
+  kind: GeminiDirectoryKind,
+  signal?: AbortSignal,
+  onRetainedSize?: (size: number) => void,
+): Promise<{ entries: Dirent[]; truncated: boolean }> {
+  return admitOpenedGeminiDirectory(directory, kind, signal, onRetainedSize);
+}
+
+function noteAdmissionTruncation(errors: string[], path: string, limit: number): void {
+  errors.push(`gemini ${path}: admission truncated to bounded iterator prefix of ${limit} entries`);
 }
 
 function boundedString(value: unknown): string | undefined {
@@ -206,6 +311,7 @@ export class GeminiReplay {
   #messageSizes: number[] = [];
   #retainedBytes = 0;
   #firstUserMessage: JsonRecord | undefined;
+  #unreadableRecordAfterLastAssistant = false;
   #partial = false;
   #warnings: string[] = [];
 
@@ -216,6 +322,11 @@ export class GeminiReplay {
   markPartial(warning: string): void {
     this.#partial = true;
     if (!this.#warnings.includes(warning)) this.#warnings.push(warning);
+  }
+
+  markUnreadableRecord(warning: string): void {
+    this.markPartial(warning);
+    this.#unreadableRecordAfterLastAssistant = true;
   }
 
   #rememberFirstUser(message: JsonRecord): void {
@@ -314,6 +425,13 @@ export class GeminiReplay {
     }
     const message = messageRecord(row);
     if (!message) return;
+    if (text(message.type) === "gemini") {
+      const hasTools = Array.isArray(message.toolCalls) && message.toolCalls.length > 0;
+      const hasThoughts = Array.isArray(message.thoughts) && message.thoughts.length > 0;
+      if (contentText(message.content) || hasTools || hasThoughts || tokensOf(message)) {
+        this.#unreadableRecordAfterLastAssistant = false;
+      }
+    }
     this.#rememberFirstUser(message);
     const index = this.#messages.findIndex((candidate) => candidate.id === message.id);
     const replacesRetainedFirst = index >= 0 && this.#messages[index] === this.#firstUserMessage;
@@ -341,6 +459,7 @@ export class GeminiReplay {
       metadata: { ...this.#metadata },
       messages: [...this.#messages],
       ...(this.#firstUserMessage ? { firstUserMessage: { ...this.#firstUserMessage } } : {}),
+      ...(this.#unreadableRecordAfterLastAssistant ? { unreadableRecordAfterLastAssistant: true } : {}),
       ...(this.#partial ? { partial: true } : {}),
       ...(this.#warnings.length > 0 ? { warnings: [...this.#warnings] } : {}),
     };
@@ -355,13 +474,15 @@ function replayJsonlText(jsonl: string): GeminiConversation | null {
     const end = newline < 0 ? jsonl.length : newline;
     const line = jsonl.slice(start, end);
     if (Buffer.byteLength(line) > MAX_GEMINI_RECORD_BYTES) {
-      replay.markPartial(`Gemini JSONL record exceeds ${MAX_GEMINI_RECORD_BYTES} byte cap and was skipped`);
+      replay.markUnreadableRecord(
+        `Gemini JSONL record exceeds ${MAX_GEMINI_RECORD_BYTES} byte cap and was skipped`,
+      );
     } else if (line.trim()) {
       try {
         const row = record(JSON.parse(line));
         if (row) replay.append(row);
       } catch {
-        // Active files may end in a partial line; malformed records do not erase valid neighbors.
+        if (newline >= 0) replay.markUnreadableRecord("Gemini malformed interior JSONL record was skipped");
       }
     }
     if (newline < 0) break;
@@ -425,7 +546,7 @@ function eventTimestamp(message: JsonRecord): string | undefined {
   return latest;
 }
 
-function conversationAgent(
+export function parseGeminiConversation(
   conversation: GeminiConversation,
   meta: ParseMetadata,
   extras: { cwd?: string; parentSourceSessionId?: string } = {},
@@ -442,6 +563,7 @@ function conversationAgent(
   let updatedFromMessages: string | undefined;
   let lastThreadAt: string | undefined;
   const callSizes: number[] = [];
+  let callSizesComplete = !conversation.partial;
   let transcriptTail: string | undefined;
   let resumable = Boolean(task);
 
@@ -470,16 +592,20 @@ function conversationAgent(
     if (type !== "gemini") continue;
     const hasTools = Array.isArray(message.toolCalls) && message.toolCalls.length > 0;
     const hasThoughts = Array.isArray(message.thoughts) && message.thoughts.length > 0;
-    if (content || hasTools || hasThoughts) resumable = true;
+    const eligibleResponse = Boolean(content || hasTools || hasThoughts);
+    if (eligibleResponse) resumable = true;
     if (content) pushPublishedMessage({ role: "assistant", content, timestamp });
     model = text(message.model) ?? model;
     const usage = tokensOf(message);
     if (usage) {
       latestTokens = usage;
-      if (callSizes.length >= MAX_PUBLISHED_MESSAGES) callSizes.shift();
       callSizes.push(usage.total);
+    } else if (eligibleResponse) {
+      latestTokens = undefined;
+      callSizesComplete = false;
     }
   }
+  if (conversation.unreadableRecordAfterLastAssistant) latestTokens = undefined;
   if (!resumable) return null;
 
   const contextWindow = claudeContextWindow(model);
@@ -520,7 +646,7 @@ function conversationAgent(
     humanMessages: messages,
     thread: { lastThreadAt },
     meta,
-    ...(callSizes.length > 0 ? { callSizes } : {}),
+    ...(callSizes.length > 0 && callSizesComplete ? { callSizes } : {}),
   });
   if (summary) {
     agent.displayName = agent.identity?.name ?? summary;
@@ -541,7 +667,7 @@ export function parseGeminiJsonl(
   extras: { cwd?: string; parentSourceSessionId?: string } = {},
 ): CollectedAgent | null {
   const conversation = replayJsonlText(jsonl);
-  return conversation ? conversationAgent(conversation, meta, extras) : null;
+  return conversation ? parseGeminiConversation(conversation, meta, extras) : null;
 }
 
 export function parseGeminiLegacyJson(
@@ -555,7 +681,7 @@ export function parseGeminiLegacyJson(
   } catch {
     return null;
   }
-  return conversation ? conversationAgent(conversation, meta, extras) : null;
+  return conversation ? parseGeminiConversation(conversation, meta, extras) : null;
 }
 
 async function readProjectRoot(projectRoot: string): Promise<string | undefined> {
@@ -578,7 +704,7 @@ async function readJsonlConversation(
   let pending: Buffer[] = [];
   let pendingBytes = 0;
   let discardingOversizedLine = false;
-  const appendLine = (): void => {
+  const appendLine = (terminated: boolean): void => {
     if (pendingBytes === 0) return;
     const line = Buffer.concat(pending, pendingBytes).toString("utf8");
     pending = [];
@@ -588,6 +714,7 @@ async function readJsonlConversation(
     try {
       value = JSON.parse(line);
     } catch {
+      if (terminated) replay.markUnreadableRecord("Gemini malformed interior JSONL record was skipped");
       return;
     }
     replay.append(value);
@@ -610,7 +737,7 @@ async function readJsonlConversation(
         if (pendingBytes + part.length > MAX_GEMINI_RECORD_BYTES) {
           pending = [];
           pendingBytes = 0;
-          replay.markPartial(
+          replay.markUnreadableRecord(
             `Gemini JSONL record exceeds ${MAX_GEMINI_RECORD_BYTES} byte cap and was skipped`,
           );
           if (newline < 0) {
@@ -623,11 +750,11 @@ async function readJsonlConversation(
         if (part.length > 0) pending.push(part);
         pendingBytes += part.length;
         if (newline < 0) break;
-        appendLine();
+        appendLine(true);
         offset = newline + 1;
       }
     }
-    if (!discardingOversizedLine) appendLine();
+    if (!discardingOversizedLine) appendLine(false);
   } finally {
     input.destroy();
   }
@@ -681,7 +808,7 @@ export async function parseGeminiConversationFile(
 ): Promise<CollectedAgent | null> {
   const conversation = await readGeminiConversationFile(path, signal);
   return conversation
-    ? conversationAgent(conversation, { ...meta, sourcePath: meta.sourcePath ?? path }, extras)
+    ? parseGeminiConversation(conversation, { ...meta, sourcePath: meta.sourcePath ?? path }, extras)
     : null;
 }
 
@@ -737,7 +864,7 @@ async function collectFile(
   } else if (kind === "subagent") {
     return undefined;
   }
-  const agent = conversationAgent(conversation, {
+  const agent = parseGeminiConversation(conversation, {
     sourcePath: path,
     mtimeMs: details.mtimeMs,
     nowMs,
@@ -763,19 +890,19 @@ async function collectChats(
   checkAbort(signal);
   const projectRoot = join(root, "tmp", projectName);
   const chats = join(projectRoot, "chats");
-  let entries;
+  let admitted;
   try {
-    entries = await readdir(chats, { withFileTypes: true });
+    admitted = await admitGeminiDirectory(chats, "chats", signal);
   } catch (error) {
     checkAbort(signal);
     if (!missing(error)) errors.push(`gemini ${chats}: ${describe(error)}`);
     return { present: false, candidates: [] };
   }
-  checkAbort(signal);
+  if (admitted.truncated) noteAdmissionTruncation(errors, chats, GEMINI_DIRECTORY_LIMITS.chats);
   const cwd = await readProjectRoot(projectRoot);
   checkAbort(signal);
   const candidates: Candidate[] = [];
-  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+  for (const entry of admitted.entries) {
     checkAbort(signal);
     if (entry.isFile() && SESSION_FILE.test(entry.name)) {
       const candidate = await collectFile(
@@ -785,15 +912,18 @@ async function collectChats(
       continue;
     }
     if (!entry.isDirectory() || !UUID.test(entry.name)) continue;
-    let children;
+    let admittedChildren;
     try {
-      children = await readdir(join(chats, entry.name), { withFileTypes: true });
+      admittedChildren = await admitGeminiDirectory(join(chats, entry.name), "subagents", signal);
     } catch (error) {
       checkAbort(signal);
       if (!missing(error)) errors.push(`gemini ${join(chats, entry.name)}: ${describe(error)}`);
       continue;
     }
-    for (const child of children.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (admittedChildren.truncated) {
+      noteAdmissionTruncation(errors, join(chats, entry.name), GEMINI_DIRECTORY_LIMITS.chats);
+    }
+    for (const child of admittedChildren.entries) {
       checkAbort(signal);
       if (!child.isFile() || !child.name.endsWith(".jsonl")) continue;
       const candidate = await collectFile(
@@ -827,9 +957,8 @@ export async function collectGeminiSessions(
 
   for (const [rootIndex, root] of roots.entries()) {
     checkAbort(signal);
-    let projects;
     try {
-      await readdir(root);
+      await stat(root);
       anyRoot = true;
     } catch (error) {
       checkAbort(signal);
@@ -840,16 +969,18 @@ export async function collectGeminiSessions(
       }
       continue;
     }
+    let admittedProjects;
     try {
-      projects = await readdir(join(root, "tmp"), { withFileTypes: true });
+      admittedProjects = await admitGeminiDirectory(join(root, "tmp"), "projects", signal);
     } catch (error) {
       checkAbort(signal);
       if (!missing(error)) errors.push(`gemini ${join(root, "tmp")}: ${describe(error)}`);
       continue;
     }
-    for (const project of projects
-      .filter((entry) => entry.isDirectory() && PROJECT_ID.test(entry.name))
-      .sort((left, right) => left.name.localeCompare(right.name))) {
+    if (admittedProjects.truncated) {
+      noteAdmissionTruncation(errors, join(root, "tmp"), GEMINI_DIRECTORY_LIMITS.projects);
+    }
+    for (const project of admittedProjects.entries) {
       checkAbort(signal);
       const collected = await collectChats(root, project.name, windowMs, thresholds, nowMs, errors, signal);
       anyChats ||= collected.present;

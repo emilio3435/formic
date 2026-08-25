@@ -772,8 +772,12 @@ export function transcriptLines(
 function openCodeTranscriptLines(
   agent: AgentSnapshot,
   source: string,
+  signal?: AbortSignal,
 ): { lines: TranscriptLine[]; parserTruncated: boolean; missing: boolean } {
-  const session = readOpenCodeStore(source, { sessionId: agent.sourceSessionId }).sessions[0];
+  const session = readOpenCodeStore(source, {
+    sessionId: agent.sourceSessionId,
+    signal,
+  }).sessions[0];
   if (!session) return { lines: [], parserTruncated: false, missing: true };
   const lines: TranscriptLine[] = [];
   for (const event of session.events) {
@@ -803,12 +807,16 @@ function openCodeTranscriptLines(
 function kiloTranscriptLines(
   agent: AgentSnapshot,
   source: string,
+  signal?: AbortSignal,
 ): {
   lines: TranscriptLine[];
   parserTruncated: boolean;
   missing: boolean;
 } {
-  const session = readKiloStore(source, { sessionId: agent.sourceSessionId }).sessions[0];
+  const session = readKiloStore(source, {
+    sessionId: agent.sourceSessionId,
+    signal,
+  }).sessions[0];
   if (!session) return { lines: [], parserTruncated: false, missing: true };
   const lines: TranscriptLine[] = [];
   for (const event of session.events) {
@@ -840,6 +848,7 @@ export async function transcriptResponse(
   headers: Readonly<Record<string, string>>,
   signal?: AbortSignal,
 ): Promise<Response> {
+  if (signal?.aborted) throw signal.reason;
   const responseHeaders = { ...headers, "cache-control": "no-store" };
   const agent = snapshot.programs
     .flatMap((program) => program.agents)
@@ -881,7 +890,7 @@ export async function transcriptResponse(
       );
     }
     if (agent.provider === "gemini") {
-      const conversation = await readGeminiConversationFile(source);
+      const conversation = await readGeminiConversationFile(source, signal);
       const lines = conversation ? geminiTranscriptLinesFromConversation(agent, conversation) : [];
       return Response.json(
         {
@@ -898,7 +907,7 @@ export async function transcriptResponse(
       );
     }
     if (agent.provider === "opencode") {
-      const transcript = openCodeTranscriptLines(agent, source);
+      const transcript = openCodeTranscriptLines(agent, source, signal);
       if (transcript.missing) {
         return Response.json(
           {
@@ -923,7 +932,7 @@ export async function transcriptResponse(
       );
     }
     if (agent.provider === "kilo") {
-      const transcript = kiloTranscriptLines(agent, source);
+      const transcript = kiloTranscriptLines(agent, source, signal);
       if (transcript.missing) {
         return Response.json(
           {

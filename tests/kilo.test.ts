@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { renameSync } from "node:fs";
@@ -15,6 +15,7 @@ import {
 } from "../src/server/collectors";
 import { readHookSessionStores } from "../src/server/cmux-hook-sessions";
 import { collectKiloSessions, type KiloCollectOptions } from "../src/server/kilo";
+import { KILO_STORE_LIMITS } from "../src/server/kilo-store";
 import { transcriptResponse } from "../src/server/debug-identity";
 import { identitiesFromCommand } from "../src/server/identity";
 import { sessionCallsResponse } from "../src/server/session-calls";
@@ -184,6 +185,33 @@ function snapshotFor(agent: CollectedAgent) {
     archiveStore,
     now: new Date(1_800_000_010_000),
   });
+}
+
+async function abortAfterFirstKiloQuery<T>(
+  abort: AbortController,
+  reason: Error,
+  work: () => Promise<T>,
+): Promise<T> {
+  const descriptor = Object.getOwnPropertyDescriptor(Database.prototype, "query");
+  if (!descriptor || typeof descriptor.value !== "function") {
+    throw new Error("bun:sqlite Database.query is unavailable for Kilo abort control");
+  }
+  const original = descriptor.value as (...args: unknown[]) => unknown;
+  let queries = 0;
+  Object.defineProperty(Database.prototype, "query", {
+    ...descriptor,
+    value: function (this: Database, ...args: unknown[]) {
+      const result = Reflect.apply(original, this, args);
+      queries += 1;
+      if (queries === 1) abort.abort(reason);
+      return result;
+    },
+  });
+  try {
+    return await work();
+  } finally {
+    Object.defineProperty(Database.prototype, "query", descriptor);
+  }
 }
 
 describe("Kilo central collection red floor", () => {
@@ -540,6 +568,34 @@ describe("Kilo central collection red floor", () => {
     });
   });
 
+  test("08a transcript cancellation during a store read rethrows the exact request reason", async () => {
+    const directory = await temporaryDirectory("formic-kilo-transcript-abort-");
+    const source = await fixtureStore(join(directory, "kilo.db"));
+    const agent = manualKiloAgent(source);
+    const abort = new AbortController();
+    const reason = new Error("cancel Kilo transcript request");
+
+    await expect(abortAfterFirstKiloQuery(
+      abort,
+      reason,
+      () => transcriptResponse(snapshotFor(agent), agent.id, 200, {}, abort.signal),
+    )).rejects.toBe(reason);
+  });
+
+  test("08b session-call cancellation during a store read rethrows the exact request reason", async () => {
+    const directory = await temporaryDirectory("formic-kilo-session-call-abort-");
+    const source = await fixtureStore(join(directory, "kilo.db"));
+    const agent = manualKiloAgent(source);
+    const abort = new AbortController();
+    const reason = new Error("cancel Kilo session-call request");
+
+    await expect(abortAfterFirstKiloQuery(
+      abort,
+      reason,
+      () => sessionCallsResponse(snapshotFor(agent), agent.id, {}, abort.signal),
+    )).rejects.toBe(reason);
+  });
+
   test("09 Kilo harness and provider marks are distinct runtime contracts", async () => {
     // @ts-expect-error the dependency-free browser client has no declaration file
     await import("../src/web/app.js");
@@ -745,7 +801,8 @@ describe("Kilo central collection red floor", () => {
 
   test("18 deadline-limited Kilo stores are source-qualified errors rather than empty success", async () => {
     const home = await temporaryDirectory("formic-kilo-deadline-");
-    await fixtureStore(join(home, ".local", "share", "kilo", "kilo.db"));
+    const dataRoot = join(home, ".local", "share", "kilo");
+    await fixtureStore(join(dataRoot, "kilo.db"));
 
     const result = await collectAtHome(home, {}, {
       readOptions: { deadlineAtMs: 10, nowMs: () => 10 },
@@ -754,7 +811,76 @@ describe("Kilo central collection red floor", () => {
     expect({ rows: result.value, absent: result.absent, errors: result.errors }).toEqual({
       rows: [],
       absent: undefined,
-      errors: [expect.stringMatching(/Kilo.*kilo\.db.*deadline|kilo\.db.*Kilo.*deadline/i)],
+      errors: [`${dataRoot}: Kilo data directory deadline expired with matching stores not enumerated.`],
+    });
+  });
+
+  test("18a truncated invalid and oversized parser diagnostics publish source-qualified health", async () => {
+    const home = await temporaryDirectory("formic-kilo-parser-health-");
+    const dataRoot = join(home, ".local", "share", "kilo");
+    const truncatedPath = await fixtureStore(join(dataRoot, "kilo-truncated.db"));
+    const invalidPath = await fixtureStore(join(dataRoot, "kilo-invalid.db"));
+    const oversizedPath = await fixtureStore(join(dataRoot, "kilo-oversized.db"));
+
+    mutateStore(truncatedPath, (database) => {
+      for (let index = 0; index < KILO_STORE_LIMITS.sessions; index += 1) {
+        const suffix = String(index).padStart(3, "0");
+        database.run(
+          "INSERT INTO session(id, project_id, slug, directory, path, title, version, time_created, time_updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          [
+            `ses_health_bound_${suffix}`,
+            "prj_fixture",
+            `health-bound-${suffix}`,
+            `/synthetic/kilo/health/${suffix}`,
+            `health/${suffix}`,
+            `Health bound ${suffix}`,
+            "synthetic",
+            1900000000000 + index,
+            1900000000000 + index,
+          ],
+        );
+      }
+    });
+    mutateStore(invalidPath, (database) => {
+      database.run("UPDATE message SET data = ? WHERE id = ?", [
+        "{invalid-kilo-message-json",
+        "msg_fixture_assistant_2",
+      ]);
+    });
+    mutateStore(oversizedPath, (database) => {
+      database.run("UPDATE part SET data = ? WHERE id = ?", [
+        JSON.stringify({
+          type: "text",
+          text: `OVERSIZED_KILO_HEALTH_${"x".repeat(KILO_STORE_LIMITS.textChars + 1)}`,
+        }),
+        "prt_fixture_assistant_2_text",
+      ]);
+    });
+
+    const result = await collectAtHome(home);
+    const expected = [
+      { path: truncatedPath, kind: "truncated" },
+      { path: invalidPath, kind: "invalid-json" },
+      { path: oversizedPath, kind: "oversized-content" },
+    ] as const;
+    const health = expected.map(({ path, kind }) => {
+      const sourceErrors = result.errors.filter((error) => error.startsWith(`${path}: `));
+      return {
+        kind,
+        matchingKind: sourceErrors.some((error) => error.includes(`Kilo ${kind}:`)),
+        sourceQualified: sourceErrors.length > 0 && sourceErrors.every((error) =>
+          error.split(path).length - 1 === 1
+        ),
+      };
+    });
+
+    expect({ health, errorsEmpty: result.errors.length === 0 }).toEqual({
+      health: [
+        { kind: "truncated", matchingKind: true, sourceQualified: true },
+        { kind: "invalid-json", matchingKind: true, sourceQualified: true },
+        { kind: "oversized-content", matchingKind: true, sourceQualified: true },
+      ],
+      errorsEmpty: false,
     });
   });
 
@@ -816,12 +942,14 @@ describe("Kilo central collection red floor", () => {
       const result = await collectAtHome(home, {}, {
         readOptions: {
           deadlineAtMs: Number.MAX_SAFE_INTEGER,
-          nowMs: () => {
-            if (!vanished) {
-              renameSync(vanishedStorePath, `${vanishedStorePath}.gone`);
-              vanished = true;
-            }
-            return 0;
+          nowMs: () => 0,
+          testHooks: {
+            beforeStoreRead(path) {
+              if (!vanished && path === vanishedStorePath) {
+                renameSync(vanishedStorePath, `${vanishedStorePath}.gone`);
+                vanished = true;
+              }
+            },
           },
         },
       });
@@ -1239,5 +1367,79 @@ describe("Kilo central collection red floor", () => {
       ]),
       errors: [],
     });
+  });
+
+  test("31a provider collection forwards cancellation through the Kilo store catch", async () => {
+    const home = await temporaryDirectory("formic-kilo-provider-abort-");
+    await fixtureStore(join(home, ".local", "share", "kilo", "kilo.db"));
+    const abort = new AbortController();
+    const reason = new Error("cancel Kilo provider collection");
+
+    await expect(abortAfterFirstKiloQuery(
+      abort,
+      reason,
+      () => collectSessionProvider(KILO, home, undefined, undefined, {}, abort.signal),
+    )).rejects.toBe(reason);
+  });
+
+  test("31b the Kilo collector turns the SQLite duration into one absolute deadline", async () => {
+    const home = await temporaryDirectory("formic-kilo-absolute-deadline-");
+    await fixtureStore(join(home, ".local", "share", "kilo", "kilo.db"));
+    const clock = spyOn(Date, "now").mockReturnValue(1_000);
+    const descriptor = Object.getOwnPropertyDescriptor(Database.prototype, "exec");
+    if (!descriptor || typeof descriptor.value !== "function") {
+      throw new Error("bun:sqlite Database.exec is unavailable for absolute-deadline control");
+    }
+    const original = descriptor.value as (...args: unknown[]) => unknown;
+    let expired = false;
+    Object.defineProperty(Database.prototype, "exec", {
+      ...descriptor,
+      value: function (this: Database, ...args: unknown[]) {
+        const result = Reflect.apply(original, this, args);
+        if (/^\s*COMMIT\s*;?\s*$/i.test(String(args[0] ?? ""))) expired = true;
+        return result;
+      },
+    });
+    try {
+      const result = await collectKiloSessions(home, {
+        sqliteReadBudgetMs: 50,
+        readOptions: { nowMs: () => expired ? 1_050 : 1_049 },
+      });
+
+      expect({
+        retainedRoot: result.value.some(({ sourceSessionId }) => sourceSessionId === ROOT_SESSION_ID),
+        deadlineNamed: result.errors.some((error) => /deadline/i.test(error)),
+      }).toEqual({ retainedRoot: true, deadlineNamed: true });
+    } finally {
+      Object.defineProperty(Database.prototype, "exec", descriptor);
+      clock.mockRestore();
+    }
+  });
+
+  test("31c collector diagnostics cannot rescan beyond the bounded primary dirent witness", async () => {
+    const home = await temporaryDirectory("formic-kilo-no-diagnostic-rescan-");
+    const dataRoot = join(home, ".local", "share", "kilo");
+    await mkdir(dataRoot, { recursive: true });
+    for (let index = 0; index <= 64; index += 1) {
+      await writeFile(join(dataRoot, `irrelevant-${String(index).padStart(3, "0")}`), "noise");
+    }
+    await mkdir(join(dataRoot, "kilo-late.db"));
+    const observed: string[] = [];
+
+    const result = await collectKiloSessions(home, {
+      readOptions: {
+        testHooks: {
+          onDataDirEntry(_path: string, name: string) { observed.push(name); },
+        },
+      } as KiloCollectOptions["readOptions"],
+    });
+
+    expect(observed).toHaveLength(65);
+    expect(result.errors).toContainEqual(
+      expect.stringMatching(/directory entry limit 64.*not enumerated/i),
+    );
+    expect(result.errors.some((error) => /not a regular file/i.test(error))).toBe(
+      observed.slice(0, 64).includes("kilo-late.db"),
+    );
   });
 });

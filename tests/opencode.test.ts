@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, statSync } from "node:fs";
@@ -7,6 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentSnapshot, Provider } from "../src/shared/types";
 import { classifyDataDir, type ScanFs } from "../src/server/collector-instances";
+import { collectSessionProvider } from "../src/server/collectors";
+import { readHookSessionStores } from "../src/server/cmux-hook-sessions";
 import { transcriptResponse } from "../src/server/debug-identity";
 import {
   enrichCmuxIdentity,
@@ -153,6 +155,33 @@ function manualOpenCodeAgent(overrides: Partial<CollectedAgent> = {}): Collected
     allowCwdFallback: false,
     ...overrides,
   };
+}
+
+async function abortAfterFirstOpenCodeQuery<T>(
+  abort: AbortController,
+  reason: Error,
+  work: () => Promise<T>,
+): Promise<T> {
+  const descriptor = Object.getOwnPropertyDescriptor(Database.prototype, "query");
+  if (!descriptor || typeof descriptor.value !== "function") {
+    throw new Error("bun:sqlite Database.query is unavailable for OpenCode abort control");
+  }
+  const original = descriptor.value as (...args: unknown[]) => unknown;
+  let queries = 0;
+  Object.defineProperty(Database.prototype, "query", {
+    ...descriptor,
+    value: function (this: Database, ...args: unknown[]) {
+      const result = Reflect.apply(original, this, args);
+      queries += 1;
+      if (queries === 1) abort.abort(reason);
+      return result;
+    },
+  });
+  try {
+    return await work();
+  } finally {
+    Object.defineProperty(Database.prototype, "query", descriptor);
+  }
 }
 
 function memoryFs(root: string): ScanFs {
@@ -524,7 +553,7 @@ describe("OpenCode usage completeness", () => {
     const result = await collectOpenCodeSessions(await fixtureDataDir(), {
       readOptions: {
         deadlineAtMs: 50,
-        nowMs: () => checks++ < 6 ? 0 : 50,
+        nowMs: () => checks++ < 9 ? 0 : 50,
       },
     });
     const agent = rootAgent(result);
@@ -559,6 +588,44 @@ describe("OpenCode usage completeness", () => {
       calls: body.calls,
       explainsTruncation: typeof body.unavailable === "string" && /truncat|incomplete/i.test(body.unavailable),
     }).toEqual({ calls: null, explainsTruncation: true });
+  });
+
+  test("19a transcript cancellation during a store read rethrows the exact request reason", async () => {
+    const dataDir = await fixtureDataDir();
+    const source = join(dataDir, "opencode.db");
+    const agent = manualOpenCodeAgent({
+      sourceSessionId: ROOT_SESSION_ID,
+      id: `opencode:opencode-db:${ROOT_SESSION_ID}`,
+      artifacts: [{ label: "OpenCode store", path: source, kind: "transcript" }],
+    });
+    const snapshot = buildSnapshot({ agents: [agent], surfaces: [], archiveStore });
+    const abort = new AbortController();
+    const reason = new Error("cancel OpenCode transcript request");
+
+    await expect(abortAfterFirstOpenCodeQuery(
+      abort,
+      reason,
+      () => transcriptResponse(snapshot, agent.id, 200, {}, abort.signal),
+    )).rejects.toBe(reason);
+  });
+
+  test("19b session-call cancellation during a store read rethrows the exact request reason", async () => {
+    const dataDir = await fixtureDataDir();
+    const source = join(dataDir, "opencode.db");
+    const agent = manualOpenCodeAgent({
+      sourceSessionId: ROOT_SESSION_ID,
+      id: `opencode:opencode-db:${ROOT_SESSION_ID}`,
+      artifacts: [{ label: "OpenCode store", path: source, kind: "transcript" }],
+    });
+    const snapshot = buildSnapshot({ agents: [agent], surfaces: [], archiveStore });
+    const abort = new AbortController();
+    const reason = new Error("cancel OpenCode session-call request");
+
+    await expect(abortAfterFirstOpenCodeQuery(
+      abort,
+      reason,
+      () => sessionCallsResponse(snapshot, agent.id, {}, abort.signal),
+    )).rejects.toBe(reason);
   });
 
   test("20 invalid step-finish is omitted from callSizes while latest fallback remains direct", async () => {
@@ -643,6 +710,53 @@ describe("OpenCode controls process and lifecycle", () => {
       { resolution: "missing", writable: false },
       { resolution: "missing", writable: false },
     ]);
+  });
+
+  test("23b duplicate OpenCode instances cannot share one hook-store target", async () => {
+    const root = await mkdtemp(join(tmpdir(), "formic-opencode-hook-collision-"));
+    temporaryDirectories.push(root);
+    await writeFile(join(root, "opencode-hook-sessions.json"), JSON.stringify({
+      version: 1,
+      sessions: {
+        [COMMAND_SESSION_ID]: {
+          sessionId: COMMAND_SESSION_ID,
+          surfaceId: "SURFACE-OPENCODE-HOOK-COLLISION",
+          workspaceId: "WORKSPACE-OPENCODE-HOOK-COLLISION",
+          cwd: "/synthetic/workspace/parser-lab",
+          pid: 4242,
+          agentLifecycle: "running",
+          updatedAt: 1_787_575_200,
+        },
+      },
+    }));
+    readHookSessionStores(root);
+
+    try {
+      const first = manualOpenCodeAgent();
+      const second = manualOpenCodeAgent({
+        id: `opencode:opencode-local-db:${COMMAND_SESSION_ID}`,
+        instanceId: "opencode:opencode-local-db",
+        instanceLabel: "opencode-local.db",
+      });
+      const surface = {
+        surfaceId: "SURFACE-OPENCODE-HOOK-COLLISION",
+        sourceSessionIds: [],
+        runtimeSurfaceReady: true,
+      };
+      const targets = [first, second].map((agent) =>
+        resolveAgentTarget(agent, [surface], [first, second])
+      );
+
+      expect(targets.map((target) => ({
+        resolution: target.resolution,
+        writable: canWriteToTarget(target),
+      }))).toEqual([
+        { resolution: "missing", writable: false },
+        { resolution: "missing", writable: false },
+      ]);
+    } finally {
+      readHookSessionStores(join(tmpdir(), "formic-opencode-hook-collision-missing"));
+    }
   });
 
   test("24 one OpenCode database open for two sessions is not exact or conflicted", async () => {
@@ -812,6 +926,156 @@ describe("OpenCode controls process and lifecycle", () => {
 });
 
 describe("OpenCode discovery and health", () => {
+  test("provider collection forwards cancellation through the OpenCode store catch", async () => {
+    const home = await mkdtemp(join(tmpdir(), "formic-opencode-provider-abort-"));
+    temporaryDirectories.push(home);
+    const dataDir = join(home, ".local/share/opencode");
+    await mkdir(dataDir, { recursive: true });
+    const sql = await fixtureSql();
+    const database = new Database(join(dataDir, "opencode.db"), { create: true });
+    database.exec(sql);
+    database.close();
+    const abort = new AbortController();
+    const reason = new Error("cancel OpenCode provider collection");
+
+    await expect(abortAfterFirstOpenCodeQuery(
+      abort,
+      reason,
+      () => collectSessionProvider(OPENCODE, home, undefined, undefined, {}, abort.signal),
+    )).rejects.toBe(reason);
+  });
+
+  test("the OpenCode collector turns the SQLite duration into one absolute deadline", async () => {
+    const clock = spyOn(Date, "now").mockReturnValue(1_000);
+    let checks = 0;
+    try {
+      const result = await collectOpenCodeSessions(await fixtureDataDir(), {
+        sqliteReadBudgetMs: 50,
+        readOptions: { nowMs: () => checks++ < 9 ? 1_049 : 1_050 },
+      });
+
+      expect({
+        retainedRoot: result.value.some(({ sourceSessionId }) => sourceSessionId === ROOT_SESSION_ID),
+        deadlineNamed: result.errors.some((error) => /deadline/i.test(error)),
+      }).toEqual({ retainedRoot: true, deadlineNamed: true });
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test("provider-controlled data directories stop after cap plus one total iterator entries", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "formic-opencode-bounded-directory-"));
+    temporaryDirectories.push(dataDir);
+    const filenames = [
+      "opencode.db",
+      "opencode-channel.db",
+      ...Array.from({ length: 30 }, (_, index) => `irrelevant-${String(index).padStart(2, "0")}.txt`),
+    ];
+    for (const filename of filenames) await writeFile(join(dataDir, filename), "");
+
+    const iteratorEntries: string[] = [];
+    const bounded = await collectOpenCodeSessions(dataDir, {
+      directoryEntryTestHook: (directoryPath, entryName) => {
+        if (directoryPath === dataDir) iteratorEntries.push(entryName);
+      },
+    });
+    const admittedStoreNames = [...new Set([
+      "opencode.db",
+      ...iteratorEntries.slice(0, 16).filter((entryName) =>
+        /^opencode(?:-[A-Za-z0-9][A-Za-z0-9._-]*)?\.db$/.test(entryName)
+      ),
+    ])].sort((left, right) => {
+      if (left === "opencode.db") return right === "opencode.db" ? 0 : -1;
+      if (right === "opencode.db") return 1;
+      return left.localeCompare(right);
+    });
+    const inspected = bounded.errors.flatMap((error) => {
+      const match = error.match(/OpenCode (opencode(?:-[A-Za-z0-9][A-Za-z0-9._-]*)?\.db):/);
+      return match?.[1] ? [match[1]] : [];
+    });
+    const truncation = bounded.errors.filter((error) =>
+      /store admission limit 16.*directory remainder was not enumerated/i.test(error)
+    );
+    expect({
+      iteratorEntryReads: iteratorEntries.length,
+      leavesCreatedEntriesUnenumerated: iteratorEntries.length < filenames.length,
+      irrelevantEntriesConsumeBudget: iteratorEntries.some((entryName) => entryName.endsWith(".txt")),
+      inspected,
+      truncationCount: truncation.length,
+      rootQualified: truncation[0]?.includes(dataDir),
+    }).toEqual({
+      iteratorEntryReads: 17,
+      leavesCreatedEntriesUnenumerated: true,
+      irrelevantEntriesConsumeBudget: true,
+      inspected: admittedStoreNames,
+      truncationCount: 1,
+      rootQualified: true,
+    });
+
+    const configuredIteratorEntries: string[] = [];
+    const configured = await collectOpenCodeSessions(dataDir, {
+      configuredDatabasePath: join(dataDir, "opencode-channel.db"),
+      directoryEntryTestHook: (_directoryPath, entryName) => configuredIteratorEntries.push(entryName),
+    });
+    expect({
+      iteratorEntryReads: configuredIteratorEntries.length,
+      inspected: configured.errors.flatMap((error) => {
+        const match = error.match(/OpenCode (opencode(?:-[A-Za-z0-9][A-Za-z0-9._-]*)?\.db):/);
+        return match?.[1] ? [match[1]] : [];
+      }),
+      truncated: configured.errors.some((error) => /truncat|remainder/i.test(error)),
+    }).toEqual({
+      iteratorEntryReads: 0,
+      inspected: ["opencode-channel.db"],
+      truncated: false,
+    });
+
+    let deadlineChecks = 0;
+    const deadline = await collectOpenCodeSessions(dataDir, {
+      readOptions: {
+        deadlineAtMs: 10,
+        nowMs: () => deadlineChecks++ < 8 ? 0 : 10,
+      },
+    });
+    expect({
+      value: deadline.value,
+      errors: deadline.errors,
+      boundedChecks: deadlineChecks < filenames.length,
+    }).toEqual({
+      value: [],
+      errors: [`OpenCode data directory ${dataDir} deadline expired; directory remainder was not enumerated.`],
+      boundedChecks: true,
+    });
+  });
+
+  test("the 16-store limit remains global when a later extra root has canonical opencode.db", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "formic-opencode-global-cap-primary-"));
+    const extraDataDir = await mkdtemp(join(tmpdir(), "formic-opencode-global-cap-extra-"));
+    temporaryDirectories.push(dataDir, extraDataDir);
+    const primaryStores = Array.from(
+      { length: 16 },
+      (_, index) => `opencode-primary-${String(index).padStart(2, "0")}.db`,
+    );
+    for (const filename of primaryStores) await writeFile(join(dataDir, filename), "");
+    await writeFile(join(extraDataDir, "opencode.db"), "");
+
+    const result = await collectOpenCodeSessions(dataDir, { extraDataDirs: [extraDataDir] });
+    const inspectedStores = result.errors.flatMap((error) => {
+      const match = error.match(/OpenCode (opencode(?:-[A-Za-z0-9][A-Za-z0-9._-]*)?\.db):/);
+      return match?.[1] ? [match[1]] : [];
+    });
+
+    expect({
+      inspectedCount: inspectedStores.length,
+      primaryStoresInspected: inspectedStores.filter((name) => name.startsWith("opencode-primary-")).length,
+      laterCanonicalInspected: inspectedStores.includes("opencode.db"),
+    }).toEqual({
+      inspectedCount: 16,
+      primaryStoresInspected: 16,
+      laterCanonicalInspected: false,
+    });
+  });
+
   test("34 supported database in the XDG data root classifies as collectable OpenCode", async () => {
     const home = await mkdtemp(join(tmpdir(), "formic-opencode-discovery-"));
     temporaryDirectories.push(home);
@@ -859,7 +1123,7 @@ describe("OpenCode discovery and health", () => {
     const incomplete = await collectOpenCodeSessions(await fixtureDataDir(), {
       readOptions: {
         deadlineAtMs: 50,
-        nowMs: () => deadlineChecks++ < 6 ? 0 : 50,
+        nowMs: () => deadlineChecks++ < 9 ? 0 : 50,
       },
     });
 

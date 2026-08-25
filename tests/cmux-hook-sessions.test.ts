@@ -6,14 +6,21 @@ import {
   hookRecordFor,
   readHookSessionStores,
 } from "../src/server/cmux-hook-sessions";
+import type { Provider } from "../src/shared/types";
 
 const fixtureRoot = join(import.meta.dir, "fixtures", "cmux-hook-sessions");
 const temporaryRoots: string[] = [];
+const nativeCaseIds = [
+  ["pi", "Pi.Native_Case.V1", "pi.native_case.v1"],
+  ["opencode", "ses_ABCDEFGHIJKLMNOPQRSTUVWXYZ", "ses_abcdefghijklmnopqrstuvwxyz"],
+  ["kilo", "ses_abcdefghijklmnopqrstuvwxyz", "ses_ABCDEFGHIJKLMNOPQRSTUVWXYZ"],
+  ["hermes", "hermes_case_id", "Hermes_Case_ID"],
+] as const;
 
-function storeRoot(contents: string): string {
+function storeRoot(contents: string, provider: Provider = "claude"): string {
   const root = mkdtempSync(join(tmpdir(), "anthill-hook-sessions-"));
   temporaryRoots.push(root);
-  writeFileSync(join(root, "claude-hook-sessions.json"), contents);
+  writeFileSync(join(root, `${provider}-hook-sessions.json`), contents);
   return root;
 }
 
@@ -67,6 +74,56 @@ describe("cmux hook-session stores", () => {
   test("hookRecordFor returns undefined for unknown session", () => {
     expect(hookRecordFor("claude", "unknown-session")).toBeUndefined();
   });
+
+  test.each(nativeCaseIds)("HOOK-CASE-EXACT %s native hook lookup rejects a byte-unequal ID", (
+    provider,
+    sourceSessionId,
+    hookSessionId,
+  ) => {
+    const root = storeRoot(JSON.stringify({
+      sessions: {
+        [hookSessionId]: {
+          sessionId: hookSessionId,
+          surfaceId: `${provider}-surface`,
+          workspaceId: `${provider}-workspace`,
+          cwd: "/tmp/formic",
+          pid: 4242,
+          agentLifecycle: "running",
+          updatedAt: 1_800_000_000,
+        },
+      },
+    }), provider);
+
+    readHookSessionStores(root);
+
+    expect(hookRecordFor(provider, hookSessionId)?.sessionId).toBe(hookSessionId);
+    expect(hookRecordFor(provider, sourceSessionId)).toBeUndefined();
+  });
+
+  test.each(nativeCaseIds.map(([provider]) => provider))(
+    "HOOK-CASE-EXACT %s canonical UUID hook lookup remains case-insensitive",
+    (provider) => {
+      const upper = "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE";
+      const lower = upper.toLowerCase();
+      const root = storeRoot(JSON.stringify({
+        sessions: {
+          [upper]: {
+            sessionId: upper,
+            surfaceId: `${provider}-uuid-surface`,
+            workspaceId: `${provider}-uuid-workspace`,
+            cwd: "/tmp/formic",
+            pid: 4242,
+            agentLifecycle: "running",
+            updatedAt: 1_800_000_000,
+          },
+        },
+      }), provider);
+
+      readHookSessionStores(root);
+
+      expect(hookRecordFor(provider, lower)?.sessionId).toBe(upper);
+    },
+  );
 
   test("malformed store file yields [] and does not throw", () => {
     const root = storeRoot("{not-json");

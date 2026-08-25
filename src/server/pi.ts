@@ -3,8 +3,8 @@ import {
   closeSync,
   existsSync,
   openSync,
+  opendirSync,
   readSync,
-  readdirSync,
   realpathSync,
   statSync,
 } from "node:fs";
@@ -27,6 +27,8 @@ export const PI_READER_LIMITS = {
 /** Formic-local published-field policy, separate from Pi record/replay limits. */
 export const PI_PUBLISHED_FIELD_CHARS = 6_000;
 const PI_SETTINGS_BYTES = 64 * 1024;
+const PI_SESSION_FILE_LIMIT = 4_096;
+const PI_PROJECT_DIRECTORY_LIMIT = 1_024;
 const PI_FIELD_CLIPPING_WARNING =
   "Pi published text field exceeded 6000 character Formic-local cap and was clipped";
 
@@ -35,6 +37,7 @@ type PiRootOrigin = "cli" | "environment" | "settings" | "imported" | "default";
 
 export interface PiReadTestHooks {
   afterChunk?: (chunkIndex: number) => void;
+  directoryEntry?: (directoryPath: string, entryName: string) => void;
   now?: () => number;
   rootError?: (root: string, origin: PiRootOrigin) => Error | undefined;
 }
@@ -110,6 +113,8 @@ interface PhysicalFacts {
   sessionProcessed: number;
   usageSeen: boolean;
   malformedUsageSeen: boolean;
+  unknownPhysicalRecordSeen: boolean;
+  latestOccupancyComplete: boolean;
   usageAggregatesComplete: boolean;
   callSeriesComplete: boolean;
 }
@@ -217,7 +222,7 @@ function thinkingContent(value: unknown, onClip: () => void): string[] {
   });
 }
 
-function physicalUsageOf(row: JsonRecord): { present: boolean; usage?: JsonRecord } {
+function physicalUsageOf(row: JsonRecord): { present: boolean; missing?: boolean; usage?: JsonRecord } {
   if (row.type === "compaction" || row.type === "branch_summary") {
     return Object.hasOwn(row, "usage")
       ? { present: true, usage: record(row.usage) }
@@ -226,8 +231,13 @@ function physicalUsageOf(row: JsonRecord): { present: boolean; usage?: JsonRecor
   if (row.type !== "message") return { present: false };
   const role = row.message?.role;
   if (role !== "assistant" && role !== "toolResult") return { present: false };
-  return Object.hasOwn(row.message, "usage")
-    ? { present: true, usage: record(row.message.usage) }
+  if (Object.hasOwn(row.message, "usage")) {
+    return { present: true, usage: record(row.message.usage) };
+  }
+  return role === "assistant"
+      && row.message.stopReason !== "aborted"
+      && row.message.stopReason !== "error"
+    ? { present: false, missing: true }
     : { present: false };
 }
 
@@ -263,15 +273,31 @@ function updatePhysicalFacts(facts: PhysicalFacts, row: JsonRecord, onClip: () =
       : undefined;
   }
   const physicalUsage = physicalUsageOf(row);
-  if (!physicalUsage.present) return;
-  facts.usageSeen = true;
-  const usage = usageComponents(physicalUsage.usage);
-  if (!usage) {
+  if (physicalUsage.missing) {
     facts.malformedUsageSeen = true;
+    facts.latestOccupancyComplete = false;
     facts.usageAggregatesComplete = false;
     facts.callSeriesComplete = false;
     return;
   }
+  if (!physicalUsage.present) return;
+  const usage = usageComponents(physicalUsage.usage);
+  if (!usage) {
+    facts.malformedUsageSeen = true;
+    if (row.type === "message" && row.message?.role === "assistant") {
+      facts.latestOccupancyComplete = false;
+    }
+    facts.usageAggregatesComplete = false;
+    facts.callSeriesComplete = false;
+    return;
+  }
+  if (row.type === "message"
+    && row.message?.role === "assistant"
+    && row.message.stopReason !== "aborted"
+    && row.message.stopReason !== "error") {
+    facts.latestOccupancyComplete = true;
+  }
+  facts.usageSeen = true;
   if (!facts.usageAggregatesComplete) return;
   const callSize = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
   const sessionTotal = usage.input + usage.output + usage.cacheWrite;
@@ -581,6 +607,8 @@ export async function readPiSessionFile(
     sessionProcessed: 0,
     usageSeen: false,
     malformedUsageSeen: false,
+    unknownPhysicalRecordSeen: false,
+    latestOccupancyComplete: true,
     usageAggregatesComplete: true,
     callSeriesComplete: true,
   };
@@ -629,6 +657,10 @@ export async function readPiSessionFile(
     const bytes = Buffer.byteLength(line);
     if (bytes > PI_READER_LIMITS.recordBytes) {
       addWarning(`Pi JSONL record exceeds ${PI_READER_LIMITS.recordBytes} byte cap and was skipped`);
+      facts.unknownPhysicalRecordSeen = true;
+      facts.latestOccupancyComplete = false;
+      facts.usageAggregatesComplete = false;
+      facts.callSeriesComplete = false;
       partial = true;
       return;
     }
@@ -640,6 +672,10 @@ export async function readPiSessionFile(
         ? `Pi truncated JSONL record at line ${lineNumber}`
         : `Pi malformed JSONL record at line ${lineNumber}`, final);
       if (!final) lastMalformedWarning = { line: lineNumber, index };
+      facts.unknownPhysicalRecordSeen = true;
+      facts.latestOccupancyComplete = false;
+      facts.usageAggregatesComplete = false;
+      facts.callSeriesComplete = false;
       partial = true;
       return;
     }
@@ -696,6 +732,10 @@ export async function readPiSessionFile(
       }
       if (!skippingOversized && Buffer.byteLength(pending) > PI_READER_LIMITS.recordBytes) {
         addWarning(`Pi JSONL record exceeds ${PI_READER_LIMITS.recordBytes} byte cap and was skipped`);
+        facts.unknownPhysicalRecordSeen = true;
+        facts.latestOccupancyComplete = false;
+        facts.usageAggregatesComplete = false;
+        facts.callSeriesComplete = false;
         partial = true;
         pending = "";
         skippingOversized = true;
@@ -709,7 +749,7 @@ export async function readPiSessionFile(
       chunkIndex += 1;
       options.hooks?.afterChunk?.(chunkIndex);
       throwIfAborted(options.signal);
-      if (deadlineAt !== undefined && now() > deadlineAt) {
+      if (deadlineAt !== undefined && now() >= deadlineAt) {
         throw new PiDeadlineError(`exceeded ${deadlineMs}ms read deadline`);
       }
       consumeChunk(decoder.write(buffer.subarray(0, bytesRead)));
@@ -718,7 +758,14 @@ export async function readPiSessionFile(
     if (pending) acceptLine(pending, true);
     if (skippingOversized) lineNumber += 1;
   } finally {
-    await handle.close();
+    try {
+      await handle.close();
+    } finally {
+      throwIfAborted(options.signal);
+      if (deadlineAt !== undefined && now() >= deadlineAt) {
+        throw new PiDeadlineError(`exceeded ${deadlineMs}ms read deadline`);
+      }
+    }
   }
 
   if (countTrimmed) addWarning(`Pi replay retained only the newest ${PI_READER_LIMITS.entries} entries`, true);
@@ -731,10 +778,10 @@ export async function readPiSessionFile(
       "Pi physical usage components were missing, negative, or non-finite; derived session totals and call series were withheld",
       true,
     );
-  } else if (!facts.usageAggregatesComplete) {
+  } else if (!facts.usageAggregatesComplete && !facts.unknownPhysicalRecordSeen) {
     partial = true;
     addWarning("Pi usage aggregate overflowed finite numeric range; derived session totals and call series were withheld", true);
-  } else if (!facts.callSeriesComplete) {
+  } else if (!facts.callSeriesComplete && !facts.unknownPhysicalRecordSeen) {
     partial = true;
     addWarning(`Pi call series was withheld as incomplete after ${PI_READER_LIMITS.callSizes} retained calls`, true);
   }
@@ -771,15 +818,15 @@ export async function readPiSessionFile(
   const path = activePath(migrated, replayWarning);
   const state = activeState(path);
   const replay = replayEvidence(replayPath(path, replayWarning), version !== 1, noteFieldClipping);
-  const latest = latestOccupancyUsage(path);
+  const latest = facts.latestOccupancyComplete ? latestOccupancyUsage(path) : undefined;
   const latestTotal = latest
     ? latest.input + latest.output + latest.cacheRead + latest.cacheWrite
     : undefined;
   const contextWindow = latest && state.model
     ? (await import("./collectors")).claudeContextWindow(state.model)
     : undefined;
-  const hasPhysicalUsage = facts.usageSeen;
-  const tokens: TokenUsage = hasPhysicalUsage
+  const hasUsableUsage = Boolean(latest) || (facts.usageSeen && facts.usageAggregatesComplete);
+  const tokens: TokenUsage = hasUsableUsage
     ? {
         ...(latest ? {
           input: latest.input,
@@ -1006,22 +1053,147 @@ function rootsFor(home: string, options: PiCollectOptions): { roots: PiRoot[]; e
   };
 }
 
-function filesForRoot(root: PiRoot): string[] {
-  const jsonl = (directory: string): string[] => readdirSync(directory)
-    .filter((name) => name.endsWith(".jsonl"))
-    .sort()
-    .map((name) => join(directory, name));
-  if (root.direct) return jsonl(root.root);
+interface PiDirectoryAdmission {
+  names: string[];
+  truncated: boolean;
+  deadlineExpired: boolean;
+}
+
+interface PiRootFiles {
+  files: string[];
+  remainder?: { detail: string; deadline: boolean };
+}
+
+function piEnumerationDeadlineExpired(options: {
+  signal?: AbortSignal;
+  deadlineAtMs?: number;
+  now: () => number;
+}): boolean {
+  throwIfAborted(options.signal);
+  const expired = options.deadlineAtMs !== undefined && options.now() >= options.deadlineAtMs;
+  throwIfAborted(options.signal);
+  return expired;
+}
+
+function boundedDirectoryNames(
+  directoryPath: string,
+  limit: number,
+  include: (entry: { name: string; isDirectory(): boolean; isSymbolicLink(): boolean }) => boolean,
+  options: {
+    signal?: AbortSignal;
+    deadlineAtMs?: number;
+    now: () => number;
+    directoryEntry?: (directoryPath: string, entryName: string) => void;
+  },
+): PiDirectoryAdmission {
+  const admitted: string[] = [];
+  let inspected = 0;
+  let truncated = false;
+  let directory: ReturnType<typeof opendirSync> | undefined;
+  try {
+    throwIfAborted(options.signal);
+    directory = opendirSync(directoryPath);
+    throwIfAborted(options.signal);
+    while (true) {
+      if (piEnumerationDeadlineExpired(options)) {
+        return { names: [], truncated: false, deadlineExpired: true };
+      }
+      throwIfAborted(options.signal);
+      const entry = directory.readSync();
+      throwIfAborted(options.signal);
+      if (entry === null) break;
+      options.directoryEntry?.(directoryPath, entry.name);
+      throwIfAborted(options.signal);
+      inspected += 1;
+      if (inspected > limit) {
+        truncated = true;
+        break;
+      }
+      if (!include(entry)) continue;
+      admitted.push(entry.name);
+    }
+  } finally {
+    directory?.closeSync();
+  }
+  admitted.sort((left, right) => left.localeCompare(right));
+  return { names: admitted, truncated, deadlineExpired: false };
+}
+
+function filesForRoot(
+  root: PiRoot,
+  options: {
+    signal?: AbortSignal;
+    deadlineAtMs?: number;
+    deadlineMs?: number;
+    now: () => number;
+    directoryEntry?: (directoryPath: string, entryName: string) => void;
+  },
+): PiRootFiles {
+  const jsonl = (directory: string, limit: number): PiDirectoryAdmission =>
+    boundedDirectoryNames(
+      directory,
+      limit,
+      (entry) => entry.name.endsWith(".jsonl"),
+      options,
+    );
+  const deadlineRemainder = (): PiRootFiles => ({
+    files: [],
+    remainder: {
+      detail: `exceeded ${options.deadlineMs}ms aggregate read deadline; directory remainder was not enumerated`,
+      deadline: true,
+    },
+  });
+  if (root.direct) {
+    const admission = jsonl(root.root, PI_SESSION_FILE_LIMIT);
+    if (admission.deadlineExpired) return deadlineRemainder();
+    return {
+      files: admission.names.map((name) => join(root.root, name)),
+      ...(admission.truncated ? {
+        remainder: {
+          detail: `session file admission limit ${PI_SESSION_FILE_LIMIT} reached after one observed remainder entry; directory remainder was not enumerated`,
+          deadline: false,
+        },
+      } : {}),
+    };
+  }
   const files: string[] = [];
-  for (const name of readdirSync(root.root).sort()) {
+  let remainder: PiRootFiles["remainder"];
+  const projects = boundedDirectoryNames(
+    root.root,
+    PI_PROJECT_DIRECTORY_LIMIT,
+    (entry) => entry.isDirectory() || entry.isSymbolicLink(),
+    options,
+  );
+  if (projects.deadlineExpired) return deadlineRemainder();
+  if (projects.truncated) {
+    remainder = {
+      detail: `project directory admission limit ${PI_PROJECT_DIRECTORY_LIMIT} reached after one observed remainder entry; directory remainder was not enumerated`,
+      deadline: false,
+    };
+  }
+  for (const name of projects.names) {
     const directory = join(root.root, name);
     try {
-      if (statSync(directory).isDirectory()) files.push(...jsonl(directory));
-    } catch {
+      if (piEnumerationDeadlineExpired(options)) return deadlineRemainder();
+      throwIfAborted(options.signal);
+      const isDirectory = statSync(directory).isDirectory();
+      throwIfAborted(options.signal);
+      if (!isDirectory) continue;
+      const admission = jsonl(directory, Math.max(0, PI_SESSION_FILE_LIMIT - files.length));
+      if (admission.deadlineExpired) return deadlineRemainder();
+      files.push(...admission.names.map((filename) => join(directory, filename)));
+      if (admission.truncated && !remainder) {
+        remainder = {
+          detail: `session file admission limit ${PI_SESSION_FILE_LIMIT} reached after one observed remainder entry; directory remainder was not enumerated`,
+          deadline: false,
+        };
+      }
+    } catch (error) {
+      if (options.signal?.aborted) throw options.signal.reason;
       // Broken and non-directory symlinks are outside the default one-level layout.
     }
   }
-  return files;
+  return { files, ...(remainder ? { remainder } : {}) };
 }
 
 function rootError(prefix: string, root: PiRoot, detail: string): string {
@@ -1057,7 +1229,7 @@ export async function collectPiSessions(
   for (const root of resolution.roots) {
     if (deadlineExhausted) break;
     throwIfAborted(signal);
-    if (aggregateDeadlineAt !== undefined && readNow() > aggregateDeadlineAt) {
+    if (aggregateDeadlineAt !== undefined && readNow() >= aggregateDeadlineAt) {
       errors.push(rootError(
         "scan could not continue",
         root,
@@ -1082,13 +1254,28 @@ export async function collectPiSessions(
         errors.push(rootError("is unreadable", root, "path is not a directory"));
         continue;
       }
-      files = filesForRoot(root);
+      const enumeration = filesForRoot(root, {
+        signal,
+        deadlineAtMs: aggregateDeadlineAt,
+        deadlineMs: options.piReadDeadlineMs,
+        now: readNow,
+        directoryEntry: options.piReadTestHooks?.directoryEntry,
+      });
+      files = enumeration.files;
       presentRoot = true;
+      if (enumeration.remainder) {
+        errors.push(rootError("scan was truncated", root, enumeration.remainder.detail));
+        if (enumeration.remainder.deadline) {
+          deadlineExhausted = true;
+          break;
+        }
+      }
     } catch (error) {
+      if (signal?.aborted) throw signal.reason;
       errors.push(rootError("is unreadable", root, error instanceof Error ? error.message : String(error)));
       continue;
     }
-    if (aggregateDeadlineAt !== undefined && readNow() > aggregateDeadlineAt) {
+    if (aggregateDeadlineAt !== undefined && readNow() >= aggregateDeadlineAt) {
       const detail = `exceeded ${options.piReadDeadlineMs}ms aggregate read deadline`;
       errors.push(files[0]
         ? fileError(root, files[0], detail)
@@ -1099,7 +1286,7 @@ export async function collectPiSessions(
     const instanceId = root.instanceId ?? (root.origin === "default" ? undefined : piInstanceId(root.root));
     for (const source of files) {
       throwIfAborted(signal);
-      if (aggregateDeadlineAt !== undefined && readNow() > aggregateDeadlineAt) {
+      if (aggregateDeadlineAt !== undefined && readNow() >= aggregateDeadlineAt) {
         errors.push(fileError(root, source, `exceeded ${options.piReadDeadlineMs}ms aggregate read deadline`));
         deadlineExhausted = true;
         break;
@@ -1166,7 +1353,11 @@ export async function collectPiSessions(
         ...(contextWindow !== undefined && evidence.tokens.total !== undefined
           ? { contextPct: evidence.tokens.total / contextWindow * 100 }
           : {}),
-        ...(instanceId ? { instanceId, instanceLabel: basename(root.root) } : {}),
+        ...(instanceId ? {
+          id: `${instanceId}:${evidence.sessionId}`,
+          instanceId,
+          instanceLabel: basename(root.root),
+        } : {}),
         ...(root.launchCwd ? { launchCwd: root.launchCwd } : {}),
         allowCwdFallback: false,
         artifacts: [{ label: "Pi session", path: source, kind: "transcript" }],

@@ -153,11 +153,11 @@ describe("Kimi Code CLI assertion-only wiring contract", () => {
     const safeHome = mkdtempSync(join(tmpdir(), "formic-kimi-red-registry-"));
     const serverIndex = readFileSync(join(import.meta.dir, "../src/server/index.ts"), "utf8");
     const key = providerCollectionConfigKey as unknown as (...args: unknown[]) => string;
-    const config = key(
+    const config = JSON.parse(key(
       10_000, undefined,
       [], [], [], [], [], [], [],
       [], 250, [], ["/tmp/formic-kimi-alternate"],
-    );
+    )) as { extraKimiRoots?: unknown };
     let routed: unknown;
     try {
       routed = await (collectSessionProvider as unknown as (...args: unknown[]) => Promise<unknown>)(
@@ -174,7 +174,7 @@ describe("Kimi Code CLI assertion-only wiring contract", () => {
       alternateKindCount: SUPPORTED_ALTERNATE_HOME_KINDS.filter((kind) => kind === ("kimi" as string)).length,
       defaultHomes: (defaultHomes("/synthetic/home") as ReadonlyArray<{ kind: string; dataDir: string }>)
         .filter((row) => row.kind === "kimi"),
-      configHasRoot: config.includes("kimi=/tmp/formic-kimi-alternate"),
+      configKimiRoots: config.extraKimiRoots,
       productionRootsReader: (serverIndex.match(/^\s*kimiRootsReader:\s*\(\)\s*=>\s*onboardedSessionRoots\(collectorInstanceStore\)\.extraKimiRoots,\s*$/gm) ?? []).length,
       routed,
       direct,
@@ -183,7 +183,7 @@ describe("Kimi Code CLI assertion-only wiring contract", () => {
       providersUnique: true,
       alternateKindCount: 1,
       defaultHomes: [{ kind: "kimi", dataDir: "/synthetic/home/.kimi-code" }],
-      configHasRoot: true,
+      configKimiRoots: ["/tmp/formic-kimi-alternate"],
       productionRootsReader: 1,
       routed: { value: [], errors: [], absent: true },
       direct: { value: [], errors: [], absent: true },

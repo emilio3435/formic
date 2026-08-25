@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { collectAntigravitySessions } from "../src/server/antigravity";
 import { collectSessionProvider } from "../src/server/collectors";
 import {
@@ -16,6 +16,8 @@ const IDE_ID = "3c887402-9549-499c-a608-d4c08bca8b5f";
 const NOW_MS = Date.parse("2026-06-03T12:00:00.000Z");
 const WINDOW_MS = Number.POSITIVE_INFINITY;
 const CWD = "/Users/me/Developer/sem-forecast";
+const WHOLE_SCAN_DIRENT_LIMIT = 64;
+const SOURCE_BYTE_LIMIT = 8_000_000;
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
@@ -199,6 +201,43 @@ test("leftover Gemini settings produce zero rows", async () => {
   });
 });
 
+test("collector boundary forwards an already-aborted signal with exact reason identity", async () => {
+  const home = await fixtureHome();
+  const controller = new AbortController();
+  const reason = new Error("stop Antigravity at the collector boundary");
+  controller.abort(reason);
+
+  await expect(collectSessionProvider(
+    "antigravity",
+    home,
+    WINDOW_MS,
+    undefined,
+    {},
+    controller.signal,
+  )).rejects.toBe(reason);
+});
+
+test("collector boundary turns a zero SQLite budget into incomplete health before database admission", async () => {
+  const home = await fixtureHome();
+  const desktop = join(home, ".gemini/antigravity");
+  const conversations = join(desktop, "conversations");
+  await mkdir(conversations, { recursive: true });
+  await writeFile(join(conversations, `${ID}.db`), "must not be admitted as SQLite");
+
+  expect(await collectSessionProvider(
+    "antigravity",
+    home,
+    WINDOW_MS,
+    undefined,
+    { sqliteReadBudgetMs: 0 },
+  )).toEqual({
+    value: [],
+    errors: [
+      `antigravity ${desktop}: collection deadline reached during root enumeration; remaining source evidence is incomplete`,
+    ],
+  });
+});
+
 test("I-112 leaves legacy protobuf conversations unparsed", async () => {
   const home = await fixtureHome();
   const desktop = join(home, ".gemini/antigravity");
@@ -334,4 +373,507 @@ test("malformed, placeholder, or modelless blobs leave the model honestly unknow
   expect(result.value).toHaveLength(1);
   expect(result.value[0]?.model).toBeUndefined();
   expect(result.value[0]?.tokens).toEqual({ scope: "unknown", provenance: "unknown" });
+});
+
+test.each(["trajectory_metadata_blob", "gen_metadata"] as const)(
+  "a present %s table with an unreadable native shape degrades source health",
+  async (table) => {
+    const home = await fixtureHome();
+    const desktop = join(home, ".gemini/antigravity");
+    const conversations = join(desktop, "conversations");
+    await mkdir(conversations, { recursive: true });
+    const path = join(conversations, `${ID}.db`);
+    const database = new Database(path);
+    try {
+      database.exec("create table trajectory_meta (trajectory_id text)");
+      if (table === "trajectory_metadata_blob") {
+        database.exec("create table trajectory_metadata_blob (wrong_column blob)");
+      } else {
+        database.exec("create table trajectory_metadata_blob (data blob)");
+        database.exec("create table gen_metadata (wrong_column blob)");
+      }
+    } finally {
+      database.close();
+    }
+    await writeTranscript(desktop, ID);
+
+    const result = await collectAntigravitySessions([desktop], NOW_MS, WINDOW_MS);
+
+    expect(result.value).toHaveLength(1);
+    expect(result.errors).toEqual([
+      expect.stringMatching(new RegExp(`${table}.*(?:unreadable|could not be read).*incomplete`, "i")),
+    ]);
+  },
+);
+
+test("gen_metadata model discovery stays inside a bounded newest-first blob window", async () => {
+  const home = await fixtureHome();
+  const desktop = join(home, ".gemini/antigravity");
+  await mkdir(join(desktop, "conversations"), { recursive: true });
+  writeCurrentSchemaDb(join(desktop, "conversations", `${ID}.db`), [
+    protoField(19, "gemini-3.7-flash"),
+    ...Array.from({ length: 64 }, () => protoField(19, "placeholder-model")),
+  ]);
+  await writeTranscript(desktop, ID);
+
+  let admittedCandidates = 0;
+  const result = await collectAntigravitySessions([desktop], NOW_MS, WINDOW_MS, undefined, {
+    testHooks: {
+      onBlobAdmitted() { admittedCandidates += 1; },
+    },
+  });
+
+  expect({ model: result.value[0]?.model, admittedCandidates }).toEqual({
+    model: undefined,
+    admittedCandidates: 64,
+  });
+  expect(result.errors).toEqual([
+    expect.stringMatching(/candidate budget of 64.*incomplete/i),
+  ]);
+});
+
+test("gen_metadata admission has one aggregate blob-byte budget per database", async () => {
+  const home = await fixtureHome();
+  const desktop = join(home, ".gemini/antigravity");
+  await mkdir(join(desktop, "conversations"), { recursive: true });
+  const blobBytes = 4_500_000;
+  writeCurrentSchemaDb(join(desktop, "conversations", `${ID}.db`), [
+    new Uint8Array(blobBytes).fill(0xff),
+    new Uint8Array(blobBytes).fill(0xff),
+  ]);
+
+  let admittedBlobBytes = 0;
+  let admittedCandidates = 0;
+  const result = await collectAntigravitySessions([desktop], NOW_MS, WINDOW_MS, undefined, {
+    testHooks: {
+      onBlobAdmitted(bytes: number) {
+        admittedBlobBytes += bytes;
+        admittedCandidates += 1;
+      },
+    },
+  });
+
+  expect({ admittedBlobBytes, admittedCandidates }).toEqual({
+    admittedBlobBytes: blobBytes,
+    admittedCandidates: 1,
+  });
+  expect(result.value[0]?.model).toBeUndefined();
+  expect(result.errors).toEqual([
+    expect.stringMatching(/aggregate blob budget.*incomplete/i),
+  ]);
+});
+
+test("conversation and transcript work runs through a fixed-width admission pool", async () => {
+  const home = await fixtureHome();
+  const desktop = join(home, ".gemini/antigravity");
+  await mkdir(join(desktop, "conversations"), { recursive: true });
+  const ids = Array.from(
+    { length: 8 },
+    (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+  );
+  for (const id of ids) {
+    writeConversationDb(join(desktop, "conversations", `${id}.db`));
+    await writeTranscript(desktop, id);
+  }
+
+  let inFlight = 0;
+  let peakInFlight = 0;
+  let admissions = 0;
+  let releaseFirstWave!: () => void;
+  const firstWave = new Promise<void>((resolve) => { releaseFirstWave = resolve; });
+  const result = await collectAntigravitySessions([desktop], NOW_MS, WINDOW_MS, undefined, {
+    testHooks: {
+      async beforeConversation() {
+        inFlight += 1;
+        admissions += 1;
+        peakInFlight = Math.max(peakInFlight, inFlight);
+        if (admissions === 4) queueMicrotask(releaseFirstWave);
+        if (admissions <= 4) await firstWave;
+      },
+      afterConversation() {
+        inFlight -= 1;
+      },
+    },
+  });
+
+  expect(result.value).toHaveLength(ids.length);
+  expect({ admissions, peakInFlight, inFlight }).toEqual({
+    admissions: ids.length,
+    peakInFlight: 4,
+    inFlight: 0,
+  });
+});
+
+test("an abort during the first admission wave preserves exact reason identity and admits no later conversations", async () => {
+  const home = await fixtureHome();
+  const desktop = join(home, ".gemini/antigravity");
+  await mkdir(join(desktop, "conversations"), { recursive: true });
+  const ids = Array.from(
+    { length: 8 },
+    (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+  );
+  for (const id of ids) {
+    writeConversationDb(join(desktop, "conversations", `${id}.db`));
+    await writeTranscript(desktop, id);
+  }
+
+  const controller = new AbortController();
+  const reason = new Error("stop Antigravity during admission");
+  const admitted: string[] = [];
+  const collecting = collectAntigravitySessions([desktop], NOW_MS, WINDOW_MS, undefined, {
+    signal: controller.signal,
+    testHooks: {
+      beforeConversation(path) {
+        admitted.push(basename(path, ".db"));
+        if (admitted.length === 4) controller.abort(reason);
+      },
+    },
+  });
+
+  await expect(collecting).rejects.toBe(reason);
+  await Promise.resolve();
+  expect(admitted).toEqual(ids.slice(0, 4));
+});
+
+test("conversation admission honors an expired deadline and a pre-aborted signal", async () => {
+  const home = await fixtureHome();
+  const desktop = join(home, ".gemini/antigravity");
+  await mkdir(join(desktop, "conversations"), { recursive: true });
+  writeConversationDb(join(desktop, "conversations", `${ID}.db`));
+  await writeTranscript(desktop, ID);
+
+  const expired = await collectAntigravitySessions([desktop], NOW_MS, WINDOW_MS, undefined, {
+    deadlineAtMs: 100,
+    testHooks: { now: () => 100 },
+  });
+  expect(expired.value).toEqual([]);
+  expect(expired.errors).toEqual([
+    expect.stringMatching(/deadline.*incomplete/i),
+  ]);
+
+  const controller = new AbortController();
+  const reason = new Error("stop Antigravity admission");
+  controller.abort(reason);
+  await expect(collectAntigravitySessions([desktop], NOW_MS, WINDOW_MS, undefined, {
+    signal: controller.signal,
+  })).rejects.toBe(reason);
+});
+
+test("hostile root dirents consume the strict admission with only one witness read", async () => {
+  const home = await fixtureHome();
+  const desktop = join(home, ".gemini/antigravity");
+  await mkdir(desktop, { recursive: true });
+  for (let index = 0; index <= WHOLE_SCAN_DIRENT_LIMIT; index += 1) {
+    await writeFile(join(desktop, `irrelevant-${String(index).padStart(3, "0")}`), "noise");
+  }
+  await mkdir(join(desktop, "conversations"));
+  writeConversationDb(join(desktop, "conversations", `${ID}.db`));
+
+  const rootReads: string[] = [];
+  const result = await collectAntigravitySessions(
+    [desktop],
+    NOW_MS,
+    WINDOW_MS,
+    undefined,
+    {
+      testHooks: {
+        onDirectoryEntryRead(path: string, name: string) {
+          if (path === desktop) rootReads.push(name);
+        },
+      },
+    } as Parameters<typeof collectAntigravitySessions>[4],
+  );
+
+  expect(rootReads).toHaveLength(WHOLE_SCAN_DIRENT_LIMIT + 1);
+  expect(result.value.every(({ sourceSessionId }) =>
+    rootReads.slice(0, WHOLE_SCAN_DIRENT_LIMIT).includes("conversations") && sourceSessionId === ID
+  )).toBe(true);
+  expect(result.errors).toEqual([
+    expect.stringMatching(/root directory entry budget of 64.*incomplete/i),
+  ]);
+});
+
+test("hostile conversation dirents consume capacity before matching database names", async () => {
+  const home = await fixtureHome();
+  const desktop = join(home, ".gemini/antigravity");
+  const conversations = join(desktop, "conversations");
+  await mkdir(conversations, { recursive: true });
+  for (let index = 0; index <= WHOLE_SCAN_DIRENT_LIMIT; index += 1) {
+    await writeFile(join(conversations, `irrelevant-${String(index).padStart(3, "0")}`), "noise");
+  }
+  writeConversationDb(join(conversations, `${ID}.db`));
+
+  const conversationReads: string[] = [];
+  const result = await collectAntigravitySessions(
+    [desktop],
+    NOW_MS,
+    WINDOW_MS,
+    undefined,
+    {
+      testHooks: {
+        onDirectoryEntryRead(path: string, name: string) {
+          if (path === conversations) conversationReads.push(name);
+        },
+      },
+    } as Parameters<typeof collectAntigravitySessions>[4],
+  );
+
+  expect(conversationReads).toHaveLength(WHOLE_SCAN_DIRENT_LIMIT + 1);
+  expect(result.value.every(({ sourceSessionId }) =>
+    conversationReads.slice(0, WHOLE_SCAN_DIRENT_LIMIT).includes(`${sourceSessionId}.db`)
+  )).toBe(true);
+  expect(result.errors).toEqual([
+    expect.stringMatching(/conversation directory entry budget of 64.*incomplete/i),
+  ]);
+});
+
+test("oversized transcripts are byte-capped and publish explicit incomplete source health", async () => {
+  const home = await fixtureHome();
+  const desktop = join(home, ".gemini/antigravity");
+  const conversations = join(desktop, "conversations");
+  await mkdir(conversations, { recursive: true });
+  writeConversationDb(join(conversations, `${ID}.db`));
+  const transcriptDir = join(desktop, "brain", ID, ".system_generated", "logs");
+  await mkdir(transcriptDir, { recursive: true });
+  const firstRow = `${JSON.stringify({
+    type: "USER_INPUT",
+    created_at: "2026-06-03T11:57:27Z",
+    content: "<USER_REQUEST>bounded transcript</USER_REQUEST>",
+  })}\n`;
+  await writeFile(
+    join(transcriptDir, "transcript.jsonl"),
+    `${firstRow}${"x".repeat(SOURCE_BYTE_LIMIT + 1)}`,
+  );
+
+  let admittedBytes = 0;
+  const result = await collectAntigravitySessions(
+    [desktop],
+    NOW_MS,
+    WINDOW_MS,
+    undefined,
+    {
+      testHooks: {
+        onTranscriptBytesRead(bytes: number) { admittedBytes += bytes; },
+      },
+    } as Parameters<typeof collectAntigravitySessions>[4],
+  );
+
+  expect({
+    admittedBytes,
+    task: result.value[0]?.lastUserMessage,
+    tokens: result.value[0]?.tokens,
+  }).toEqual({
+    admittedBytes: SOURCE_BYTE_LIMIT + 1,
+    task: "bounded transcript",
+    tokens: { scope: "unknown", provenance: "unknown" },
+  });
+  expect(result.errors).toEqual([
+    expect.stringMatching(/transcript byte budget of 8000000.*incomplete/i),
+  ]);
+});
+
+test("transcript reads preserve exact caller abort identity between bounded chunks", async () => {
+  const home = await fixtureHome();
+  const desktop = join(home, ".gemini/antigravity");
+  const conversations = join(desktop, "conversations");
+  await mkdir(conversations, { recursive: true });
+  writeConversationDb(join(conversations, `${ID}.db`));
+  const transcriptDir = join(desktop, "brain", ID, ".system_generated", "logs");
+  await mkdir(transcriptDir, { recursive: true });
+  await writeFile(join(transcriptDir, "transcript.jsonl"), "x".repeat(200_000));
+
+  const controller = new AbortController();
+  const reason = new Error("stop bounded Antigravity transcript read");
+  const collecting = collectAntigravitySessions(
+    [desktop],
+    NOW_MS,
+    WINDOW_MS,
+    undefined,
+    {
+      signal: controller.signal,
+      testHooks: {
+        onTranscriptBytesRead() { controller.abort(reason); },
+      },
+    } as Parameters<typeof collectAntigravitySessions>[4],
+  );
+
+  await expect(collecting).rejects.toBe(reason);
+});
+
+test("transcript reads stop on the caller absolute deadline with explicit source health", async () => {
+  const home = await fixtureHome();
+  const desktop = join(home, ".gemini/antigravity");
+  const conversations = join(desktop, "conversations");
+  await mkdir(conversations, { recursive: true });
+  writeConversationDb(join(conversations, `${ID}.db`));
+  const transcriptDir = join(desktop, "brain", ID, ".system_generated", "logs");
+  await mkdir(transcriptDir, { recursive: true });
+  const firstRow = `${JSON.stringify({
+    type: "USER_INPUT",
+    created_at: "2026-06-03T11:57:27Z",
+    content: "<USER_REQUEST>deadline prefix survives</USER_REQUEST>",
+  })}\n`;
+  await writeFile(join(transcriptDir, "transcript.jsonl"), `${firstRow}${"x".repeat(200_000)}`);
+
+  let expired = false;
+  const result = await collectAntigravitySessions(
+    [desktop],
+    NOW_MS,
+    WINDOW_MS,
+    undefined,
+    {
+      deadlineAtMs: 10,
+      testHooks: {
+        now: () => expired ? 10 : 0,
+        onTranscriptBytesRead() { expired = true; },
+      },
+    } as Parameters<typeof collectAntigravitySessions>[4],
+  );
+
+  expect(result.value[0]?.lastUserMessage).toBe("deadline prefix survives");
+  expect(result.errors).toEqual([
+    expect.stringMatching(/transcript deadline.*incomplete/i),
+  ]);
+});
+
+test("a malformed interior transcript record preserves safe rows but degrades source health", async () => {
+  const home = await fixtureHome();
+  const desktop = join(home, ".gemini/antigravity");
+  const conversations = join(desktop, "conversations");
+  await mkdir(conversations, { recursive: true });
+  writeConversationDb(join(conversations, `${ID}.db`));
+  const transcriptDir = join(desktop, "brain", ID, ".system_generated", "logs");
+  await mkdir(transcriptDir, { recursive: true });
+  await writeFile(join(transcriptDir, "transcript.jsonl"), [
+    JSON.stringify({
+      type: "USER_INPUT",
+      created_at: "2026-06-03T11:57:27Z",
+      content: "<USER_REQUEST>safe prefix</USER_REQUEST>",
+    }),
+    "{malformed",
+    JSON.stringify({
+      type: "PLANNER_RESPONSE",
+      created_at: "2026-06-03T11:57:37Z",
+      content: "safe suffix",
+    }),
+    "",
+  ].join("\n"));
+
+  const result = await collectAntigravitySessions([desktop], NOW_MS, WINDOW_MS);
+
+  expect(result.value[0]).toMatchObject({
+    lastUserMessage: "safe prefix",
+    lastAgentClosing: "safe suffix",
+  });
+  expect(result.errors).toEqual([
+    expect.stringMatching(/transcript.*malformed.*incomplete/i),
+  ]);
+});
+
+test("an abort raised by directory close preserves exact caller reason identity", async () => {
+  const home = await fixtureHome();
+  const desktop = join(home, ".gemini/antigravity");
+  await mkdir(join(desktop, "conversations"), { recursive: true });
+  const controller = new AbortController();
+  const reason = new Error("stop Antigravity during directory close");
+
+  const collecting = collectAntigravitySessions([desktop], NOW_MS, WINDOW_MS, undefined, {
+    signal: controller.signal,
+    testHooks: {
+      afterDirectoryClose(path: string) {
+        if (path === desktop) controller.abort(reason);
+      },
+    },
+  } as Parameters<typeof collectAntigravitySessions>[4]);
+
+  await expect(collecting).rejects.toBe(reason);
+});
+
+test("a deadline reached during transcript close publishes explicit incomplete health", async () => {
+  const home = await fixtureHome();
+  const desktop = join(home, ".gemini/antigravity");
+  const conversations = join(desktop, "conversations");
+  await mkdir(conversations, { recursive: true });
+  writeConversationDb(join(conversations, `${ID}.db`));
+  await writeTranscript(desktop, ID);
+  let closed = false;
+
+  const result = await collectAntigravitySessions([desktop], NOW_MS, WINDOW_MS, undefined, {
+    deadlineAtMs: 10,
+    testHooks: {
+      now: () => closed ? 10 : 0,
+      afterTranscriptClose() { closed = true; },
+    },
+  } as Parameters<typeof collectAntigravitySessions>[4]);
+
+  expect(result.value[0]?.lastUserMessage).toBe("Review the Antigravity collector.");
+  expect(result.errors).toEqual([
+    expect.stringMatching(/transcript deadline reached during close.*incomplete/i),
+  ]);
+});
+
+function writeLegacyBlobAdmissionDb(path: string, values: readonly Uint8Array[]): void {
+  const database = new Database(path);
+  try {
+    database.exec("create table trajectory_meta (trajectory_id text)");
+    database.exec("create table trajectory_metadata_blob (data blob)");
+    for (const value of values) {
+      database.run("insert into trajectory_metadata_blob(data) values (?)", [value]);
+    }
+  } finally {
+    database.close();
+  }
+}
+
+test("legacy trajectory metadata stops at 64 rows and one row witness", async () => {
+  const home = await fixtureHome();
+  const desktop = join(home, ".gemini/antigravity");
+  const conversations = join(desktop, "conversations");
+  await mkdir(conversations, { recursive: true });
+  writeLegacyBlobAdmissionDb(
+    join(conversations, `${ID}.db`),
+    Array.from({ length: 65 }, (_, index) => Uint8Array.of(index)),
+  );
+  await writeTranscript(desktop, ID);
+
+  let admittedValues = 0;
+  const result = await collectAntigravitySessions([desktop], NOW_MS, WINDOW_MS, undefined, {
+    testHooks: { onLegacyBlobAdmitted() { admittedValues += 1; } },
+  });
+
+  expect(admittedValues).toBe(64);
+  expect(result.errors).toEqual([
+    expect.stringMatching(/trajectory_metadata_blob row budget of 64.*incomplete/i),
+  ]);
+});
+
+test("legacy trajectory metadata enforces per-value and aggregate byte admission", async () => {
+  const collectValues = async (values: readonly Uint8Array[]) => {
+    const home = await fixtureHome();
+    const desktop = join(home, ".gemini/antigravity");
+    const conversations = join(desktop, "conversations");
+    await mkdir(conversations, { recursive: true });
+    writeLegacyBlobAdmissionDb(join(conversations, `${ID}.db`), values);
+    await writeTranscript(desktop, ID);
+    let admittedBytes = 0;
+    const result = await collectAntigravitySessions([desktop], NOW_MS, WINDOW_MS, undefined, {
+      testHooks: { onLegacyBlobAdmitted(bytes) { admittedBytes += bytes; } },
+    });
+    return { admittedBytes, result };
+  };
+
+  const oversized = await collectValues([new Uint8Array(SOURCE_BYTE_LIMIT + 1)]);
+  const aggregate = await collectValues([
+    new Uint8Array(4_500_000),
+    new Uint8Array(4_500_000),
+  ]);
+
+  expect(oversized.admittedBytes).toBe(0);
+  expect(oversized.result.errors).toEqual([
+    expect.stringMatching(/trajectory_metadata_blob value byte budget of 8000000.*incomplete/i),
+  ]);
+  expect(aggregate.admittedBytes).toBe(4_500_000);
+  expect(aggregate.result.errors).toEqual([
+    expect.stringMatching(/trajectory_metadata_blob aggregate byte budget of 8000000.*incomplete/i),
+  ]);
 });

@@ -475,6 +475,41 @@ describe("Pi exact process, resume, target, and control boundaries", () => {
 });
 
 describe("Pi settlement and HubState cancellation reds", () => {
+  test("distinct Pi instance roots scope the same native session id to distinct agent ids", async () => {
+    const home = mkdtempSync(join(tmpdir(), "formic-pi-instance-home-"));
+    const firstRoot = mkdtempSync(join(tmpdir(), "formic-pi-instance-first-"));
+    const secondRoot = mkdtempSync(join(tmpdir(), "formic-pi-instance-second-"));
+    const session = (prompt: string) => [
+      { type: "session", version: 3, id: ID, timestamp: "2026-08-20T12:00:00.000Z", cwd: "/tmp/shared-native-id" },
+      { type: "message", id: `${prompt}-user`, parentId: null, timestamp: "2026-08-20T12:00:01.000Z", message: { role: "user", content: prompt, timestamp: 1_787_227_201_000 } },
+      { type: "message", id: `${prompt}-answer`, parentId: `${prompt}-user`, timestamp: "2026-08-20T12:00:02.000Z", message: { role: "assistant", content: [{ type: "text", text: `${prompt} answer` }], provider: "anthropic", model: "claude-opus-5", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 }, stopReason: "stop", timestamp: 1_787_227_202_000 } },
+    ];
+    writeFileSync(join(firstRoot, "first.jsonl"), `${session("first").map((row) => JSON.stringify(row)).join("\n")}\n`);
+    writeFileSync(join(secondRoot, "second.jsonl"), `${session("second").map((row) => JSON.stringify(row)).join("\n")}\n`);
+
+    try {
+      const result = await collectSessionProvider(PI, home, Number.POSITIVE_INFINITY, undefined, {
+        extraPiRoots: [firstRoot, secondRoot],
+      });
+      const identities = result.value.map(({ id, instanceId, sourceSessionId }) => ({
+        id,
+        instanceId,
+        sourceSessionId,
+      }));
+
+      expect(result.errors).toEqual([]);
+      expect(identities).toHaveLength(2);
+      expect(new Set(identities.map(({ instanceId }) => instanceId)).size).toBe(2);
+      expect(identities.every(({ id, instanceId, sourceSessionId }) =>
+        id === `${instanceId}:${sourceSessionId}`)).toBeTrue();
+      expect(new Set(identities.map(({ id }) => id)).size).toBe(2);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(firstRoot, { recursive: true, force: true });
+      rmSync(secondRoot, { recursive: true, force: true });
+    }
+  });
+
   test("PI-REPAIR-1A first refresh forwards two live Pi observations and its owned deadline in one provider call", async () => {
     const safeHome = mkdtempSync(join(tmpdir(), "formic-pi-state-home-"));
     const firstRoot = mkdtempSync(join(tmpdir(), "formic-pi-state-first-"));

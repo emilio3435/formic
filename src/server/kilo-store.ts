@@ -16,6 +16,8 @@ export const KILO_FIXTURE_SHA256 =
   "5f34f5864951008f661bddf8eb985a6f28846ac114304795bba5d9eab56b657b";
 
 export const KILO_STORE_LIMITS = {
+  dataDirEntries: 64,
+  dataDirStores: 16,
   sessions: 50,
   recentMessagesPerSession: 100,
   earlyMessagesPerSession: 16,
@@ -33,6 +35,11 @@ export interface KiloReadOptions {
   partLimit?: number;
   deadlineAtMs?: number;
   nowMs?: () => number;
+  signal?: AbortSignal;
+  testHooks?: {
+    onDataDirEntry?: (path: string, name: string) => void;
+    beforeStoreRead?: (path: string) => void;
+  };
 }
 
 export interface KiloRawModel {
@@ -216,7 +223,9 @@ interface RawPartRow {
 }
 
 interface RawPartBoundaryRow {
-  part_rowid: unknown;
+  message_order: unknown;
+  ascending_rowids: unknown;
+  descending_rowids: unknown;
 }
 
 interface RawSessionBundle {
@@ -326,6 +335,25 @@ function boundedLimit(value: number | undefined, fallback: number): number {
   return Math.min(fallback, Math.floor(value as number));
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw signal.reason;
+}
+
+/* A signal cannot interrupt a synchronous SQLite statement already executing.
+   Bracket each bounded operation so cancellation is observed before starting
+   another statement and immediately after the current one returns. */
+function runBoundedSync<T>(signal: AbortSignal | undefined, operation: () => T): T {
+  throwIfAborted(signal);
+  try {
+    const result = operation();
+    throwIfAborted(signal);
+    return result;
+  } catch (error) {
+    if (signal?.aborted) throw signal.reason;
+    throw error;
+  }
+}
+
 function compareRows(
   left: { id: unknown; time_created: unknown },
   right: { id: unknown; time_created: unknown },
@@ -349,18 +377,24 @@ function compareUntypedPartAuthority(
     : compareNativeIds(left.partId, right.partId);
 }
 
-function schemaColumns(database: Database, table: keyof typeof REQUIRED_COLUMNS): Set<string> {
+function schemaColumns(
+  database: Database,
+  table: keyof typeof REQUIRED_COLUMNS,
+  signal?: AbortSignal,
+): Set<string> {
+  throwIfAborted(signal);
   const rows = database.query(`PRAGMA table_info("${table}")`).all() as Array<{
     name?: unknown;
   }>;
+  throwIfAborted(signal);
   return new Set(rows.flatMap(({ name }) => typeof name === "string" ? [name] : []));
 }
 
-function assertPinnedSchema(database: Database): void {
+function assertPinnedSchema(database: Database, signal?: AbortSignal): void {
   for (const [table, expected] of Object.entries(REQUIRED_COLUMNS) as Array<
     [keyof typeof REQUIRED_COLUMNS, readonly string[]]
   >) {
-    const columns = schemaColumns(database, table);
+    const columns = schemaColumns(database, table, signal);
     const missing = expected.filter((column) => !columns.has(column));
     if (missing.length > 0) {
       throw new ForeignSqliteReadError(
@@ -370,18 +404,22 @@ function assertPinnedSchema(database: Database): void {
     }
   }
 
+  throwIfAborted(signal);
   const partIndexes = database.query('PRAGMA index_list("part")').all() as Array<{
     name?: unknown;
     partial?: unknown;
   }>;
+  throwIfAborted(signal);
   const partBoundaryIndex = partIndexes.find(({ name }) =>
     name === "part_message_id_id_idx"
   );
+  throwIfAborted(signal);
   const partBoundaryColumns = partBoundaryIndex
     ? (database.query('PRAGMA index_info("part_message_id_id_idx")').all() as Array<{
-      name?: unknown;
-    }>).flatMap(({ name }) => typeof name === "string" ? [name] : [])
+        name?: unknown;
+      }>).flatMap(({ name }) => typeof name === "string" ? [name] : [])
     : [];
+  throwIfAborted(signal);
   if (
     partBoundaryIndex?.partial !== 0 ||
     partBoundaryColumns.length !== 2 ||
@@ -394,12 +432,14 @@ function assertPinnedSchema(database: Database): void {
     );
   }
 
+  throwIfAborted(signal);
   const migrations = database.query(`
     SELECT substr(id, 1, ${ID_CHARS + 1}) AS id, length(id) AS id_length
     FROM migration
     ORDER BY id
     LIMIT ${MIGRATION_ROWS + 1}
   `).all() as Array<{ id?: unknown; id_length?: unknown }>;
+  throwIfAborted(signal);
   if (migrations.length > MIGRATION_ROWS) {
     throw new ForeignSqliteReadError(
       "schema",
@@ -432,8 +472,10 @@ function readMessageWindow(
   sessionId: string,
   direction: "ASC" | "DESC",
   limit: number,
+  signal?: AbortSignal,
 ): RawMessageRow[] {
-  return database.query(`
+  throwIfAborted(signal);
+  const rows = database.query(`
     SELECT
       substr(id, 1, ${ID_CHARS + 1}) AS id,
       length(id) AS id_length,
@@ -445,22 +487,56 @@ function readMessageWindow(
     ORDER BY time_created ${direction}, id ${direction}
     LIMIT ?
   `).all(sessionId, limit) as RawMessageRow[];
+  throwIfAborted(signal);
+  return rows;
 }
 
-function readPartBoundary(
+function readPartBoundaries(
   database: Database,
-  messageId: string,
-  direction: "ASC" | "DESC",
+  messageIds: string[],
   limit: number,
+  signal?: AbortSignal,
 ): RawPartBoundaryRow[] {
-  return database.query(`
+  const selectedMessages = messageIds.map((_, index) => `(?, ${index})`).join(", ");
+  throwIfAborted(signal);
+  const rows = database.query(`
+    WITH selected_messages(message_id, message_order) AS (
+      VALUES ${selectedMessages}
+    )
     SELECT
-      rowid AS part_rowid
-    FROM part
-    WHERE message_id = ?
-    ORDER BY id ${direction}
-    LIMIT ?
-  `).all(messageId, limit) as RawPartBoundaryRow[];
+      message_order,
+      (
+        SELECT group_concat(part_rowid, ',')
+        FROM (
+          SELECT rowid AS part_rowid
+          FROM part
+          WHERE message_id = selected_messages.message_id
+          ORDER BY id COLLATE BINARY ASC
+          LIMIT ?
+        )
+      ) AS ascending_rowids,
+      (
+        SELECT group_concat(part_rowid, ',')
+        FROM (
+          SELECT rowid AS part_rowid
+          FROM part
+          WHERE message_id = selected_messages.message_id
+          ORDER BY id COLLATE BINARY DESC
+          LIMIT ?
+        )
+      ) AS descending_rowids
+    FROM selected_messages
+  `).all(...messageIds, limit, limit) as RawPartBoundaryRow[];
+  throwIfAborted(signal);
+  return rows;
+}
+
+function decodedBoundaryRowids(value: unknown): number[] {
+  if (typeof value !== "string" || value.length === 0) return [];
+  return value.split(",").flatMap((rowid) => {
+    const bounded = nonNegativeInteger(Number(rowid));
+    return bounded === undefined ? [] : [bounded];
+  });
 }
 
 function readSelectedParts(
@@ -468,19 +544,25 @@ function readSelectedParts(
   messageIds: string[],
   limit: number,
   pastDeadline: () => boolean,
+  signal?: AbortSignal,
 ): RawPartRow[] {
+  throwIfAborted(signal);
   if (messageIds.length === 0 || limit === 0) return [];
   const selected = new Map<number, {
     messageOrder: number;
     boundaryRank: number;
     boundarySide: number;
   }>();
-  for (const [messageOrder, messageId] of messageIds.entries()) {
-    for (const [boundarySide, direction] of (["ASC", "DESC"] as const).entries()) {
-      const rows = readPartBoundary(database, messageId, direction, limit);
-      for (const [index, row] of rows.entries()) {
-        const rowid = nonNegativeInteger(row.part_rowid);
-        if (rowid === undefined) continue;
+  const boundaries = readPartBoundaries(database, messageIds, limit, signal);
+  for (const boundary of boundaries) {
+    throwIfAborted(signal);
+    const messageOrder = nonNegativeInteger(boundary.message_order);
+    if (messageOrder === undefined || messageOrder >= messageIds.length) continue;
+    for (const [boundarySide, rowids] of [
+      decodedBoundaryRowids(boundary.ascending_rowids),
+      decodedBoundaryRowids(boundary.descending_rowids),
+    ].entries()) {
+      for (const [index, rowid] of rowids.entries()) {
         const candidate = {
           messageOrder,
           boundaryRank: index + 1,
@@ -496,9 +578,9 @@ function readSelectedParts(
           selected.set(rowid, candidate);
         }
       }
-      if (pastDeadline()) return [];
     }
   }
+  if (pastDeadline()) return [];
 
   const bounded = [...selected.entries()]
     .sort((left, right) =>
@@ -511,6 +593,7 @@ function readSelectedParts(
   const placeholders = bounded.map(() => "?").join(", ");
   const bindings: SQLQueryBindings[] = bounded.map(([rowid]) => rowid);
   bindings.push(bounded.length);
+  throwIfAborted(signal);
   const rows = database.query(`
     SELECT
       rowid AS part_rowid,
@@ -526,6 +609,7 @@ function readSelectedParts(
     WHERE rowid IN (${placeholders})
     LIMIT ?
   `).all(...bindings) as RawPartRow[];
+  throwIfAborted(signal);
   const boundedOrder = new Map(bounded.map(([rowid], index) => [rowid, index]));
   return rows.sort((left, right) => {
     const leftRowid = nonNegativeInteger(left.part_rowid);
@@ -548,14 +632,17 @@ function readRawSnapshot(
   partLimit: number,
   pastDeadline: () => boolean,
   selectedSessionId?: string,
+  signal?: AbortSignal,
 ): RawStoreSnapshot {
+  throwIfAborted(signal);
   if (pastDeadline()) return { sessions: [], sessionTruncated: false, deadlineExpired: true };
-  assertPinnedSchema(database);
+  assertPinnedSchema(database, signal);
+  throwIfAborted(signal);
   if (pastDeadline()) return { sessions: [], sessionTruncated: false, deadlineExpired: true };
 
   const selection = selectedSessionId
-    ? "WHERE id = ? ORDER BY time_updated DESC, id DESC LIMIT 1"
-    : "ORDER BY time_updated DESC, id DESC LIMIT ?";
+    ? "WHERE id = ? LIMIT 1"
+    : "ORDER BY session.id DESC LIMIT ?";
   const sessionRows = database.query(`
     SELECT
       substr(id, 1, ${ID_CHARS + 1}) AS id,
@@ -583,10 +670,21 @@ function readRawSnapshot(
     FROM session
     ${selection}
   `).all(selectedSessionId ?? sessionLimit + 1) as RawSessionRow[];
+  throwIfAborted(signal);
   const sessionTruncated = selectedSessionId === undefined && sessionRows.length > sessionLimit;
+  const admittedSessionRows = [...sessionRows].sort((left, right) => {
+    const leftUpdatedAt = nonNegativeInteger(left.time_updated);
+    const rightUpdatedAt = nonNegativeInteger(right.time_updated);
+    if (
+      leftUpdatedAt === undefined || rightUpdatedAt === undefined ||
+      leftUpdatedAt === rightUpdatedAt
+    ) return 0;
+    return leftUpdatedAt > rightUpdatedAt ? -1 : 1;
+  });
   const sessions: RawSessionBundle[] = [];
 
-  for (const session of sessionRows.slice(0, sessionLimit)) {
+  for (const session of admittedSessionRows.slice(0, sessionLimit)) {
+    throwIfAborted(signal);
     if (pastDeadline()) return { sessions, sessionTruncated, deadlineExpired: true };
     const sessionId = nonEmptyString(session.id);
     const idLength = nonNegativeInteger(session.id_length);
@@ -605,9 +703,16 @@ function readRawSnapshot(
       continue;
     }
 
-    const early = readMessageWindow(database, sessionId, "ASC", earlyMessageLimit);
+    const early = readMessageWindow(database, sessionId, "ASC", earlyMessageLimit, signal);
+    throwIfAborted(signal);
     if (pastDeadline()) return { sessions, sessionTruncated, deadlineExpired: true };
-    const recentRows = readMessageWindow(database, sessionId, "DESC", recentMessageLimit + 1);
+    const recentRows = readMessageWindow(
+      database,
+      sessionId,
+      "DESC",
+      recentMessageLimit + 1,
+      signal,
+    );
     const recentWindowTruncated = recentRows.length > recentMessageLimit;
     const earlyMessageIds = new Set(early.map((message) => String(message.id ?? "")));
     const messageWindowGap = recentWindowTruncated &&
@@ -624,7 +729,7 @@ function readRawSnapshot(
     });
 
     if (pastDeadline()) return { sessions, sessionTruncated, deadlineExpired: true };
-    const partRows = readSelectedParts(database, messageIds, partLimit + 1, pastDeadline);
+    const partRows = readSelectedParts(database, messageIds, partLimit + 1, pastDeadline, signal);
     if (messageIds.length > 0 && pastDeadline()) {
       return { sessions, sessionTruncated, deadlineExpired: true };
     }
@@ -1533,8 +1638,14 @@ export function readKiloStore(
   path: string,
   options: KiloReadOptions = {},
 ): KiloStoreEvidence {
+  throwIfAborted(options.signal);
   const nowMs = options.nowMs ?? Date.now;
-  const pastDeadline = () => options.deadlineAtMs !== undefined && nowMs() >= options.deadlineAtMs;
+  const pastDeadline = () => {
+    throwIfAborted(options.signal);
+    const expired = options.deadlineAtMs !== undefined && nowMs() >= options.deadlineAtMs;
+    throwIfAborted(options.signal);
+    return expired;
+  };
   if (pastDeadline()) return deadlineResult();
 
   const sessionLimit = boundedLimit(options.sessionLimit, KILO_STORE_LIMITS.sessions);
@@ -1550,18 +1661,22 @@ export function readKiloStore(
 
   let raw: RawStoreSnapshot;
   try {
-    raw = readForeignSqlite(path, (database) =>
-      readRawSnapshot(
-        database,
-        sessionLimit,
-        recentMessageLimit,
-        earlyMessageLimit,
-        partLimit,
-        pastDeadline,
-        nonEmptyString(options.sessionId),
+    raw = runBoundedSync(options.signal, () =>
+      readForeignSqlite(path, (database) =>
+        readRawSnapshot(
+          database,
+          sessionLimit,
+          recentMessageLimit,
+          earlyMessageLimit,
+          partLimit,
+          pastDeadline,
+          nonEmptyString(options.sessionId),
+          options.signal,
+        )
       )
     );
   } catch (error) {
+    if (options.signal?.aborted) throw options.signal.reason;
     if (error instanceof ForeignSqliteReadError && error.kind === "absent") {
       return { sessions: [], diagnostics: [], incomplete: false, absent: true };
     }
@@ -1573,13 +1688,15 @@ export function readKiloStore(
     diagnostic(diagnostics, {
       kind: "truncated",
       table: "session",
-      detail: `recent session window capped at ${sessionLimit}`,
+      detail: `bounded session window capped at ${sessionLimit}; admission uses native id order and global recency is unproven`,
     });
   }
   const sessions: KiloSessionEvidence[] = [];
   let deadlineExpired = raw.deadlineExpired;
   for (const [index, bundle] of raw.sessions.entries()) {
+    throwIfAborted(options.signal);
     const session = parseSession(bundle, diagnostics);
+    throwIfAborted(options.signal);
     if (session) sessions.push(session);
     if (
       !deadlineExpired && pastDeadline() &&
@@ -1613,19 +1730,74 @@ export function readKiloDataDir(
   dataDir: string,
   options: KiloReadOptions = {},
 ): KiloDataDirEvidence {
-  const pastDeadline = () =>
-    options.deadlineAtMs !== undefined && (options.nowMs ?? Date.now)() >= options.deadlineAtMs;
+  throwIfAborted(options.signal);
+  const pastDeadline = () => {
+    throwIfAborted(options.signal);
+    const expired = options.deadlineAtMs !== undefined &&
+      (options.nowMs ?? Date.now)() >= options.deadlineAtMs;
+    throwIfAborted(options.signal);
+    return expired;
+  };
   const matchingNames: string[] = [];
+  const errors: string[] = [];
+  let deadlineReached = false;
+  let directoryTruncated = false;
+  let exhausted = false;
   let directory: ReturnType<typeof opendirSync> | undefined;
   try {
-    directory = opendirSync(dataDir);
-    let entry;
-    while ((entry = directory.readSync()) !== null) {
-      if (!entry.isFile() || !isKiloStoreName(entry.name)) continue;
+    if (pastDeadline()) {
+      return {
+        stores: [],
+        errors: ["Kilo data directory deadline expired with matching stores not enumerated."],
+        absent: false,
+      };
+    }
+    directory = runBoundedSync(options.signal, () => opendirSync(dataDir));
+    let admittedEntries = 0;
+    while (admittedEntries < KILO_STORE_LIMITS.dataDirEntries) {
+      if (pastDeadline()) {
+        deadlineReached = true;
+        break;
+      }
+      const entry = runBoundedSync(options.signal, () => directory!.readSync());
+      if (!entry) {
+        exhausted = true;
+        break;
+      }
+      admittedEntries += 1;
+      options.testHooks?.onDataDirEntry?.(dataDir, entry.name);
+      throwIfAborted(options.signal);
+      if (pastDeadline()) {
+        deadlineReached = true;
+        break;
+      }
+      if (!isKiloStoreName(entry.name)) continue;
+      const path = join(dataDir, entry.name);
+      if (!entry.isFile()) {
+        errors.push(`${path}: Kilo store is not a regular file.`);
+        continue;
+      }
       matchingNames.push(entry.name);
-      if (matchingNames.length === 17) break;
+    }
+    if (
+      !deadlineReached &&
+      !exhausted &&
+      admittedEntries === KILO_STORE_LIMITS.dataDirEntries
+    ) {
+      if (pastDeadline()) {
+        deadlineReached = true;
+      } else {
+        const witness = runBoundedSync(options.signal, () => directory!.readSync());
+        if (witness) {
+          options.testHooks?.onDataDirEntry?.(dataDir, witness.name);
+          throwIfAborted(options.signal);
+          if (pastDeadline()) deadlineReached = true;
+          else directoryTruncated = true;
+        }
+      }
     }
   } catch (error) {
+    if (options.signal?.aborted) throw options.signal.reason;
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return { stores: [], errors: [], absent: true };
     }
@@ -1638,26 +1810,31 @@ export function readKiloDataDir(
     directory?.closeSync();
   }
 
-  if (
-    matchingNames.length > 0 && pastDeadline()
-  ) {
-    return {
-      stores: [],
-      errors: ["Kilo data directory deadline expired with matching stores not enumerated."],
-      absent: false,
-    };
+  throwIfAborted(options.signal);
+
+  if (deadlineReached) {
+    errors.push("Kilo data directory deadline expired with matching stores not enumerated.");
   }
+  if (directoryTruncated) {
+    errors.push(`Kilo data directory entry limit ${KILO_STORE_LIMITS.dataDirEntries} reached with entries not enumerated.`);
+  }
+  if (deadlineReached) return { stores: [], errors, absent: false };
 
   const stores: KiloDataDirStoreEvidence[] = [];
-  const errors = matchingNames.length > 16
-    ? ["Kilo data directory store limit 16 reached with matching stores not enumerated."]
-    : [];
-  for (const name of matchingNames.sort((left, right) => left.localeCompare(right)).slice(0, 16)) {
+  if (matchingNames.length > KILO_STORE_LIMITS.dataDirStores) {
+    errors.push(`Kilo data directory store limit ${KILO_STORE_LIMITS.dataDirStores} reached with matching stores not enumerated.`);
+  }
+  for (const name of matchingNames
+    .sort((left, right) => left.localeCompare(right))
+    .slice(0, KILO_STORE_LIMITS.dataDirStores)) {
+    throwIfAborted(options.signal);
+    const path = join(dataDir, name);
+    options.testHooks?.beforeStoreRead?.(path);
+    throwIfAborted(options.signal);
     if (pastDeadline()) {
       errors.push("Kilo data directory deadline expired with matching stores not enumerated.");
       break;
     }
-    const path = join(dataDir, name);
     try {
       const evidence = readKiloStore(path, options);
       if (evidence.absent) {
@@ -1666,6 +1843,7 @@ export function readKiloDataDir(
         stores.push({ path, evidence });
       }
     } catch (error) {
+      if (options.signal?.aborted) throw options.signal.reason;
       errors.push(`${path}: ${foreignSqliteFailureMessage(error, "Kilo population is unavailable")}`);
     }
   }

@@ -31,6 +31,7 @@ import {
   isGrokBotTarget,
   resolveGrokBotControlTarget,
 } from "./grok-bot-gateway";
+import { normalizeIdentityValue } from "./identity";
 import type { CmuxSurface, CollectedAgent } from "./types";
 
 function normalizeCwd(value?: string): string {
@@ -92,9 +93,10 @@ export function surfaceClaimsSourceSession(
 ): boolean {
   if (agent.provider === "pi" && !PI_SESSION_ID.test(agent.sourceSessionId)) return false;
   if (agent.provider === "kimi" && !KIMI_SESSION_ID.test(agent.sourceSessionId)) return false;
-  const sessionId = agent.sourceSessionId.toLowerCase();
+  const collisionSessionId = agent.sourceSessionId.toLowerCase();
   const claims = sourceSessionClaims(surface).filter(
-    (claim) => claim.sessionId.toLowerCase() === sessionId,
+    (claim) => normalizeIdentityValue(agent.provider, claim.sessionId)
+      === normalizeIdentityValue(agent.provider, agent.sourceSessionId),
   );
   const qualifiedProviders = new Set(
     claims.flatMap(({ provider }) => provider ? [provider] : []),
@@ -103,8 +105,8 @@ export function surfaceClaimsSourceSession(
     return qualifiedProviders.size === 1 && qualifiedProviders.has(agent.provider);
   }
   if (!claims.some(({ provider }) => provider === undefined)) return false;
-  const providers = providersBySession.get(sessionId);
-  return !sourceSessionHasProviderCollision(sessionId, providersBySession)
+  const providers = providersBySession.get(collisionSessionId);
+  return !sourceSessionHasProviderCollision(collisionSessionId, providersBySession)
     && (providers === undefined || providers.size === 0 || providers.has(agent.provider));
 }
 
@@ -224,9 +226,11 @@ function resolveAgentTargetInternal(
   }
 
   const providersBySession = indexSessionIdentityProviders(sources);
-  const sameProviderOwners = providersBySession
-    .get(agent.sourceSessionId.toLowerCase())
-    ?.get(agent.provider) ?? 0;
+  const normalizedSessionId = normalizeIdentityValue(agent.provider, agent.sourceSessionId);
+  const sameProviderOwners = sources.filter(
+    (source) => source.provider === agent.provider
+      && normalizeIdentityValue(agent.provider, source.sourceSessionId) === normalizedSessionId,
+  ).length;
   if ((agent.provider === "pi" || agent.provider === "kimi") && sameProviderOwners > 1) {
     const label = agent.provider === "kimi" ? "Kimi Code" : "Pi";
     steps?.push({
@@ -252,7 +256,8 @@ function resolveAgentTargetInternal(
     });
     return finish(target(sharedHostSurface, "shared-host", SHARED_HOST_REASON, agent));
   }
-  const hookRecord = (agent.provider === "kilo" || agent.provider === "kimi") && sameProviderOwners > 1
+  const hookRecord = (agent.provider === "opencode" || agent.provider === "kilo" || agent.provider === "kimi")
+    && sameProviderOwners > 1
     ? undefined
     : hookRecordFor(agent.provider, agent.sourceSessionId);
   if (hookRecord) {

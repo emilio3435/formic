@@ -368,6 +368,30 @@ describe("read-only identity debug endpoint", () => {
   });
 });
 
+describe("transcript request cancellation", () => {
+  test("a Gemini transcript abort rethrows the exact request reason", async () => {
+    const source = join(
+      import.meta.dir,
+      "fixtures/gemini/demo-project/chats/session-2026-08-19T12-00-abcd1234.jsonl",
+    );
+    const agent = {
+      ...linkedAgent(),
+      id: "gemini:abcd1234-e5f6-7890-abcd-ef1234567890",
+      provider: "gemini",
+      sourceSessionId: "abcd1234-e5f6-7890-abcd-ef1234567890",
+      artifacts: [{ label: "Gemini transcript", path: source, kind: "transcript" }],
+    } as AgentSnapshot;
+    const current = snapshot();
+    current.programs[0]!.agents = [agent];
+    const abort = new AbortController();
+    const reason = new Error("cancel Gemini transcript request");
+    const response = transcriptResponse(current, agent.id, 200, {}, abort.signal);
+    queueMicrotask(() => abort.abort(reason));
+
+    await expect(response).rejects.toBe(reason);
+  });
+});
+
 describe("Grok Build ACP transcript lines", () => {
   const grok = { provider: "grok" } as AgentSnapshot;
   const fixture = readFileSync(join(import.meta.dir, "fixtures/grok-session/updates.jsonl"), "utf8");

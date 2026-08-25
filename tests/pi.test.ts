@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
+import * as fsPromises from "node:fs/promises";
 import {
   existsSync,
   mkdirSync,
@@ -46,6 +47,7 @@ type PiOptions = {
   piReadDeadlineMs?: number;
   piReadTestHooks?: {
     afterChunk?: (chunkIndex: number) => void;
+    directoryEntry?: (directoryPath: string, entryName: string) => void;
     now?: () => number;
     rootError?: (root: string, origin: "cli" | "environment" | "settings" | "imported" | "default") => Error | undefined;
   };
@@ -757,11 +759,156 @@ describe("Pi observed usage and defensive read bounds", () => {
       contextWindow: undefined,
       contextPct: undefined,
       callSizes: undefined,
-      scope: "session",
-      provenance: "estimated",
+      scope: "unknown",
+      provenance: "unknown",
       errors: [expectedWarning],
     });
   });
+
+  test("PI-CACHED-1 a newest eligible assistant without usage invalidates aggregates and occupancy", async () => {
+    const home = tempRoot("cached-latest-absent");
+    const older = assistant("cached-absent-older", "cached-absent-user", "Older valid counters are history.");
+    const newest = assistant(
+      "cached-absent-newest",
+      "cached-absent-older",
+      "Newest assistant has no usage evidence.",
+      3,
+    );
+    Reflect.deleteProperty(newest.message, "usage");
+    const source = writeDefaultSession(home, "latest-absent.jsonl", jsonl(
+      header("pi.cached-latest-absent"),
+      user("cached-absent-user", null, "Missing newest usage must poison aggregates."),
+      older,
+      newest,
+    ));
+    const result = await collectPi(home);
+    const agent = onlyAgent(result);
+    const expectedWarning =
+      `Pi default session root ${defaultSessions(home)} file ${source}: `
+      + MALFORMED_USAGE_WARNING;
+
+    expect({
+      closing: agent?.lastAgentClosing,
+      tokens: agent?.tokens,
+      contextPct: agent?.contextPct,
+      callSizes: agent?.callSizes,
+      errors: result.errors,
+    }).toEqual({
+      closing: "Newest assistant has no usage evidence.",
+      tokens: { scope: "unknown", provenance: "unknown" },
+      contextPct: undefined,
+      callSizes: undefined,
+      errors: [expectedWarning],
+    });
+  });
+
+  test.each(["malformed", "oversized"] as const)(
+    "PI-CACHED-1 a %s physical record with unknowable usage withholds aggregates while valid newest occupancy remains direct",
+    async (damage) => {
+      const home = tempRoot(`cached-record-${damage}`);
+      const sourceSessionId = `pi.cached-record-${damage}`;
+      const damaged = damage === "malformed"
+        ? "not-json"
+        : JSON.stringify(assistant(
+            "cached-record-oversized",
+            "cached-record-user",
+            `unknown ${"x".repeat(RECORD_CAP + 1)}`,
+            2,
+          ));
+      const source = writeDefaultSession(home, `${damage}.jsonl`, [
+        JSON.stringify(header(sourceSessionId)),
+        JSON.stringify(user("cached-record-user", null, "Unreadable physical usage stays unknown.")),
+        damaged,
+        JSON.stringify(assistant(
+          "cached-record-latest",
+          "cached-record-user",
+          "Valid newest usage remains direct evidence.",
+          3,
+        )),
+        "",
+      ].join("\n"));
+      const result = await collectPi(home);
+      const agent = onlyAgent(result);
+
+      expect({
+        input: agent?.tokens.input,
+        output: agent?.tokens.output,
+        cachedInput: agent?.tokens.cachedInput,
+        total: agent?.tokens.total,
+        sessionTotal: agent?.tokens.sessionTotal,
+        sessionCachedInput: agent?.tokens.sessionCachedInput,
+        sessionProcessed: agent?.tokens.sessionProcessed,
+        scope: agent?.tokens.scope,
+        provenance: agent?.tokens.provenance,
+        callSizes: agent?.callSizes,
+        qualifiedDamage: result.errors.length > 0
+          && result.errors.every((reason) => reason.includes(source)),
+      }).toEqual({
+        input: 2,
+        output: 3,
+        cachedInput: 5,
+        total: 11,
+        sessionTotal: undefined,
+        sessionCachedInput: undefined,
+        sessionProcessed: undefined,
+        scope: "latest-turn",
+        provenance: "estimated",
+        callSizes: undefined,
+        qualifiedDamage: true,
+      });
+    },
+    20_000,
+  );
+
+  test.each(["malformed", "oversized"] as const)(
+    "PI-CACHED-1 a newline-terminated %s physical record after the last valid assistant leaves current occupancy unknown",
+    async (damage) => {
+      const home = tempRoot(`cached-record-after-${damage}`);
+      const sourceSessionId = `pi.cached-record-after-${damage}`;
+      const damaged = damage === "malformed"
+        ? "not-json"
+        : JSON.stringify(assistant(
+            "cached-record-after-oversized",
+            "cached-record-after-user",
+            `unknown ${"x".repeat(RECORD_CAP + 1)}`,
+            3,
+          ));
+      const source = writeDefaultSession(home, `${damage}.jsonl`, [
+        JSON.stringify(header(sourceSessionId)),
+        JSON.stringify(user(
+          "cached-record-after-user",
+          null,
+          "Unreadable newer physical usage must not relabel older counters as current.",
+        )),
+        JSON.stringify(assistant(
+          "cached-record-before-damage",
+          "cached-record-after-user",
+          "This remains the last readable assistant.",
+          2,
+        )),
+        damaged,
+        "",
+      ].join("\n"));
+      const result = await collectPi(home);
+      const agent = onlyAgent(result);
+
+      expect({
+        closing: agent?.lastAgentClosing,
+        tokens: agent?.tokens,
+        contextPct: agent?.contextPct,
+        callSizes: agent?.callSizes,
+        qualifiedDamage: result.errors.length > 0
+          && result.errors.every((reason) => reason.includes(source)),
+      }).toEqual({
+        closing: "This remains the last readable assistant.",
+        tokens: { scope: "unknown", provenance: "unknown" },
+        contextPct: undefined,
+        callSizes: undefined,
+        qualifiedDamage: true,
+      });
+    },
+    20_000,
+  );
 
   test.each(["per-call", "session"] as const)(
     "finite %s usage overflow keeps direct evidence but withholds incomplete derived totals",
@@ -1255,6 +1402,93 @@ describe("Pi roots, layout, persistence absence, and source health", () => {
     expect(unobserved.errors.join("\n")).toMatch(/Pi.*relative.*launch cwd.*unavailable/i);
   });
 
+  test("provider-controlled direct roots stop after cap plus one total iterator entries and leave the remainder unenumerated", async () => {
+    const home = tempRoot("bounded-directory-home");
+    const root = tempRoot("bounded-directory-root");
+    const sessions = new Map([
+      ["session-first.jsonl", {
+        id: "pi.directory-first",
+        contents: jsonl(
+          header("pi.directory-first"),
+          user("directory-first-user", null, "Admit only when this file is in the iterator prefix."),
+          assistant("directory-first-answer", "directory-first-user", "Iterator prefix admitted."),
+        ),
+      }],
+      ["session-last.jsonl", {
+        id: "pi.directory-last",
+        contents: jsonl(
+          header("pi.directory-last"),
+          user("directory-last-user", null, "Do not scan the full directory for this file."),
+          assistant("directory-last-answer", "directory-last-user", "Directory scan stayed bounded."),
+        ),
+      }],
+    ]);
+    const entryNames = [
+      ...sessions.keys(),
+      ...Array.from({ length: 4_096 }, (_, index) => `irrelevant-${String(index).padStart(4, "0")}.txt`),
+    ];
+    for (const entryName of entryNames) {
+      writeFileSync(join(root, entryName), sessions.get(entryName)?.contents ?? "irrelevant\n");
+    }
+
+    const iteratorEntries: string[] = [];
+    const bounded = await collectPi(home, {
+      extraPiRoots: [root],
+      piReadTestHooks: {
+        directoryEntry: (directoryPath, entryName) => {
+          if (directoryPath === root) iteratorEntries.push(entryName);
+        },
+      },
+    });
+    const admittedSessionIds = iteratorEntries.slice(0, 4_096)
+      .filter((entryName) => sessions.has(entryName))
+      .sort()
+      .map((entryName) => sessions.get(entryName)!.id);
+    const truncation = bounded.errors.filter((error) =>
+      /session file admission limit 4096.*directory remainder was not enumerated/i.test(error)
+    );
+    expect({
+      iteratorEntryReads: iteratorEntries.length,
+      leavesCreatedEntriesUnenumerated: iteratorEntries.length < entryNames.length,
+      irrelevantEntriesConsumeBudget: iteratorEntries.some((entryName) => entryName.endsWith(".txt")),
+      sessions: bounded.value.map(({ sourceSessionId }) => sourceSessionId),
+      truncationCount: truncation.length,
+      rootQualified: truncation[0]?.includes(root),
+      instanceQualified: truncation[0]?.includes(`instance ${expectedPiInstance(root)}`),
+    }).toEqual({
+      iteratorEntryReads: 4_097,
+      leavesCreatedEntriesUnenumerated: true,
+      irrelevantEntriesConsumeBudget: true,
+      sessions: admittedSessionIds,
+      truncationCount: 1,
+      rootQualified: true,
+      instanceQualified: true,
+    });
+
+    let deadlineChecks = 0;
+    const deadline = await collectPi(home, {
+      extraPiRoots: [root],
+      piReadDeadlineMs: 10,
+      piReadTestHooks: {
+        now: () => deadlineChecks++ < 64 ? 0 : 10,
+      },
+    });
+    const deadlineRemainder = deadline.errors.filter((error) =>
+      /aggregate read deadline.*directory remainder was not enumerated/i.test(error)
+    );
+    expect({
+      sessions: deadline.value,
+      deadlineCount: deadlineRemainder.length,
+      boundedChecks: deadlineChecks < entryNames.length,
+      rootQualified: deadlineRemainder[0]?.includes(root),
+    }).toEqual({
+      sessions: [],
+      deadlineCount: 1,
+      boundedChecks: true,
+      rootQualified: true,
+    });
+  }, 25_000);
+
   test("default layout reads one project-directory level and directory symlinks, but rejects root and deeper lookalikes", async () => {
     const home = tempRoot("default-layout");
     const sessions = defaultSessions(home);
@@ -1573,7 +1807,7 @@ describe("Pi shared collector, Inspector, and session-call reader boundaries", (
     const collected = await collectPi(home);
     const collectedAgent = onlyAgent(collected);
     expect(collectedAgent?.lastAgentClosing).toBe("Shared safe back marker.");
-    expect(collectedAgent?.callSizes).toEqual([11]);
+    expect(collectedAgent?.callSizes).toBeUndefined();
     expect(collected.errors.join("\n")).toMatch(/malformed.*record|record exceeds 8388608/i);
 
     const snapshot = manualSnapshot(manualPiAgent(source));
@@ -1669,6 +1903,75 @@ describe("Pi shared collector, Inspector, and session-call reader boundaries", (
       thrown: reason,
       chunks: [1],
       signalReason: reason,
+    });
+  });
+
+  test("file-close caller abort is rethrown unchanged before Pi publishes parsed state", async () => {
+    const home = tempRoot("abort-file-close");
+    const source = writeDefaultSession(home, "abort.jsonl", fixture("v3-branch-compaction.jsonl"));
+    const controller = new AbortController();
+    const reason = new Error("pi file-close abort sentinel");
+    const originalOpen = fsPromises.open;
+    let closes = 0;
+    const openSpy = spyOn(fsPromises as any, "open").mockImplementation(async (path: string, ...args: any[]) => {
+      const handle = await (originalOpen as any)(path, ...args);
+      if (path !== source) return handle;
+      return {
+        read: handle.read.bind(handle),
+        close: async () => {
+          closes += 1;
+          await handle.close();
+          controller.abort(reason);
+        },
+      };
+    });
+
+    let thrown: unknown;
+    try {
+      await readPiSessionFile(source, { signal: controller.signal });
+    } catch (error) {
+      thrown = error;
+    } finally {
+      openSpy.mockRestore();
+    }
+
+    expect({ exactReason: thrown === reason, closes }).toEqual({ exactReason: true, closes: 1 });
+  });
+
+  test("file-close deadline is enforced before Pi publishes parsed state", async () => {
+    const home = tempRoot("deadline-file-close");
+    const source = writeDefaultSession(home, "deadline.jsonl", fixture("v3-branch-compaction.jsonl"));
+    const originalOpen = fsPromises.open;
+    let expired = false;
+    let closes = 0;
+    const openSpy = spyOn(fsPromises as any, "open").mockImplementation(async (path: string, ...args: any[]) => {
+      const handle = await (originalOpen as any)(path, ...args);
+      if (path !== source) return handle;
+      return {
+        read: handle.read.bind(handle),
+        close: async () => {
+          closes += 1;
+          await handle.close();
+          expired = true;
+        },
+      };
+    });
+
+    let thrown: unknown;
+    try {
+      await readPiSessionFile(source, {
+        deadlineMs: 10,
+        hooks: { now: () => expired ? 10 : 0 },
+      });
+    } catch (error) {
+      thrown = error;
+    } finally {
+      openSpy.mockRestore();
+    }
+
+    expect({ closes, message: thrown instanceof Error ? thrown.message : undefined }).toEqual({
+      closes: 1,
+      message: "exceeded 10ms read deadline",
     });
   });
 

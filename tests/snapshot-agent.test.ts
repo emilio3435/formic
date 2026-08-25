@@ -33,6 +33,16 @@ describe("source-backed effort publication", () => {
     expect(effortFor(agent({ provider: "pi", model: "private-model-high" }))).toBeUndefined();
     expect(effortFor(agent({ provider: "pi", model: "private-model-high", effort: "medium" }))).toBe("MEDIUM");
   });
+
+  test("OpenCode and Kilo do not turn raw model-name words into source effort", () => {
+    expect(effortFor(agent({ provider: "opencode", model: "route/model-high" }))).toBeUndefined();
+    expect(effortFor(agent({ provider: "kilo", model: "route/model-max" }))).toBeUndefined();
+  });
+
+  test("Kimi does not turn a model-name word into effort without source thinkingEffort", () => {
+    expect(effortFor(agent({ provider: "kimi", model: "private-model-high" }))).toBeUndefined();
+    expect(effortFor(agent({ provider: "kimi", model: "private-model-high", effort: "medium" }))).toBe("MEDIUM");
+  });
 });
 
 describe("role taxonomy v2", () => {

@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  type Dirent,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -18,8 +19,12 @@ import { resolveAgentTarget } from "../src/server/targets";
 import type { CmuxSurface } from "../src/server/types";
 import type { AgentSnapshot } from "../src/shared/types";
 import {
+  admitGeminiDirectoryForTests,
   collectGeminiSessions,
+  GEMINI_DIRECTORY_LIMITS,
   GeminiReplay,
+  MAX_GEMINI_RECORD_BYTES,
+  MAX_GEMINI_REPLAY_MESSAGES,
   parseGeminiJsonl,
   parseGeminiLegacyJson,
   replayGeminiText,
@@ -29,12 +34,15 @@ const MAIN_ID = "abcd1234-e5f6-7890-abcd-ef1234567890";
 const CHILD_ID = "11111111-2222-4333-8444-555555555555";
 const PROJECT_HASH = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const NOW = Date.parse("2026-08-19T12:03:00.000Z");
+const PROJECT_ADMISSION_CAP = GEMINI_DIRECTORY_LIMITS.projects;
+const CHAT_ADMISSION_CAP = GEMINI_DIRECTORY_LIMITS.chats;
 const FIXTURE_ROOT = join(import.meta.dir, "fixtures/gemini");
 const MAIN_FIXTURE = join(
   FIXTURE_ROOT,
   "demo-project/chats/session-2026-08-19T12-00-abcd1234.jsonl",
 );
 const archiveStore = { has: () => false, archive: async () => {} };
+const originalGeminiCliHome = process.env.GEMINI_CLI_HOME;
 
 const fixture = (path: string): string => readFileSync(join(FIXTURE_ROOT, path), "utf8");
 const metadata = (
@@ -94,7 +102,8 @@ function writeSession(
 }
 
 afterEach(() => {
-  delete process.env.GEMINI_CLI_HOME;
+  if (originalGeminiCliHome === undefined) delete process.env.GEMINI_CLI_HOME;
+  else process.env.GEMINI_CLI_HOME = originalGeminiCliHome;
   for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true });
 });
 
@@ -400,6 +409,145 @@ describe("Gemini CLI pinned-schema replay", () => {
     expect(Buffer.byteLength(JSON.stringify(byteBounded?.messages))).toBeLessThanOrEqual(16 * 1024 * 1024);
     expect(byteBounded?.messages.at(-1)?.id).toBe("dense-11");
     expect(byteBounded?.firstUserMessage?.content).toBe("Preserve this first task.");
+  });
+
+  test("the call series retains every usage boundary within the replay bound", () => {
+    const calls = Array.from({ length: 513 }, (_, index) => {
+      const row = assistant(`complete-call-${index}`, `Call ${index}.`);
+      row.tokens = { input: 0, output: index + 1, cached: 0, total: index + 1 };
+      return row;
+    });
+
+    const agent = parseGeminiJsonl(
+      jsonl(metadata(), user("complete-series-user"), ...calls),
+      { nowMs: NOW },
+    );
+
+    expect(agent?.callSizes).toHaveLength(513);
+    expect(agent?.callSizes?.slice(0, 2)).toEqual([1, 2]);
+    expect(agent?.callSizes?.at(-1)).toBe(513);
+  });
+
+  test("a partial bounded replay withholds its retained usage suffix", () => {
+    const calls = Array.from({ length: MAX_GEMINI_REPLAY_MESSAGES }, (_, index) => {
+      const row = assistant(`partial-call-${index}`, `Call ${index}.`);
+      row.tokens = { input: 0, output: index + 1, cached: 0, total: index + 1 };
+      return row;
+    });
+    const contents = jsonl(metadata(), user("partial-series-user"), ...calls);
+
+    expect(replayGeminiText(contents)?.partial).toBeTrue();
+    expect(parseGeminiJsonl(contents, { nowMs: NOW })?.callSizes).toBeUndefined();
+  });
+
+  test("usage series completeness: a newline-terminated malformed interior record withholds the series", () => {
+    const first = assistant("malformed-first", "First retained response.");
+    first.tokens = { input: 1, output: 2, cached: 3, total: 6 };
+    const last = assistant("malformed-last", "Last retained response.");
+    last.tokens = { input: 4, output: 5, cached: 6, total: 15 };
+    const contents = `${jsonl(metadata(), user("malformed-user"), first)}not-json\n${JSON.stringify(last)}\n`;
+
+    expect(replayGeminiText(contents)?.partial).toBeTrue();
+    expect(parseGeminiJsonl(contents, { nowMs: NOW })?.callSizes).toBeUndefined();
+    expect(parseGeminiJsonl(contents, { nowMs: NOW })?.tokens.total).toBe(15);
+  });
+
+  test.each(["malformed", "oversized"] as const)(
+    "usage occupancy: a newline-terminated %s physical record after the last complete response leaves current usage unknown",
+    (damage) => {
+      const latest = assistant("damaged-latest", "Last fully readable response.");
+      latest.tokens = { input: 4, output: 5, cached: 6, total: 15 };
+      const damaged = damage === "malformed"
+        ? "not-json"
+        : JSON.stringify({ unreadable: "x".repeat(MAX_GEMINI_RECORD_BYTES) });
+      const contents = [
+        JSON.stringify(metadata()),
+        JSON.stringify(user("damaged-usage-user")),
+        JSON.stringify(latest),
+        damaged,
+        JSON.stringify({ $set: { summary: "A later non-usage row does not recover unreadable usage." } }),
+        "",
+      ].join("\n");
+      const agent = parseGeminiJsonl(contents, { nowMs: NOW });
+
+      expect({
+        partial: replayGeminiText(contents)?.partial,
+        tokens: agent?.tokens,
+        callSizes: agent?.callSizes,
+      }).toEqual({
+        partial: true,
+        tokens: {
+          contextWindow: 1_048_576,
+          scope: "unknown",
+          provenance: "unknown",
+        },
+        callSizes: undefined,
+      });
+    },
+  );
+
+  test("usage series completeness: missing or invalid four-counter usage is a sticky hole", () => {
+    const incompleteUsages: unknown[] = [
+      undefined,
+      { input: 1, output: 2, total: 3 },
+      { input: 1, output: -1, cached: 0, total: 0 },
+      { input: 1, output: 2, cached: 0, total: null },
+    ];
+
+    for (const [index, incompleteUsage] of incompleteUsages.entries()) {
+      const incomplete = assistant(`usage-hole-${index}`, `Incomplete response ${index}.`);
+      if (incompleteUsage === undefined) delete incomplete.tokens;
+      else incomplete.tokens = incompleteUsage;
+      const complete = assistant(`usage-complete-${index}`, `Complete response ${index}.`);
+      complete.tokens = { input: 10, output: 5, cached: 1, total: 16 };
+
+      const agent = parseGeminiJsonl(
+        jsonl(metadata(), user(`usage-user-${index}`), incomplete, complete),
+        { nowMs: NOW },
+      );
+
+      expect(agent?.callSizes).toBeUndefined();
+      expect(agent?.tokens.total).toBe(16);
+    }
+  });
+
+  test.each([
+    ["missing", undefined],
+    ["incomplete", { input: 20, output: 4, total: 24 }],
+    ["negative", { input: 20, output: -1, cached: 3, total: 22 }],
+    ["non-finite", { input: 20, output: 4, cached: 3, total: Number.POSITIVE_INFINITY }],
+  ] as const)(
+    "usage occupancy: newest eligible response with %s four-counter usage leaves current occupancy unknown",
+    (_condition, newestUsage) => {
+      const older = assistant("occupancy-older", "Older complete response.");
+      older.tokens = { input: 10, output: 5, cached: 1, total: 16 };
+      const newest = assistant("occupancy-newest", "Newest response without complete usage.");
+      if (newestUsage === undefined) delete newest.tokens;
+      else newest.tokens = newestUsage;
+
+      const agent = parseGeminiJsonl(
+        jsonl(metadata(), user("occupancy-user"), older, newest),
+        { nowMs: NOW },
+      );
+
+      expect(agent?.callSizes).toBeUndefined();
+      expect(agent?.tokens).toEqual({
+        contextWindow: 1_048_576,
+        scope: "unknown",
+        provenance: "unknown",
+      });
+    },
+  );
+
+  test("usage series completeness: only an unterminated final live-write tail is tolerated", () => {
+    const first = assistant("tail-first", "First complete response.");
+    first.tokens = { input: 1, output: 2, cached: 3, total: 6 };
+    const last = assistant("tail-last", "Last complete response.");
+    last.tokens = { input: 4, output: 5, cached: 6, total: 15 };
+    const contents = `${jsonl(metadata(), user("tail-user"), first, last)}{"id":"live-tail`;
+
+    expect(replayGeminiText(contents)?.partial).toBeUndefined();
+    expect(parseGeminiJsonl(contents, { nowMs: NOW })?.callSizes).toEqual([6, 15]);
   });
 
   test("oversized speech is bounded through collection and oversized tool guts never enter the snapshot", async () => {
@@ -827,6 +975,202 @@ describe("Gemini CLI collection boundaries", () => {
     expect(forward.value).toHaveLength(2);
     expect(new Set(forward.value.map((row) => row.instanceId)).size).toBe(2);
     expect(mapping(reverse.value)).toEqual(mapping(forward.value));
+  });
+
+  test("opendir-backed project and chat admission is capped with one diagnostic per directory", async () => {
+    const sourceSessionId = (index: number): string =>
+      `${index.toString(16).padStart(8, "0")}-bbbb-4ccc-8ddd-${index.toString(16).padStart(12, "0")}`;
+    const projectHome = tempHome("project-admission-cap");
+    for (let index = 0; index <= PROJECT_ADMISSION_CAP; index += 1) {
+      writeSession(
+        projectHome,
+        `session-${index.toString().padStart(4, "0")}.jsonl`,
+        jsonl(
+          metadata(sourceSessionId(index)),
+          user(`project-cap-user-${index}`),
+          assistant(`project-cap-assistant-${index}`),
+        ),
+        `project-${index.toString().padStart(4, "0")}`,
+      );
+    }
+    const projectResult = await collectGeminiSessions(
+      [join(projectHome, ".gemini")], Number.POSITIVE_INFINITY, undefined, NOW,
+    );
+
+    const chatHome = tempHome("chat-admission-cap");
+    for (let index = 0; index <= CHAT_ADMISSION_CAP; index += 1) {
+      writeSession(
+        chatHome,
+        `session-${index.toString().padStart(4, "0")}.jsonl`,
+        jsonl(
+          metadata(sourceSessionId(index)),
+          user(`chat-cap-user-${index}`),
+          assistant(`chat-cap-assistant-${index}`),
+        ),
+      );
+    }
+    const chatResult = await collectGeminiSessions(
+      [join(chatHome, ".gemini")], Number.POSITIVE_INFINITY, undefined, NOW,
+    );
+    const projectDiagnostics = projectResult.errors.filter((error) => error.includes("admission truncated"));
+    const chatDiagnostics = chatResult.errors.filter((error) => error.includes("admission truncated"));
+
+    expect({
+      projectRows: projectResult.value.length,
+      projectDiagnostics: projectDiagnostics.length,
+      chatRows: chatResult.value.length,
+      chatDiagnostics: chatDiagnostics.length,
+    }).toEqual({
+      projectRows: PROJECT_ADMISSION_CAP,
+      projectDiagnostics: 1,
+      chatRows: CHAT_ADMISSION_CAP,
+      chatDiagnostics: 1,
+    });
+    expect(projectDiagnostics[0]).toContain(`${PROJECT_ADMISSION_CAP} entries`);
+    expect(projectDiagnostics[0]).toContain("bounded iterator prefix");
+    expect(chatDiagnostics[0]).toContain(`${CHAT_ADMISSION_CAP} entries`);
+    expect(chatDiagnostics[0]).toContain("bounded iterator prefix");
+  }, 15_000);
+
+  test("provider directory admission strict-stop reads only limit plus one entry per project, chat, and subagent scope", async () => {
+    const entry = (name: string, kind: "file" | "directory"): Dirent => ({
+      name,
+      isFile: () => kind === "file",
+      isDirectory: () => kind === "directory",
+    }) as Dirent;
+    const cases = [
+      {
+        kind: "projects" as const,
+        limit: PROJECT_ADMISSION_CAP,
+        makeEntry: (index: number) => entry(`project-${index.toString().padStart(4, "0")}`, "directory"),
+        irrelevant: entry("not a project", "file"),
+      },
+      {
+        kind: "chats" as const,
+        limit: CHAT_ADMISSION_CAP,
+        makeEntry: (index: number) => entry(`session-${index.toString().padStart(4, "0")}.jsonl`, "file"),
+        irrelevant: entry("notes.txt", "file"),
+      },
+      {
+        kind: "subagents" as const,
+        limit: CHAT_ADMISSION_CAP,
+        makeEntry: (index: number) => entry(`${index.toString().padStart(4, "0")}.jsonl`, "file"),
+        irrelevant: entry("notes.txt", "file"),
+      },
+    ];
+    const observations = [];
+
+    for (const admission of cases) {
+      const providerEntries = [
+        admission.irrelevant,
+        ...Array.from(
+          { length: admission.limit + 2 },
+          (_, index) => admission.makeEntry(index),
+        ).reverse(),
+      ];
+      const admittedPrefixNames = providerEntries
+        .slice(1, admission.limit)
+        .map(({ name }) => name)
+        .sort();
+      const retainedSizes: number[] = [];
+      let reads = 0;
+      let closes = 0;
+      const result = await admitGeminiDirectoryForTests({
+        read: async () => providerEntries[reads++] ?? null,
+        close: async () => { closes += 1; },
+      }, admission.kind, undefined, (size) => retainedSizes.push(size));
+
+      observations.push({
+        kind: admission.kind,
+        limit: admission.limit,
+        admittedPrefixNames,
+        result,
+        peakRetained: Math.max(...retainedSizes),
+        reads,
+        closes,
+      });
+    }
+
+    expect(observations.map(({ kind, reads }) => ({ kind, reads }))).toEqual(cases.map((admission) => ({
+      kind: admission.kind,
+      reads: admission.limit + 1,
+    })));
+    for (const observation of observations) {
+      expect({
+        kind: observation.kind,
+        names: observation.result.entries.map(({ name }) => name),
+        truncated: observation.result.truncated,
+        peakRetained: observation.peakRetained,
+        reads: observation.reads,
+        closes: observation.closes,
+      }).toEqual({
+        kind: observation.kind,
+        names: observation.admittedPrefixNames,
+        truncated: true,
+        peakRetained: observation.limit - 1,
+        reads: observation.limit + 1,
+        closes: 1,
+      });
+    }
+  });
+
+  test("provider directory admission stops after an awaited read with the exact abort reason and closes every scope", async () => {
+    const entry = {
+      name: "project-abort",
+      isFile: () => false,
+      isDirectory: () => true,
+    } as Dirent;
+
+    for (const kind of ["projects", "chats", "subagents"] as const) {
+      const providerEntry = kind === "projects"
+        ? entry
+        : {
+            name: kind === "chats" ? "session-abort.jsonl" : "abort.jsonl",
+            isFile: () => true,
+            isDirectory: () => false,
+          } as Dirent;
+      const abort = new AbortController();
+      const reason = new Error(`Gemini ${kind} enumeration abort sentinel`);
+      const retainedSizes: number[] = [];
+      let reads = 0;
+      let closes = 0;
+      const collection = admitGeminiDirectoryForTests({
+        read: async () => {
+          reads += 1;
+          if (reads === 3) abort.abort(reason);
+          await Promise.resolve();
+          return providerEntry;
+        },
+        close: async () => { closes += 1; },
+      }, kind, abort.signal, (size) => retainedSizes.push(size));
+
+      await expect(collection).rejects.toBe(reason);
+      expect({ kind, reads, retained: retainedSizes.length, closes }).toEqual({
+        kind,
+        reads: 3,
+        retained: 2,
+        closes: 1,
+      });
+    }
+
+    const closeAbort = new AbortController();
+    const closeReason = new Error("Gemini directory close abort sentinel");
+    let closeReads = 0;
+    let closes = 0;
+    const closing = admitGeminiDirectoryForTests({
+      read: async () => {
+        closeReads += 1;
+        return null;
+      },
+      close: async () => {
+        closes += 1;
+        closeAbort.abort(closeReason);
+        await Promise.resolve();
+      },
+    }, "projects", closeAbort.signal);
+
+    await expect(closing).rejects.toBe(closeReason);
+    expect({ closeReads, closes }).toEqual({ closeReads: 1, closes: 1 });
   });
 
   test("a watchdog-aborted Gemini scan stops at the collector boundary", async () => {

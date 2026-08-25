@@ -10046,7 +10046,7 @@ function harnessKeyOf(agent) {
 }
 function agentKeyOf(agent) {
   const providerRoute = agent.rawModel?.providerRoute;
-  if (providerRoute === "kilo" || providerRoute === "kimi") return providerRoute;
+  if (providerRoute === "opencode" || providerRoute === "kilo" || providerRoute === "kimi") return providerRoute;
   const m = (agent.model || "").toLowerCase();
   if (/grok/i.test(m)) return "grok";
   if (/muse-spark|spark/i.test(m)) return "spark";
@@ -10082,7 +10082,7 @@ function agentMark(agent) {
   if (!key) return el("span", { class: "provider-mark provider-mark-text agent-mark is-empty", title: "no agent model", "aria-label": "Agent not reported", text: "?" });
   const meta = AGENT_MARK[key];
   const mark = PROVIDER_MARK[key] || meta;
-  const label = meta?.label || key;
+  const label = meta?.label || providerLabel(key) || key;
   if (!mark || !mark.src) return el("span", { class: "provider-mark provider-mark-text agent-mark", title: label, "aria-label": "Agent " + label, text: label.slice(0, 1) });
   return el("img", { class: "provider-mark agent-mark" + (mark.raster ? " provider-mark-raster" : ""), src: mark.src, alt: label, title: "Agent " + label });
 }

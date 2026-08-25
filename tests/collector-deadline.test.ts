@@ -504,6 +504,80 @@ describe("watchdog cancellation is not collector failure", () => {
 });
 
 describe("the derived control deadline is the collector container", () => {
+  test("Pi launch preflight starts inside the provider aggregate wall-clock budget", async () => {
+    const logged = spyOn(console, "error").mockImplementation(() => {});
+    let launchSignal: AbortSignal | undefined;
+    let launchBudgetMs: number | undefined;
+    let providerReadBudgetMs: number | undefined;
+    const state = new HubState(runner, archiveStore, [], {
+      collectors: {
+        sessions: async (...args: unknown[]) => {
+          providerReadBudgetMs = (args[3] as { piReadDeadlineMs?: number })?.piReadDeadlineMs;
+          return empty();
+        },
+        cmux: async () => ({ value: [], errors: [] }),
+        notifications: async () => ({ value: [], errors: [] }),
+        enrichIdentity: async (surfaces) => ({ value: [...surfaces], errors: [] }),
+      },
+      refreshAggregateTimeoutMs: 40,
+      piLaunchReader: (_runner, signal, budgetMs) => {
+        launchSignal = signal;
+        launchBudgetMs = budgetMs;
+        return never();
+      },
+    });
+    const startedAt = performance.now();
+    try {
+      const snapshot = await Promise.race([
+        state.refresh(),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error("Pi launch preflight escaped the 40ms provider budget")), 250);
+        }),
+      ]);
+
+      expect(performance.now() - startedAt).toBeLessThan(200);
+      expect(snapshot.totals.live).toBe(0);
+      expect({
+        launchBudgetIsRemaining: launchBudgetMs !== undefined && launchBudgetMs > 0 && launchBudgetMs <= 40,
+        launchWasDeadlineAborted: launchSignal?.aborted,
+        launchAbortReason: launchSignal?.reason instanceof Error ? launchSignal.reason.message : undefined,
+        providerReadBudgetMs,
+      }).toEqual({
+        launchBudgetIsRemaining: true,
+        launchWasDeadlineAborted: true,
+        launchAbortReason: "Pi launch discovery exceeded 40ms provider aggregate deadline",
+        providerReadBudgetMs: 40,
+      });
+    } finally {
+      logged.mockRestore();
+    }
+  });
+
+  test("HubState passes its provider-read budget to both SQLite collectors as one duration", async () => {
+    const received: Array<number | undefined> = [];
+    const collectors = {
+      sessionProvider: async (...args: unknown[]) => {
+        const options = args[4] as { sqliteReadBudgetMs?: number };
+        received.push(options.sqliteReadBudgetMs);
+        return { value: [], errors: [], absent: true };
+      },
+      finalizeSessions: (results: SessionsResult) => results,
+      cmux: async () => ({ value: [], errors: [] }),
+      notifications: async () => ({ value: [], errors: [] }),
+      enrichIdentity: async (surfaces: unknown[]) => ({ value: [...surfaces], errors: [] }),
+    } as unknown as HubCollectors;
+    const state = new HubState(runner, archiveStore, [], {
+      collectors,
+      refreshAggregateTimeoutMs: 75,
+      settingsReader: () => ({ ...normalizeSettings(undefined), providerWaitMs: 10_000 }),
+    });
+
+    await refresh(state);
+
+    expect(received).toHaveLength(PROVIDERS.length);
+    expect(new Set(received)).toEqual(new Set([75]));
+  });
+
   test("the dead provider allowance cannot inflate a 10 second provider budget past its 10 second container", async () => {
     let sidebarDeadlineMs: number | undefined;
     const state = tailHub({

@@ -13,6 +13,22 @@ import { livenessOfAny, processAliveFrom } from "./process-liveness";
 
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const KIMI_SESSION_ID = "session_[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
+const CANONICAL_UUID = new RegExp(`^${UUID}$`, "i");
+const CASE_SENSITIVE_NATIVE_ID_PROVIDERS: ReadonlySet<Provider> = new Set([
+  "hermes",
+  "opencode",
+  "pi",
+  "kilo",
+]);
+
+function usesByteExactIdentity(provider: Provider, value: string): boolean {
+  return CASE_SENSITIVE_NATIVE_ID_PROVIDERS.has(provider) && !CANONICAL_UUID.test(value);
+}
+
+export function normalizeIdentityValue(provider: Provider, value: string): string {
+  return usesByteExactIdentity(provider, value) ? value : value.toLowerCase();
+}
+
 /* The process name each provider runs under, spelled out as a total map so the
    build fails when a Provider is added without saying what to look for.
 
@@ -177,7 +193,7 @@ export function identityFromSessionPath(path: string): IdentityHint | null {
   ];
   for (const [provider, pattern] of patterns) {
     const match = path.match(pattern);
-    if (match) return { provider, value: match[1].toLowerCase(), full: true };
+    if (match) return { provider, value: normalizeIdentityValue(provider, match[1]), full: true };
   }
   return null;
 }
@@ -211,7 +227,7 @@ export function identitiesFromCommand(command: string): IdentityHint[] {
   ];
   for (const [provider, pattern] of exactPatterns) {
     const match = command.match(pattern);
-    if (match) hints.push({ provider, value: match[1].toLowerCase(), full: true });
+    if (match) hints.push({ provider, value: normalizeIdentityValue(provider, match[1]), full: true });
   }
   const pi = command.match(/(?:^|\s)(?:\S*\/)?pi(?=\s|$)([^\n]*)/i);
   if (pi) {
@@ -335,8 +351,8 @@ function sessionClaim(hint: IdentityHint): SessionIdentityClaim {
   return { provider: hint.provider, sessionId: hint.value };
 }
 
-function identityKey(hint: IdentityHint): string {
-  return `${hint.provider}:${hint.value.toLowerCase()}`;
+function identityKey(hint: Pick<IdentityHint, "provider" | "value">): string {
+  return `${hint.provider}:${normalizeIdentityValue(hint.provider, hint.value)}`;
 }
 
 function hasOpenAncestor(
@@ -347,7 +363,7 @@ function hasOpenAncestor(
   let current = agentsByIdentity.get(identityKey(hint));
   const visited = new Set<string>();
   while (current?.parentSourceSessionId) {
-    const parentKey = `${current.provider}:${current.parentSourceSessionId.toLowerCase()}`;
+    const parentKey = identityKey({ provider: current.provider, value: current.parentSourceSessionId });
     if (openKeys.has(parentKey)) return true;
     if (visited.has(parentKey)) return false;
     visited.add(parentKey);
@@ -401,19 +417,23 @@ function resolveCommandHint(
   hint: IdentityHint,
   agents: readonly CollectedAgent[],
 ): CommandHintResolution {
-  const normalizedHint = hint.value.toLowerCase();
+  const normalizedHint = normalizeIdentityValue(hint.provider, hint.value);
   const matches = agents.filter((agent) => {
     if (agent.provider !== hint.provider) return false;
-    const sourceId = agent.sourceSessionId.toLowerCase();
-    const runtimeId = agent.runtimeSessionId?.toLowerCase();
+    const sourceId = normalizeIdentityValue(agent.provider, agent.sourceSessionId);
+    const runtimeId = agent.runtimeSessionId
+      ? normalizeIdentityValue(agent.provider, agent.runtimeSessionId)
+      : undefined;
     return hint.full
       ? sourceId === normalizedHint || runtimeId === normalizedHint
       : sourceId.startsWith(normalizedHint) || runtimeId?.startsWith(normalizedHint);
   });
   if (hint.provider === "pi" && !hint.full) {
     const exact = matches.find((agent) =>
-      agent.sourceSessionId.toLowerCase() === normalizedHint
-      || agent.runtimeSessionId?.toLowerCase() === normalizedHint
+      normalizeIdentityValue(agent.provider, agent.sourceSessionId) === normalizedHint
+      || (agent.runtimeSessionId
+        ? normalizeIdentityValue(agent.provider, agent.runtimeSessionId) === normalizedHint
+        : false)
     );
     if (!exact) {
       return {
@@ -438,7 +458,9 @@ function resolveCommandHint(
      receiving a new source file ID. When the command names that original ID,
      the exact source match is the canonical identity; treating its resumed
      alias as a second owner creates a permanent false conflict on every scan. */
-  const exactSource = matches.find((agent) => agent.sourceSessionId.toLowerCase() === normalizedHint);
+  const exactSource = matches.find((agent) =>
+    normalizeIdentityValue(agent.provider, agent.sourceSessionId) === normalizedHint
+  );
   if (exactSource) {
     return {
       hint: {
@@ -451,6 +473,11 @@ function resolveCommandHint(
   const active = matches.filter((agent) => agent.status === "running" || agent.status === "waiting");
   const candidates = active.length > 0 ? active : matches;
   if (candidates.length === 0) {
+    if (usesByteExactIdentity(hint.provider, hint.value)) {
+      return {
+        rejectionReason: `${hint.provider} session selector ${hint.value} does not byte-exactly match a collected source or runtime session`,
+      };
+    }
     return { hint: hint.full ? hint : undefined };
   }
   if (candidates.length > 1) {
@@ -720,7 +747,7 @@ export async function enrichCmuxIdentity(
     processesByTty.set(process.tty, ttyProcesses);
   }
   const agentsByIdentity = new Map(
-    agents.map((agent) => [`${agent.provider}:${agent.sourceSessionId.toLowerCase()}`, agent]),
+    agents.map((agent) => [identityKey({ provider: agent.provider, value: agent.sourceSessionId }), agent]),
   );
   const resolvedCommandHints = new Map<string, CommandHintResolution>();
   const cachedCommandHint = (hint: IdentityHint): CommandHintResolution => {
@@ -858,7 +885,7 @@ export async function enrichCmuxIdentity(
           agent.provider === "pi"
           && agent.artifacts.some((artifact) => artifact.kind === "transcript" && artifact.path === path)
         ) {
-          addProcessEvidence(`${agent.provider}:${agent.sourceSessionId.toLowerCase()}`, pid, {
+          addProcessEvidence(identityKey({ provider: agent.provider, value: agent.sourceSessionId }), pid, {
             transcriptOpen: true,
             sessionOwned,
           });
@@ -875,7 +902,7 @@ export async function enrichCmuxIdentity(
   const liveProcessIds = new Set(liveAgentProcessIds);
   const recognizedProcessIds = new Set(recognizedAgentProcessIds);
   for (const agent of agents) {
-    const key = `${agent.provider}:${agent.sourceSessionId.toLowerCase()}`;
+    const key = identityKey({ provider: agent.provider, value: agent.sourceSessionId });
     const observed = processIdsByAgent.get(key);
     if (observed?.size) {
       agent.processIds = [...observed].sort((left, right) => left - right);

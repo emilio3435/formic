@@ -333,6 +333,13 @@ describe("provider settlement", () => {
     expect(withCopilot).toContain(".copilot-2");
   });
 
+  test("root delimiters cannot alias a different collector configuration", () => {
+    const oneRoot = providerCollectionConfigKey(1, undefined, ["/tmp/a,/tmp/b"]);
+    const twoRoots = providerCollectionConfigKey(1, undefined, ["/tmp/a", "/tmp/b"]);
+
+    expect(oneRoot).not.toBe(twoRoots);
+  });
+
   test("two settle calls with different extra-root lists do not share a scan", async () => {
     const coordinator = new ProviderSettlementCoordinator<"cursor", string>(() => true);
     let scans = 0;

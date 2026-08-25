@@ -1,4 +1,4 @@
-import { readFile, readdir, realpath, stat } from "node:fs/promises";
+import { open, opendir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import type { AgentIdentity, Provider, TokenUsage } from "../shared/types";
@@ -9,6 +9,13 @@ import {
   DEFAULT_LIFECYCLE_THRESHOLDS,
   type LifecycleThresholds,
 } from "./lifecycle";
+import {
+  extractClosingByRole,
+  extractLastHumanMessage,
+  extractLastMessageByRole,
+  readableHumanMessage,
+} from "./human-message";
+import { resolveAgentName } from "./naming";
 import { capTranscriptTail, type CollectedAgent, type CollectionResult } from "./types";
 
 export const KIMI_WIRE_PROTOCOL_VERSION = "1.5";
@@ -19,6 +26,9 @@ const KIMI_STATE_BYTES = 1024 * 1024;
 const KIMI_INDEX_BYTES = 8 * 1024 * 1024;
 const KIMI_WIRE_BYTES = 8 * 1024 * 1024;
 const KIMI_JSONL_ROWS = 4_096;
+const KIMI_WORKDIR_ENTRY_CAP = 64;
+const KIMI_SESSION_ENTRY_CAP = 256;
+const KIMI_CHILD_ENTRY_CAP = 256;
 const SESSION_ID = /^session_[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type JsonRecord = Record<string, any>;
@@ -85,6 +95,7 @@ interface KimiState {
   updatedAtMs: number;
   cwd?: string;
   parentSessionId?: string;
+  subagentIds: string[];
   subagentCount: number;
   imported: boolean;
   lastTurnReason?: string;
@@ -150,18 +161,37 @@ async function readCappedText(
   checkDeadline(options);
   const injected = options.hooks?.fileError?.(path);
   if (injected) throw injected;
-  const details = await stat(path);
-  if (!details.isFile()) throw new Error("is not a regular file");
-  if (details.size > cap) throw new Error(`exceeds ${cap} byte cap (oversized)`);
+  const handle = await open(path, "r");
+  let result: string | undefined;
   try {
-    const text = await readFile(path, { encoding: "utf8", signal: options.signal });
+    const details = await handle.stat();
+    if (!details.isFile()) throw new Error("is not a regular file");
+    if (details.size > cap) throw new Error(`exceeds ${cap} byte cap (oversized)`);
+    const buffer = Buffer.allocUnsafe(cap + 1);
+    let bytesRead = 0;
+    while (bytesRead < buffer.length) {
+      throwIfAborted(options.signal);
+      checkDeadline(options);
+      const read = await handle.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead);
+      if (read.bytesRead === 0) break;
+      bytesRead += read.bytesRead;
+    }
     throwIfAborted(options.signal);
     checkDeadline(options);
-    return text;
+    if (bytesRead > cap) throw new Error(`exceeds ${cap} byte cap (oversized)`);
+    result = buffer.subarray(0, bytesRead).toString("utf8");
   } catch (error) {
     if (options.signal?.aborted) throw options.signal.reason;
     throw error;
+  } finally {
+    try {
+      await handle.close();
+    } finally {
+      throwIfAborted(options.signal);
+      checkDeadline(options);
+    }
   }
+  return result!;
 }
 
 function parseJsonl(text: string, source: string): JsonRecord[] {
@@ -198,6 +228,16 @@ function usageTurn(usage: JsonRecord | undefined): UsageTurn | undefined {
     cacheRead: values[2] as number,
     cacheCreation: values[3] as number,
   };
+}
+
+function checkedFiniteSum(values: readonly number[]): number | undefined {
+  let total = 0;
+  for (const value of values) {
+    const next = total + value;
+    if (!Number.isFinite(next)) return undefined;
+    total = next;
+  }
+  return total;
 }
 
 function publicTextParts(content: unknown): string[] {
@@ -256,6 +296,7 @@ export async function readKimiWireFile(
   let lastEndedPromptOrdinal = -1;
   let explicitEndSeen = false;
   let latestTurnReason: KimiTurnReason | undefined;
+  const startedCalls = new Set<string>();
 
   const usageFor = (key: string): TurnUsageEvidence => {
     const existing = turnUsage.get(key);
@@ -273,7 +314,7 @@ export async function readKimiWireFile(
       currentTurnKey = `turn-${promptOrdinal}`;
       latestTurnReason = undefined;
       if (!firstTask && row.origin?.kind === "user") {
-        firstTask = nonEmpty(publicTextParts(row.input).join("\n"));
+        firstTask = readableHumanMessage(provider(), publicTextParts(row.input).join("\n"));
       }
       continue;
     }
@@ -329,6 +370,8 @@ export async function readKimiWireFile(
       continue;
     }
     if (row.type === "llm.request") {
+      startedCalls.add(currentTurnKey);
+      usageFor(currentTurnKey);
       const providerRoute = nonEmpty(row.provider);
       const modelId = nonEmpty(row.model);
       if (providerRoute && modelId) {
@@ -348,6 +391,7 @@ export async function readKimiWireFile(
     if (row.type === "turn.ended") {
       const reason = kimiTurnReason(row.reason);
       if (reason) {
+        if (startedCalls.has(currentTurnKey)) usageFor(currentTurnKey);
         explicitEndSeen = true;
         lastEndedPromptOrdinal = promptOrdinal;
         latestTurnReason = reason;
@@ -358,19 +402,34 @@ export async function readKimiWireFile(
   const selectedTurns = [...turnUsage.values()].map((evidence) =>
     evidence.recordSeen ? evidence.record : evidence.stepSeen ? evidence.step : undefined
   );
-  const usageIncomplete = selectedTurns.some((turn) => turn === undefined);
+  let usageIncomplete = selectedTurns.some((turn) => turn === undefined);
   const completeTurns = selectedTurns.flatMap((turn) => turn ? [turn] : []);
   const latest = selectedTurns.at(-1);
   const contextWindow = claudeContextWindow(model);
   const latestTotal = latest
-    ? latest.input + latest.output + latest.cacheRead + latest.cacheCreation
+    ? checkedFiniteSum([latest.input, latest.output, latest.cacheRead, latest.cacheCreation])
     : undefined;
+  const candidateCallSizes = completeTurns.map((turn) =>
+    checkedFiniteSum([turn.input, turn.output, turn.cacheRead, turn.cacheCreation])
+  );
+  const completeCallSizes = candidateCallSizes.flatMap((size) => size === undefined ? [] : [size]);
+  const sessionTotal = checkedFiniteSum(completeTurns.flatMap((turn) =>
+    [turn.input, turn.output, turn.cacheCreation]
+  ));
+  const sessionCachedInput = checkedFiniteSum(completeTurns.map((turn) => turn.cacheRead));
+  const sessionProcessed = checkedFiniteSum(completeCallSizes);
+  const usageOverflow = (latest !== undefined && latestTotal === undefined)
+    || candidateCallSizes.some((size) => size === undefined)
+    || sessionTotal === undefined
+    || sessionCachedInput === undefined
+    || sessionProcessed === undefined;
+  usageIncomplete = usageIncomplete || usageOverflow;
   let tokens: TokenUsage = latest
     ? {
         input: latest.input,
         output: latest.output,
         cachedInput: latest.cacheRead,
-        total: latestTotal,
+        ...(latestTotal !== undefined ? { total: latestTotal } : {}),
         ...(contextWindow !== undefined ? { contextWindow } : {}),
         scope: "latest-turn",
         provenance: "observed",
@@ -378,17 +437,12 @@ export async function readKimiWireFile(
     : { scope: usageSeen ? "session" : "unknown", provenance: usageSeen ? "estimated" : "unknown" };
   let callSizes: readonly number[] | undefined;
   if (usageSeen && !usageIncomplete && completeTurns.length > 0) {
-    callSizes = completeTurns.map((turn) =>
-      turn.input + turn.output + turn.cacheRead + turn.cacheCreation
-    );
+    callSizes = completeCallSizes;
     tokens = {
       ...tokens,
-      sessionTotal: completeTurns.reduce(
-        (sum, turn) => sum + turn.input + turn.output + turn.cacheCreation,
-        0,
-      ),
-      sessionCachedInput: completeTurns.reduce((sum, turn) => sum + turn.cacheRead, 0),
-      sessionProcessed: callSizes.reduce((sum, size) => sum + size, 0),
+      sessionTotal: sessionTotal!,
+      sessionCachedInput: sessionCachedInput!,
+      sessionProcessed: sessionProcessed!,
     };
   }
   return {
@@ -404,8 +458,10 @@ export async function readKimiWireFile(
     turnComplete: latestTurnReason !== undefined,
     latestTurnReason,
     newerPromptAfterEnd: explicitEndSeen && promptOrdinal > lastEndedPromptOrdinal,
-    warnings: usageIncomplete
-      ? ["Kimi usage is incomplete or missing components; session aggregates and call series were withheld"]
+    warnings: usageOverflow
+      ? ["Kimi usage aggregate overflowed finite numeric range; derived totals and call series were withheld"]
+      : usageIncomplete
+        ? ["Kimi usage is incomplete or missing components; session aggregates and call series were withheld"]
       : [],
   };
 }
@@ -435,6 +491,10 @@ async function readState(path: string, options: KimiReadOptions): Promise<KimiSt
   const updatedAt = sourceTimestamp(state.updatedAt);
   if (!createdAt || !updatedAt) throw new Error(`${path}: Kimi state timestamps are malformed`);
   const agents = record(state.agents);
+  const subagentIds = agents
+    ? Object.entries(agents).flatMap(([key, value]) =>
+        key !== "main" && record(value)?.type === "subagent" ? [key] : [])
+    : [];
   return {
     id,
     title: nonEmpty(state.title),
@@ -444,9 +504,8 @@ async function readState(path: string, options: KimiReadOptions): Promise<KimiSt
     updatedAtMs: Date.parse(updatedAt),
     cwd: nonEmpty(state.cwd) ?? nonEmpty(state.workDir),
     parentSessionId: nonEmpty(state.custom?.parent_session_id),
-    subagentCount: agents
-      ? Object.entries(agents).filter(([key, value]) => key !== "main" && record(value)?.type === "subagent").length
-      : 0,
+    subagentIds,
+    subagentCount: subagentIds.length,
     imported: state.custom?.imported_from_kimi_cli === true,
     lastTurnReason: nonEmpty(state.lastTurnReason),
   };
@@ -529,64 +588,170 @@ async function deduplicateRoots(roots: readonly KimiRoot[]): Promise<KimiRoot[]>
   return result;
 }
 
-async function sessionDirectories(root: string): Promise<string[]> {
+async function admittedDirectoryNames(
+  path: string,
+  cap: number,
+  options: KimiReadOptions,
+): Promise<{ names: string[]; truncated: boolean }> {
+  throwIfAborted(options.signal);
+  checkDeadline(options);
+  const directory = await opendir(path);
+  const names: string[] = [];
+  let inspected = 0;
+  let exhausted = false;
+  let truncated = false;
+  try {
+    while (inspected < cap) {
+      throwIfAborted(options.signal);
+      checkDeadline(options);
+      const entry = await directory.read();
+      throwIfAborted(options.signal);
+      checkDeadline(options);
+      if (!entry) {
+        exhausted = true;
+        break;
+      }
+      inspected += 1;
+      if (entry.isDirectory()) names.push(entry.name);
+    }
+    if (!exhausted && inspected === cap) {
+      throwIfAborted(options.signal);
+      checkDeadline(options);
+      const witness = await directory.read();
+      throwIfAborted(options.signal);
+      checkDeadline(options);
+      truncated = witness !== null;
+    }
+  } finally {
+    try {
+      await directory.close();
+    } finally {
+      throwIfAborted(options.signal);
+      checkDeadline(options);
+    }
+  }
+  return { names: names.sort((a, b) => a.localeCompare(b)), truncated };
+}
+
+async function sessionDirectories(
+  root: string,
+  options: KimiReadOptions,
+): Promise<{ directories: string[]; truncated: boolean }> {
   const sessions = join(root, "sessions");
   let workdirs;
   try {
-    workdirs = await readdir(sessions, { withFileTypes: true });
+    workdirs = await admittedDirectoryNames(sessions, KIMI_WORKDIR_ENTRY_CAP, options);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return [];
+    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return { directories: [], truncated: false };
     throw error;
   }
   const found: string[] = [];
-  for (const workdir of workdirs.filter((entry) => entry.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
-    const workdirPath = join(sessions, workdir.name);
-    const entries = await readdir(workdirPath, { withFileTypes: true });
-    for (const entry of entries.filter((item) => item.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
-      found.push(join(workdirPath, entry.name));
+  let truncated = workdirs.truncated;
+  for (let index = 0; index < workdirs.names.length; index += 1) {
+    throwIfAborted(options.signal);
+    checkDeadline(options);
+    const workdirPath = join(sessions, workdirs.names[index]!);
+    const remaining = KIMI_SESSION_ENTRY_CAP - found.length;
+    if (remaining === 0) {
+      truncated = true;
+      break;
+    }
+    const entries = await admittedDirectoryNames(workdirPath, remaining, options);
+    for (const entry of entries.names) {
+      found.push(join(workdirPath, entry));
+    }
+    if (entries.truncated) {
+      truncated = true;
+      break;
+    }
+    if (found.length === KIMI_SESSION_ENTRY_CAP && index < workdirs.names.length - 1) {
+      truncated = true;
+      break;
     }
   }
-  return found;
+  return { directories: found.sort((a, b) => a.localeCompare(b)), truncated };
 }
 
 async function childArtifacts(
   sessionDir: string,
   state: KimiState,
   includeChildren: boolean,
-): Promise<CollectedAgent["artifacts"]> {
+  options: KimiReadOptions,
+): Promise<{
+  artifacts: CollectedAgent["artifacts"];
+  truncated: boolean;
+  admissionLimit: number;
+  errors: string[];
+}> {
   const artifacts: CollectedAgent["artifacts"] = [{
     label: "Kimi Code session",
     path: join(sessionDir, "agents/main/wire.jsonl"),
     kind: "transcript",
   }];
-  if (!includeChildren || state.subagentCount === 0) return artifacts;
+  if (!includeChildren || state.subagentCount === 0) {
+    return { artifacts, truncated: false, admissionLimit: 0, errors: [] };
+  }
   const agentsDir = join(sessionDir, "agents");
-  let entries;
-  try { entries = await readdir(agentsDir, { withFileTypes: true }); } catch { return artifacts; }
-  for (const entry of entries.filter((item) => item.isDirectory() && item.name !== "main").sort((a, b) => a.name.localeCompare(b.name))) {
-    const path = join(agentsDir, entry.name, "wire.jsonl");
+  const admissionLimit = Math.min(KIMI_CHILD_ENTRY_CAP, state.subagentCount + 1);
+  let admission: { names: string[]; truncated: boolean };
+  try {
+    admission = await admittedDirectoryNames(agentsDir, admissionLimit, options);
+  } catch (error) {
+    if (options.signal?.aborted) throw options.signal.reason;
+    if (error instanceof KimiDeadlineError) throw error;
+    checkDeadline(options);
+    return {
+      artifacts,
+      truncated: false,
+      admissionLimit,
+      errors: [
+        `${agentsDir}: Kimi declared child evidence is partial because the child directory could not be inspected: ${errorDetail(error)}`,
+      ],
+    };
+  }
+  const declaredChildren = new Set(state.subagentIds);
+  for (const entry of admission.names) {
+    if (!declaredChildren.has(entry)) continue;
+    const path = join(agentsDir, entry, "wire.jsonl");
     try {
+      throwIfAborted(options.signal);
+      checkDeadline(options);
       if ((await stat(path)).isFile()) artifacts.push({ label: "Kimi Code subagent", path, kind: "transcript" });
-    } catch {
+      throwIfAborted(options.signal);
+      checkDeadline(options);
+    } catch (error) {
+      if (options.signal?.aborted) throw options.signal.reason;
+      if (error instanceof KimiDeadlineError) throw error;
+      checkDeadline(options);
       // State declares the relationship; a missing child transcript adds no artifact.
     }
   }
-  return artifacts;
+  throwIfAborted(options.signal);
+  checkDeadline(options);
+  const admittedChildren = artifacts.length - 1;
+  const errors = !admission.truncated && admittedChildren < state.subagentCount
+    ? [
+        `${agentsDir}: Kimi state declares ${state.subagentCount} subagent${state.subagentCount === 1 ? "" : "s"}, but only ${admittedChildren} child transcript${admittedChildren === 1 ? " was" : "s were"} admitted; declared child evidence is partial`,
+      ]
+    : [];
+  return { artifacts, truncated: admission.truncated, admissionLimit, errors };
 }
 
 function kimiIdentity(state: KimiState, task: string | undefined, cwd: string | undefined): AgentIdentity {
-  if (state.titleKind === "custom" && state.title) {
-    return {
-      name: state.title,
-      base: state.title,
-      source: "authored",
-      authoredBy: "kimi-title" as AgentIdentity["authoredBy"],
-    };
+  const authored = state.titleKind === "custom" && state.title
+    ? { name: state.title, by: "kimi-title" as const }
+    : undefined;
+  if (!authored && !task && !cwd) {
+    const name = "Kimi Code · session";
+    return { name, base: name, source: "provider-fallback" };
   }
-  if (task) return { name: task, base: task, source: "task" };
-  const folder = cwd ? basename(cwd.replace(/\/+$/, "")) : "session";
-  const name = `Kimi Code · ${folder || "session"}`;
-  return { name, base: name, source: cwd ? "origin-cwd" : "provider-fallback" };
+  return resolveAgentName({
+    provider: provider(),
+    sourceSessionId: state.id,
+    ...(authored ? { authored } : {}),
+    ...(task ? {} : { originCwd: cwd }),
+    taskName: task,
+  });
 }
 
 function statusFor(
@@ -667,9 +832,21 @@ export async function collectKimiSessions(
     if (index.error) errors.push(index.error);
     let directories: string[];
     try {
-      directories = await sessionDirectories(root.path);
+      const admission = await sessionDirectories(root.path, readOptions);
+      directories = admission.directories;
+      if (admission.truncated) {
+        errors.push(
+          `${root.path}: Kimi directory admission truncated at ${KIMI_WORKDIR_ENTRY_CAP} workdir entries or ${KIMI_SESSION_ENTRY_CAP} session entries; remaining provider entries were not inspected`,
+        );
+      }
     } catch (error) {
-      errors.push(`${root.path}: Kimi sessions could not be inspected: ${errorDetail(error)}`);
+      if (signal?.aborted) throw signal.reason;
+      if (error instanceof KimiDeadlineError) {
+        errors.push(`${root.path}: Kimi scan ${error.message}`);
+        deadlineExhausted = true;
+      } else {
+        errors.push(`${root.path}: Kimi sessions could not be inspected: ${errorDetail(error)}`);
+      }
       continue;
     }
     for (const sessionDir of directories) {
@@ -715,14 +892,42 @@ export async function collectKimiSessions(
       const turnComplete = latestTurnReason !== undefined;
       const transcriptEndedCleanly = latestTurnReason === "completed" && !outcomeConflict;
       const latestUser = [...wire.events].reverse().find((event) => event.role === "user");
-      const latestAssistant = [...wire.events].reverse().find((event) => event.role === "assistant");
       const latestHuman = [...wire.events].reverse().find((event) =>
         event.role === "user" || event.role === "assistant");
+      const humanMessages = wire.events.flatMap((event) =>
+        event.role === "user" || event.role === "assistant"
+          ? [{ role: event.role, content: event.text, timestamp: event.at ?? undefined }]
+          : []);
       const lastThreadAt = wire.events.flatMap((event) => event.at ? [event.at] : []).sort().at(-1);
       const transcriptTail = wire.events.length > 0
         ? capTranscriptTail(wire.events.map((event) => event.text).join("\n"))
         : undefined;
       const contextWindow = wire.tokens.contextWindow;
+      let artifacts: CollectedAgent["artifacts"] = [{
+        label: "Kimi Code session",
+        path: wirePath,
+        kind: "transcript",
+      }];
+      try {
+        const collectedArtifacts = await childArtifacts(sessionDir, state, root.instance, readOptions);
+        artifacts = collectedArtifacts.artifacts;
+        errors.push(...collectedArtifacts.errors);
+        if (collectedArtifacts.truncated) {
+          errors.push(
+            `${join(sessionDir, "agents")}: Kimi child artifact admission truncated at ${collectedArtifacts.admissionLimit} total entries; remaining child entries were not inspected`,
+          );
+        }
+      } catch (error) {
+        if (signal?.aborted) throw signal.reason;
+        if (error instanceof KimiDeadlineError) {
+          errors.push(
+            `${join(sessionDir, "agents")}: Kimi child artifact scan ${error.message}; remaining child entries were not inspected`,
+          );
+          deadlineExhausted = true;
+        } else {
+          throw error;
+        }
+      }
       value.push({
         id,
         provider: provider(),
@@ -748,15 +953,15 @@ export async function collectKimiSessions(
         subagentCount: state.subagentCount,
         parentSourceSessionId: state.parentSessionId,
         threadDepth: state.parentSessionId ? 1 : 0,
-        lastHumanMessage: latestHuman?.text ?? null,
-        lastUserMessage: latestUser?.text ?? null,
-        lastAgentMessage: latestAssistant?.text ?? null,
+        lastHumanMessage: extractLastHumanMessage(provider(), humanMessages, task),
+        lastUserMessage: extractLastMessageByRole(provider(), humanMessages, "user"),
+        lastAgentMessage: extractLastMessageByRole(provider(), humanMessages, "assistant"),
         lastUserFacingAt: latestUser?.at ?? undefined,
         lastHumanFacingAt: latestHuman?.at ?? undefined,
         lastThreadAt,
-        lastAgentClosing: latestAssistant?.text ?? null,
+        lastAgentClosing: extractClosingByRole(provider(), humanMessages, "assistant"),
         transcriptTail,
-        artifacts: await childArtifacts(sessionDir, state, root.instance),
+        artifacts,
         gates: [],
         ...(turnComplete ? { endEvidence: "turn-complete" as const } : {}),
         ...(transcriptEndedCleanly ? { transcriptEndedCleanly: true } : {}),

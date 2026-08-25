@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { existsSync, opendirSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { makeAgent } from "./collectors";
 import { foreignSqliteFailureMessage } from "./foreign-sqlite";
@@ -14,6 +14,8 @@ import type { CollectedAgent, CollectionResult } from "./types";
 export interface OpenCodeCollectOptions {
   extraDataDirs?: readonly string[];
   configuredDatabasePath?: string;
+  directoryEntryTestHook?: (directoryPath: string, entryName: string) => void;
+  sqliteReadBudgetMs?: number;
   readOptions?: OpenCodeReadOptions;
 }
 
@@ -30,6 +32,84 @@ interface OpenCodeDatabase {
 }
 
 const OPENCODE_DATABASE = /^opencode(?:-[A-Za-z0-9][A-Za-z0-9._-]*)?\.db$/;
+const OPENCODE_STORE_LIMIT = 16;
+
+interface OpenCodeDatabaseDiscovery {
+  value: OpenCodeDatabase[];
+  errors: string[];
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw signal.reason;
+}
+
+function runBoundedSync<T>(signal: AbortSignal | undefined, operation: () => T): T {
+  throwIfAborted(signal);
+  try {
+    const result = operation();
+    throwIfAborted(signal);
+    return result;
+  } catch (error) {
+    if (signal?.aborted) throw signal.reason;
+    throw error;
+  }
+}
+
+function databaseNameOrder(left: string, right: string): number {
+  if (left === "opencode.db") return right === "opencode.db" ? 0 : -1;
+  if (right === "opencode.db") return 1;
+  return left.localeCompare(right);
+}
+
+function directoryLimitError(dataDir: string): string {
+  return `OpenCode data directory ${dataDir} scan was truncated: store admission limit ${OPENCODE_STORE_LIMIT} reached after one observed remainder entry; directory remainder was not enumerated.`;
+}
+
+function directoryDeadlineError(dataDir: string): string {
+  return `OpenCode data directory ${dataDir} deadline expired; directory remainder was not enumerated.`;
+}
+
+function directoryDatabaseNames(
+  dataDir: string,
+  limit: number,
+  options: OpenCodeReadOptions,
+  directoryEntryTestHook?: (directoryPath: string, entryName: string) => void,
+  excludedName?: string,
+): { names: string[]; truncated: boolean; deadlineExpired: boolean } {
+  const pastDeadline = (): boolean => {
+    throwIfAborted(options.signal);
+    const expired = options.deadlineAtMs !== undefined
+      && (options.nowMs ?? Date.now)() >= options.deadlineAtMs;
+    throwIfAborted(options.signal);
+    return expired;
+  };
+  const admitted: string[] = [];
+  let inspected = 0;
+  let truncated = false;
+  let directory: ReturnType<typeof opendirSync> | undefined;
+  try {
+    directory = runBoundedSync(options.signal, () => opendirSync(dataDir));
+    while (true) {
+      if (pastDeadline()) return { names: [], truncated: false, deadlineExpired: true };
+      const entry = runBoundedSync(options.signal, () => directory!.readSync());
+      if (entry === null) break;
+      directoryEntryTestHook?.(dataDir, entry.name);
+      throwIfAborted(options.signal);
+      inspected += 1;
+      if (inspected > limit) {
+        truncated = true;
+        break;
+      }
+      if (entry.name === excludedName) continue;
+      if (!OPENCODE_DATABASE.test(entry.name)) continue;
+      admitted.push(entry.name);
+    }
+  } finally {
+    directory?.closeSync();
+  }
+  admitted.sort(databaseNameOrder);
+  return { names: admitted, truncated, deadlineExpired: false };
+}
 
 function databaseToken(filename: string): string {
   return filename.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "opencode-db";
@@ -42,9 +122,12 @@ function rootToken(path: string): string {
 function databases(
   dataDirs: readonly string[],
   configuredDatabasePath?: string,
-): OpenCodeDatabase[] {
+  options: OpenCodeReadOptions = {},
+  directoryEntryTestHook?: (directoryPath: string, entryName: string) => void,
+): OpenCodeDatabaseDiscovery {
   const seen = new Set<string>();
   const found: OpenCodeDatabase[] = [];
+  const errors: string[] = [];
   const roots: Array<{
     dataDir: string;
     extraRoot: boolean;
@@ -56,21 +139,45 @@ function databases(
     const { dataDir, extraRoot } = root;
     if (!existsSync(dataDir)) continue;
     let names: string[];
+    let truncated = false;
+    let incompleteError: string | undefined;
     try {
-      if (!statSync(dataDir).isDirectory()) continue;
-      names = root.configuredDatabasePath
-        ? (existsSync(root.configuredDatabasePath) ? [basename(root.configuredDatabasePath)] : [])
-        : readdirSync(dataDir)
-          .filter((name) => OPENCODE_DATABASE.test(name))
-          .sort((left, right) => {
-            if (left === "opencode.db") return right === "opencode.db" ? 0 : -1;
-            if (right === "opencode.db") return 1;
-            return left.localeCompare(right);
-          });
-    } catch {
+      if (!runBoundedSync(options.signal, () => statSync(dataDir)).isDirectory()) continue;
+      if (root.configuredDatabasePath) {
+        names = existsSync(root.configuredDatabasePath) ? [basename(root.configuredDatabasePath)] : [];
+      } else {
+        const remainingStoreLimit = Math.max(0, OPENCODE_STORE_LIMIT - found.length);
+        const canonicalPresent = remainingStoreLimit > 0
+          && runBoundedSync(options.signal, () => existsSync(join(dataDir, "opencode.db")));
+        const admission = directoryDatabaseNames(
+          dataDir,
+          remainingStoreLimit,
+          options,
+          directoryEntryTestHook,
+          canonicalPresent ? "opencode.db" : undefined,
+        );
+        if (admission.deadlineExpired) {
+          incompleteError = directoryDeadlineError(dataDir);
+        }
+        names = [
+          ...(canonicalPresent ? ["opencode.db"] : []),
+          ...admission.names.slice(0, Math.max(0, remainingStoreLimit - (canonicalPresent ? 1 : 0))),
+        ];
+        truncated = admission.truncated;
+      }
+    } catch (error) {
+      if (options.signal?.aborted) throw options.signal.reason;
       continue;
     }
     for (const filename of names) {
+      if (
+        options.deadlineAtMs !== undefined
+        && (options.nowMs ?? Date.now)() >= options.deadlineAtMs
+      ) {
+        incompleteError ??= directoryDeadlineError(dataDir);
+        break;
+      }
+      throwIfAborted(options.signal);
       const path = root.configuredDatabasePath ?? join(dataDir, filename);
       let resolvedPath: string;
       let mtimeMs: number | undefined;
@@ -114,6 +221,14 @@ function databases(
         extraRoot,
       });
     }
+    if (incompleteError) {
+      errors.push(incompleteError);
+      break;
+    }
+    if (truncated) {
+      errors.push(directoryLimitError(dataDir));
+      break;
+    }
   }
 
   for (const database of found) {
@@ -121,7 +236,7 @@ function databases(
       ? `${database.token}-${rootToken(dirname(database.resolvedPath))}`
       : database.token;
   }
-  return found;
+  return { value: found, errors };
 }
 
 function tokenUsage(
@@ -203,23 +318,42 @@ function collectedSession(
 export async function collectOpenCodeSessions(
   dataDir: string,
   options: OpenCodeCollectOptions = {},
+  signal?: AbortSignal,
 ): Promise<CollectionResult<CollectedAgent[]>> {
-  const stores = databases(
+  const readSignal = signal ?? options.readOptions?.signal;
+  if (readSignal?.aborted) throw readSignal.reason;
+  const deadlineAtMs = options.sqliteReadBudgetMs === undefined
+    ? undefined
+    : Date.now() + Math.max(0, Math.floor(options.sqliteReadBudgetMs));
+  if (readSignal?.aborted) throw readSignal.reason;
+  const readOptions: OpenCodeReadOptions = {
+    ...options.readOptions,
+    ...(readSignal ? { signal: readSignal } : {}),
+    ...(deadlineAtMs === undefined ? {} : { deadlineAtMs }),
+  };
+  const discovery = databases(
     [dataDir, ...(options.extraDataDirs ?? [])],
     options.configuredDatabasePath,
+    readOptions,
+    options.directoryEntryTestHook,
   );
-  if (stores.length === 0) return { value: [], errors: [], absent: true };
+  const stores = discovery.value;
+  if (stores.length === 0 && discovery.errors.length === 0) {
+    return { value: [], errors: [], absent: true };
+  }
 
   const value: CollectedAgent[] = [];
-  const errors: string[] = [];
+  const errors = [...discovery.errors];
   for (const database of stores) {
+    if (readSignal?.aborted) throw readSignal.reason;
     if (database.discoveryError) {
       errors.push(database.discoveryError);
       continue;
     }
     try {
-      const evidence = readOpenCodeStore(database.path, options.readOptions);
+      const evidence = readOpenCodeStore(database.path, readOptions);
       for (const session of evidence.sessions) {
+        if (readSignal?.aborted) throw readSignal.reason;
         const agent = collectedSession(session, database);
         if (agent) value.push(agent);
         else {
@@ -232,6 +366,7 @@ export async function collectOpenCodeSessions(
         `OpenCode ${database.filename} ${diagnostic.kind}: ${diagnostic.detail}`
       ));
     } catch (error) {
+      if (readSignal?.aborted) throw readSignal.reason;
       errors.push(`OpenCode ${basename(database.path)}: ${foreignSqliteFailureMessage(
         error,
         "OpenCode sessions from this store are unavailable for this scan",

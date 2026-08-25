@@ -763,13 +763,13 @@ describe("FE-2 every PROVIDERS member has explicit provider and harness labels",
     const occurrences = parityDoc.match(/<!--\s*harness-labels:begin\s*-->/g) || [];
     expect(occurrences.length, "the harness-labels block is declared more than once").toBe(1);
 
-    const parsed = new Map<string, string>();
+    const parsed = new Map<string, { provider: string; harness: string }>();
     const seen: string[] = [];
     for (const line of table![1].split("\n")) {
-      const cells = line.match(/^\s*\|\s*`([a-z]+)`\s*\|\s*([^|]+?)\s*\|\s*$/);
+      const cells = line.match(/^\s*\|\s*`([a-z]+)`\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*\|\s*$/);
       if (!cells) continue;
       seen.push(cells[1]);
-      parsed.set(cells[1], cells[2]);
+      parsed.set(cells[1], { provider: cells[2], harness: cells[3] });
     }
     /* A duplicate row is how a table drifts from the code while still parsing:
        two `claude` rows disagreeing, and the Map silently keeps the last. */
@@ -780,8 +780,10 @@ describe("FE-2 every PROVIDERS member has explicit provider and harness labels",
     expect([...parsed.keys()].sort(), "the documented roster is not the code's roster")
       .toEqual([...PROVIDERS].sort());
     for (const p of PROVIDERS) {
-      expect(parsed.get(p), `docs/PARITY.md documents ${p} as "${parsed.get(p)}"`)
+      expect(parsed.get(p)?.provider, `docs/PARITY.md documents ${p}'s provider label as "${parsed.get(p)?.provider}"`)
         .toBe(PROVIDER_LABELS[p]);
+      expect(parsed.get(p)?.harness, `docs/PARITY.md documents ${p}'s harness label as "${parsed.get(p)?.harness}"`)
+        .toBe(HARNESS_LABELS[p]);
     }
   });
 });
@@ -1202,6 +1204,37 @@ describe("the integrated cohort renders the same row grammar as the legacy cohor
       const row = renderRow(agent);
       const mark = walk(row).find((n) => String(n.className || "").includes("harness-mark"));
       expect(mark.attributes.src, `${agent.provider} harness mark`).toBe(want[String(agent.provider)]);
+    }
+  });
+
+  test("OpenCode raw provider routing reaches its configured provider mark before model inference", () => {
+    const key = M.agentKeyOf({
+      provider: "opencode",
+      model: "claude-opus-5",
+      rawModel: { providerRoute: "opencode", modelId: "claude-opus-5" },
+    });
+
+    expect({ key, mark: M.PROVIDER_MARK[key] }).toEqual({
+      key: "opencode",
+      mark: { src: "/icons/opencode-provider.svg" },
+    });
+  });
+
+  test("raw provider routes announce canonical Agent names instead of internal keys", () => {
+    for (const [provider, label] of [
+      ["opencode", "OpenCode"],
+      ["kilo", "Kilo"],
+      ["kimi", "Kimi Code"],
+    ] as const) {
+      const row = renderRow({
+        ...R3_OPENCODE_WORKING,
+        provider,
+        rawModel: { providerRoute: provider, modelId: "claude-opus-5" },
+      });
+      const mark = walk(row).find((node) => String(node.className || "").includes("agent-mark"));
+      expect(mark, `${provider} row has no Agent mark`).toBeTruthy();
+      expect(mark.attributes.alt, `${provider} Agent mark alt`).toBe(label);
+      expect(mark.attributes.title, `${provider} Agent mark title`).toBe(`Agent ${label}`);
     }
   });
 

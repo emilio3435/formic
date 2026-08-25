@@ -235,6 +235,48 @@ describe("durable agent focus links", () => {
     expect(runner.commands).toHaveLength(0);
   });
 
+  for (const provider of ["opencode", "kilo", "kimi"] as const) {
+    test(`a ${provider} durable link preserves exact-only routing for a unique cwd`, async () => {
+      const runner = new StubRunner();
+      const sourceSessionId = provider === "kimi"
+        ? "session_11111111-2222-4333-8444-555555555555"
+        : `${provider}-durable-session`;
+      const agent = snapshotAgent({
+        id: `${provider}:${sourceSessionId}`,
+        provider,
+        sourceSessionId,
+        cwd: "/tmp/agent-links-project",
+        target: {
+          resolution: "missing",
+          reason: "This harness requires exact cmux identity; cwd fallback is disabled.",
+        },
+        controls: [{
+          action: "focus",
+          enabled: false,
+          reason: "This harness requires exact cmux identity; cwd fallback is disabled.",
+        }],
+      });
+      const fetch = createAgentLinkFetch(
+        () => new Response("fallback", { status: 418 }),
+        {
+          getSnapshot: () => snapshot(agent),
+          surfaces: () => [surface(`${provider.toUpperCase()}-CWD-ONLY`)],
+          runner,
+          archiveStore,
+          cmuxExecutable: "cmux",
+        },
+      );
+
+      const response = await fetch(new Request(
+        `http://127.0.0.1:4701/agent/${encodeURIComponent(agent.id)}/focus`,
+      ));
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ error: { code: "CONTROL_DISABLED" } });
+      expect(runner.commands).toHaveLength(0);
+    });
+  }
+
   test("an exact agent URL re-resolves through the hook-store tier and focuses that surface", async () => {
     loadHookStore({ sessionId: "live-session", lifecycle: "running" });
     const runner = new StubRunner();

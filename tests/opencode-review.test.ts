@@ -229,7 +229,7 @@ describe("OpenCode owner-review red floor", () => {
       .toEqual({ callSizes: [415, 153], sessionProcessed: 568, scope: "session" });
   });
 
-  test("06 mixed-case command identity preserves native spelling and matches case-insensitively", async () => {
+  test("06 mixed-case non-UUID command identity preserves native spelling and refuses a different owner", async () => {
     const nativeId = "ses_0123456789AbCdEfGhIjKlMnOp";
     const selectorId = "ses_0123456789aBcDeFgHiJkLmNoP";
     const agent: CollectedAgent = {
@@ -265,7 +265,7 @@ describe("OpenCode owner-review red floor", () => {
     expect({
       parsedValue: identitiesFromCommand(command)[0]?.value,
       resolvedSessionIds: enriched.value[0]?.sourceSessionIds,
-    }).toEqual({ parsedValue: selectorId, resolvedSessionIds: [nativeId] });
+    }).toEqual({ parsedValue: selectorId, resolvedSessionIds: [] });
   });
 
   test("07 Inspector tool cards keep call id and status while omitting bodies", async () => {

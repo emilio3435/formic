@@ -261,7 +261,7 @@ test("observed all-zero child session counters remain zeros rather than becoming
   });
 });
 
-test("default recent-session enumeration is capped newest-first with explicit truncation diagnostics", async () => {
+test("bounded session enumeration sorts only the native-id-admitted window by updated time", async () => {
   const path = await fixtureStore();
   openStore(path, (database) => {
     for (let index = 0; index < OPENCODE_STORE_LIMITS.sessions + 5; index += 1) {
@@ -285,12 +285,102 @@ test("default recent-session enumeration is capped newest-first with explicit tr
   const evidence = readOpenCodeStore(path);
   expect(evidence.sessions).toHaveLength(OPENCODE_STORE_LIMITS.sessions);
   expect(evidence.sessions[0]?.sessionId).toBe("ses_recent_054");
-  expect(evidence.sessions.at(-1)?.sessionId).toBe("ses_recent_005");
-  expect(evidence.sessions.map(({ sessionId }) => sessionId)).not.toContain("ses_recent_004");
+  expect(evidence.sessions.at(-1)?.sessionId).toBe(ROOT_SESSION_ID);
+  expect(evidence.sessions.map(({ sessionId }) => sessionId)).not.toContain("ses_recent_005");
   expect(evidence.diagnostics).toContainEqual(expect.objectContaining({
     kind: "truncated",
     table: "session",
   }));
+});
+
+test("session admission bounds hostile work through the native id index without claiming global recency", async () => {
+  const path = await fixtureStore();
+  openStore(path, (database) => {
+    database.exec("DELETE FROM part; DELETE FROM message; DELETE FROM session;");
+    for (const [id, updatedAt] of [
+      ["ses_zeta_3", 1784690500101],
+      ["ses_zeta_2", 1784690500103],
+      ["ses_zeta_1", 1784690500102],
+      ["ses_alpha_global_newest", 1784690599999],
+    ] as const) {
+      database.run(
+        "INSERT INTO session(id, project_id, slug, directory, title, version, time_created, time_updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+          id,
+          "prj_synthetic",
+          id,
+          `/synthetic/workspace/${id}`,
+          id,
+          "local-test",
+          updatedAt,
+          updatedAt,
+        ],
+      );
+    }
+  });
+
+  const descriptor = Object.getOwnPropertyDescriptor(Database.prototype, "query");
+  if (!descriptor || typeof descriptor.value !== "function") {
+    throw new Error("bun:sqlite Database.query is unavailable for session query-plan capture");
+  }
+  const originalQuery = descriptor.value as (...args: unknown[]) => unknown;
+  const executedSql: string[] = [];
+  Object.defineProperty(Database.prototype, "query", {
+    ...descriptor,
+    value: function (this: Database, ...args: unknown[]) {
+      executedSql.push(String(args[0] ?? ""));
+      return Reflect.apply(originalQuery, this, args);
+    },
+  });
+
+  let evidence: OpenCodeStoreEvidence;
+  try {
+    evidence = readOpenCodeStore(path, { sessionLimit: 2 });
+  } finally {
+    Object.defineProperty(Database.prototype, "query", descriptor);
+  }
+  const sessionQueries = executedSql.filter((sql) =>
+    /\bFROM\s+session\b/i.test(sql) && /\bLIMIT\s+\?/i.test(sql)
+  );
+  const planDatabase = new Database(path, { readonly: true });
+  let planDetails: string[];
+  try {
+    planDetails = sessionQueries.flatMap((query) =>
+      (planDatabase.query(`EXPLAIN QUERY PLAN ${query}`).all(3) as Array<{ detail?: unknown }>)
+        .flatMap(({ detail }) => typeof detail === "string" ? [detail] : [])
+    );
+  } finally {
+    planDatabase.close();
+  }
+  const truncationDetail = evidence.diagnostics.find(({ kind, table }) =>
+    kind === "truncated" && table === "session"
+  )?.detail;
+
+  expect({
+    retainedSessionIds: evidence.sessions.map(({ sessionId }) => sessionId),
+    globallyNewestRetained: evidence.sessions.some(({ sessionId }) =>
+      sessionId === "ses_alpha_global_newest"
+    ),
+    sessionQueryShapes: sessionQueries.length,
+    indexedNativeIdScans: planDetails.filter((detail) =>
+      detail === "SCAN session USING INDEX sqlite_autoindex_session_1"
+    ).length,
+    usesTemporaryBTree: planDetails.some((detail) => /\bUSE\s+TEMP\s+B-TREE\b/i.test(detail)),
+    ordersByUnindexedRecency: sessionQueries.some((query) =>
+      /\bORDER\s+BY\s+time_updated\b/i.test(query)
+    ),
+    truncationNamesTradeoff: /native id order.*global recency is unproven/i.test(
+      truncationDetail ?? "",
+    ),
+  }).toEqual({
+    retainedSessionIds: ["ses_zeta_2", "ses_zeta_1"],
+    globallyNewestRetained: false,
+    sessionQueryShapes: 1,
+    indexedNativeIdScans: 1,
+    usesTemporaryBTree: false,
+    ordersByUnindexedRecency: false,
+    truncationNamesTradeoff: true,
+  });
 });
 
 test("early-plus-recent message windows retain first task and newest closing while bounding evidence", async () => {
@@ -427,6 +517,210 @@ test("global part cap preserves boundary speech when one selected message has 50
   });
 });
 
+test("part admission uses the native index before ranking a selected message's oversized part set", async () => {
+  const path = await fixtureStore();
+  const sessionId = "ses_bounded_part_admission";
+  const messageId = "msg_bounded_part_admission";
+  const matchingPartCount = 5_000;
+  const partLimit = 4;
+  openStore(path, (database) => {
+    database.exec("BEGIN");
+    try {
+      database.run(
+        "INSERT INTO session(id, project_id, slug, directory, title, version, time_created, time_updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+          sessionId,
+          "prj_synthetic",
+          "bounded-part-admission",
+          "/synthetic/workspace/bounded-part-admission",
+          "Bounded part admission",
+          "local-test",
+          1784692000000,
+          1784692000000,
+        ],
+      );
+      database.run(
+        "INSERT INTO message(id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)",
+        [
+          messageId,
+          sessionId,
+          1784692000000,
+          1784692000000,
+          JSON.stringify({ role: "assistant", time: { created: 1784692000000 } }),
+        ],
+      );
+      for (let index = 0; index < matchingPartCount; index += 1) {
+        const suffix = String(index).padStart(4, "0");
+        database.run(
+          "INSERT INTO part(id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)",
+          [
+            `prt_bounded_${suffix}`,
+            messageId,
+            sessionId,
+            1784692000000 + index,
+            1784692000000 + index,
+            JSON.stringify({ type: "text", text: `Bounded part ${suffix}` }),
+          ],
+        );
+      }
+      database.exec("COMMIT");
+    } catch (error) {
+      database.exec("ROLLBACK");
+      throw error;
+    }
+  });
+
+  const evidence = readOpenCodeStore(path, { sessionId, partLimit });
+  const session = evidence.sessions[0];
+  expect(session?.prose.map(({ partId }) => partId)).toEqual([
+    "prt_bounded_0000",
+    "prt_bounded_0001",
+    "prt_bounded_4998",
+    "prt_bounded_4999",
+  ]);
+  expect(evidence.diagnostics).toContainEqual(expect.objectContaining({
+    kind: "truncated",
+    table: "part",
+    recordId: sessionId,
+  }));
+
+  const source = await readFile(join(import.meta.dir, "..", "src", "server", "opencode-store.ts"), "utf8");
+  const partSelection = source.slice(
+    source.indexOf("function readSelectedParts"),
+    source.indexOf("function readRawSnapshot"),
+  );
+  expect(partSelection).toContain("INDEXED BY part_message_id_id_idx");
+  expect(partSelection).not.toMatch(/row_number\s*\(\s*\)\s*OVER/i);
+
+  const descriptor = Object.getOwnPropertyDescriptor(Database.prototype, "query");
+  if (!descriptor || typeof descriptor.value !== "function") {
+    throw new Error("bun:sqlite Database.query is unavailable for part query-plan capture");
+  }
+  const originalQuery = descriptor.value as (...args: unknown[]) => unknown;
+  const executedSql: string[] = [];
+  Object.defineProperty(Database.prototype, "query", {
+    ...descriptor,
+    value: function (this: Database, ...args: unknown[]) {
+      executedSql.push(String(args[0] ?? ""));
+      return Reflect.apply(originalQuery, this, args);
+    },
+  });
+  try {
+    readOpenCodeStore(path, { sessionId, partLimit });
+  } finally {
+    Object.defineProperty(Database.prototype, "query", descriptor);
+  }
+
+  const boundaryQueries = [...new Set(executedSql.filter((sql) =>
+    /\bWITH\s+selected_messages\b/i.test(sql) &&
+    /\bWHERE\s+part\.message_id\s*=\s*selected_messages\.message_id\b/i.test(sql)
+  ))];
+  const planDetails: string[] = [];
+  const planDatabase = new Database(path, { readonly: true });
+  try {
+    for (const query of boundaryQueries) {
+      const placeholderCount = query.match(/\?/g)?.length ?? 0;
+      const boundaryLimit = Math.ceil((partLimit + 1) / 2);
+      const rows = planDatabase.query(`EXPLAIN QUERY PLAN ${query}`).all(
+        ...Array.from({ length: placeholderCount - 2 }, () => messageId),
+        boundaryLimit,
+        boundaryLimit,
+      ) as Array<{ detail?: unknown }>;
+      planDetails.push(...rows.flatMap(({ detail }) =>
+        typeof detail === "string" ? [detail] : []
+      ));
+    }
+  } finally {
+    planDatabase.close();
+  }
+  expect({
+    boundaryQueryShapes: boundaryQueries.length,
+    coveringIndexSearches: planDetails.filter((detail) =>
+      detail === "SEARCH part USING COVERING INDEX part_message_id_id_idx (message_id=?)"
+    ).length,
+    scansPart: planDetails.some((detail) => /\bSCAN\s+part\b/i.test(detail)),
+    usesTemporaryBTree: planDetails.some((detail) => /\bUSE\s+TEMP\s+B-TREE\b/i.test(detail)),
+  }).toEqual({
+    boundaryQueryShapes: 1,
+    coveringIndexSearches: 2,
+    scansPart: false,
+    usesTemporaryBTree: false,
+  });
+});
+
+test("maximum message window uses one boundary-admission query and one materialization query", async () => {
+  const path = await fixtureStore();
+  const maximumMessageWindow =
+    OPENCODE_STORE_LIMITS.earlyMessagesPerSession +
+    OPENCODE_STORE_LIMITS.recentMessagesPerSession;
+  openStore(path, (database) => {
+    database.exec("BEGIN");
+    try {
+      for (let index = 0; index < maximumMessageWindow + 4; index += 1) {
+        const suffix = String(index).padStart(3, "0");
+        const createdAt = 1784693000000 + index;
+        database.run(
+          "INSERT INTO message(id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)",
+          [
+            `msg_query_bound_${suffix}`,
+            ROOT_SESSION_ID,
+            createdAt,
+            createdAt,
+            JSON.stringify({ role: "assistant", time: { created: createdAt } }),
+          ],
+        );
+      }
+      database.exec("COMMIT");
+    } catch (error) {
+      database.exec("ROLLBACK");
+      throw error;
+    }
+  });
+
+  const descriptor = Object.getOwnPropertyDescriptor(Database.prototype, "query");
+  if (!descriptor || typeof descriptor.value !== "function") {
+    throw new Error("bun:sqlite Database.query is unavailable for part query-count capture");
+  }
+  const originalQuery = descriptor.value as (...args: unknown[]) => unknown;
+  const executedSql: string[] = [];
+  Object.defineProperty(Database.prototype, "query", {
+    ...descriptor,
+    value: function (this: Database, ...args: unknown[]) {
+      executedSql.push(String(args[0] ?? ""));
+      return Reflect.apply(originalQuery, this, args);
+    },
+  });
+
+  let evidence: OpenCodeStoreEvidence;
+  try {
+    evidence = readOpenCodeStore(path, { sessionId: ROOT_SESSION_ID });
+  } finally {
+    Object.defineProperty(Database.prototype, "query", descriptor);
+  }
+  expect(Object.getOwnPropertyDescriptor(Database.prototype, "query")).toEqual(descriptor);
+
+  const partQueries = executedSql.filter((sql) =>
+    /\b(?:FROM|JOIN)\s+part\b/i.test(sql)
+  );
+  const boundaryAdmissionQueries = partQueries.filter((sql) =>
+    /\bmessage_id\b/i.test(sql) && !/\b(?:WHERE|ON)\s+part\.rowid\b/i.test(sql)
+  );
+  const materializationQueries = partQueries.filter((sql) =>
+    /\b(?:WHERE|ON)\s+part\.rowid\b/i.test(sql)
+  );
+  expect({
+    selectedMessages: rootSession(evidence).messages.length,
+    boundaryAdmissionQueries: boundaryAdmissionQueries.length,
+    materializationQueries: materializationQueries.length,
+    totalPartQueries: partQueries.length,
+  }).toEqual({
+    selectedMessages: maximumMessageWindow,
+    boundaryAdmissionQueries: 1,
+    materializationQueries: 1,
+    totalPartQueries: 2,
+  });
+});
+
 test("custom bounds report the applied message and part limits instead of default caps", async () => {
   const evidence = readOpenCodeStore(await fixtureStore(), {
     sessionLimit: 1,
@@ -441,7 +735,7 @@ test("custom bounds report the applied message and part limits instead of defaul
     message: truncationDetail("message"),
     part: truncationDetail("part"),
   }).toEqual({
-    session: "recent session window capped at 1",
+    session: "bounded session window capped at 1; admission uses native id order and global recency is unproven",
     message: "recent message window capped at 1",
     part: "selected part window capped at 2",
   });
@@ -494,6 +788,23 @@ test("missing required V1 columns fail closed even when the latest migration is 
   const path = await fixtureStore();
   openStore(path, (database) => {
     database.exec("DROP TABLE part; CREATE TABLE part (id text PRIMARY KEY, message_id text, session_id text, time_created integer, time_updated integer);");
+  });
+  expectForeignFailure(path, "schema");
+});
+
+test("missing bounded part-admission index fails closed as incompatible schema", async () => {
+  const path = await fixtureStore();
+  openStore(path, (database) => database.exec("DROP INDEX part_message_id_id_idx"));
+  expectForeignFailure(path, "schema");
+});
+
+test("materialization fails closed when an admitted part names another session", async () => {
+  const path = await fixtureStore();
+  openStore(path, (database) => {
+    database.run("UPDATE part SET session_id = ? WHERE id = ?", [
+      CHILD_SESSION_ID,
+      "prt_synthetic_user_1_text",
+    ]);
   });
   expectForeignFailure(path, "schema");
 });
@@ -904,6 +1215,21 @@ test("expired and in-flight deadlines stop bounded enumeration with explicit dia
   expect(checks).toBeGreaterThan(1);
   expect(inFlight.incomplete).toBe(true);
   expect(inFlight.diagnostics).toContainEqual(expect.objectContaining({ kind: "deadline" }));
+});
+
+test("an already-aborted read rethrows the exact signal reason", async () => {
+  const abort = new AbortController();
+  const reason = new Error("cancel OpenCode store read");
+  const path = await fixtureStore();
+  abort.abort(reason);
+
+  let caught: unknown;
+  try {
+    readOpenCodeStore(path, { signal: abort.signal });
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBe(reason);
 });
 
 test("in-flight deadline retains the accepted root bundle and names the incomplete remainder", async () => {

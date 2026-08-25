@@ -33,6 +33,7 @@ import { collectCopilotSessions } from "./copilot";
 import { collectAntigravitySessions, defaultAntigravityTrees } from "./antigravity";
 import { collectGeminiSessions } from "./gemini";
 import { readHookSessionStores, type HookSessionRecord } from "./cmux-hook-sessions";
+import { normalizeIdentityValue } from "./identity";
 import { readProcessLineage, type ProcessLineageExec } from "./process-lineage";
 import { livenessOf, processAliveFrom } from "./process-liveness";
 import { observeClaudeRow, ThreadClock, threadFromMessages } from "./thread-clock";
@@ -62,6 +63,7 @@ export interface CollectSessionsOptions {
   piReadTestHooks?: import("./pi").PiReadTestHooks;
   kimiReadDeadlineMs?: number;
   kimiReadTestHooks?: import("./kimi").KimiReadTestHooks;
+  sqliteReadBudgetMs?: number;
 }
 export type SessionProviderResult = CollectionResult<CollectedAgent[]>;
 export type SessionProviderResults = Record<Provider, SessionProviderResult>;
@@ -1394,8 +1396,11 @@ function attachHookFacts(
   return {
     ...result,
     value: result.value.map((agent) => {
-      const sessionId = agent.sourceSessionId.toLowerCase();
-      const requiresUniqueOwner = agent.provider === "kilo" || agent.provider === "kimi";
+      const sessionId = normalizeIdentityValue(agent.provider, agent.sourceSessionId);
+      const requiresUniqueOwner = agent.provider === "opencode"
+        || agent.provider === "pi"
+        || agent.provider === "kilo"
+        || agent.provider === "kimi";
       const record = requiresUniqueOwner
         && uniqueOwnersBySession.get(`${agent.provider}:${sessionId}`) !== 1
         ? undefined
@@ -1510,11 +1515,16 @@ export async function collectSessionProvider(
       return collectCopilotSessions(root, windowMs, thresholds, options.extraCopilotRoots ?? []);
     }
     case "antigravity": {
+      const nowMs = Date.now();
+      const deadlineAtMs = options.sqliteReadBudgetMs === undefined
+        ? undefined
+        : nowMs + Math.max(0, Math.floor(options.sqliteReadBudgetMs));
       return collectAntigravitySessions(
         defaultAntigravityTrees(home).map((tree) => tree.root),
-        Date.now(),
+        nowMs,
         windowMs,
         thresholds,
+        { signal, deadlineAtMs },
       );
     }
     case "gemini": {
@@ -1543,7 +1553,8 @@ export async function collectSessionProvider(
       return collectOpenCodeSessions(dataRoot, {
         ...(configuredDatabasePath ? { configuredDatabasePath } : {}),
         extraDataDirs: configuredDatabasePath ? [] : options.extraOpenCodeRoots ?? [],
-      });
+        sqliteReadBudgetMs: options.sqliteReadBudgetMs,
+      }, signal);
     }
     case "pi": {
       const { collectPiSessions } = await import("./pi");
@@ -1551,7 +1562,10 @@ export async function collectSessionProvider(
     }
     case "kilo": {
       const { collectKiloSessions } = await import("./kilo");
-      return collectKiloSessions(home, { extraDataDirs: options.extraKiloRoots ?? [] });
+      return collectKiloSessions(home, {
+        extraDataDirs: options.extraKiloRoots ?? [],
+        sqliteReadBudgetMs: options.sqliteReadBudgetMs,
+      }, signal);
     }
     case "kimi": {
       const { collectKimiSessions } = await import("./kimi");
@@ -1567,15 +1581,18 @@ export function finalizeSessionProviders(
 ): SessionProviderResults {
   const hookRecords = readHookSessionStores(join(home, ".cmuxterm"));
   const recordsBySession = new Map(
-    hookRecords.map((record) => [`${record.provider}:${record.sessionId.toLowerCase()}`, record]),
+    hookRecords.map((record) => [
+      `${record.provider}:${normalizeIdentityValue(record.provider, record.sessionId)}`,
+      record,
+    ]),
   );
   const knownAgentIds = new Set(
     PROVIDERS.flatMap((provider) => results[provider].value.map((agent) => agent.id)),
   );
   const uniqueOwnersBySession = new Map<string, number>();
-  for (const provider of ["kilo", "kimi"] as const) {
+  for (const provider of ["opencode", "pi", "kilo", "kimi"] as const) {
     for (const agent of results[provider].value) {
-      const key = `${provider}:${agent.sourceSessionId.toLowerCase()}`;
+      const key = `${provider}:${normalizeIdentityValue(provider, agent.sourceSessionId)}`;
       uniqueOwnersBySession.set(key, (uniqueOwnersBySession.get(key) ?? 0) + 1);
     }
   }

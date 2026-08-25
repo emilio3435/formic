@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseClaudeJsonl, parseCodexJsonl, parseOmpJsonl } from "../src/server/collectors";
 import { parseCursorChildSession } from "../src/server/cursor";
-import { parseGeminiJsonl } from "../src/server/gemini";
+import { MAX_GEMINI_REPLAY_MESSAGES, parseGeminiJsonl } from "../src/server/gemini";
 import { sessionCallsResponse } from "../src/server/session-calls";
 import { buildSnapshot } from "../src/server/snapshot";
 import type { CollectedAgent } from "../src/server/types";
@@ -186,14 +186,18 @@ describe("the series does not ride on the wire", () => {
 });
 
 describe("the endpoint answers with checkable evidence", () => {
-  async function serve(agents: readonly CollectedAgent[], agentId: string): Promise<{ status: number; body: any }> {
+  async function serve(
+    agents: readonly CollectedAgent[],
+    agentId: string,
+    signal?: AbortSignal,
+  ): Promise<{ status: number; body: any }> {
     const snapshot = buildSnapshot({
       agents,
       surfaces: [],
       archiveStore: { has: () => false, archive: async () => {} },
       now: new Date(at(9)),
     });
-    const response = await sessionCallsResponse(snapshot, agentId, {});
+    const response = await sessionCallsResponse(snapshot, agentId, {}, signal);
     return { status: response.status, body: await response.json() };
   }
 
@@ -240,6 +244,69 @@ describe("the endpoint answers with checkable evidence", () => {
     expect(body.sessionProcessed).toBe(275);
     expect(body.prefixSums).toEqual([125, 275]);
     expect(body.unavailable).toBeUndefined();
+  });
+
+  test("a partial Gemini replay withholds the retained suffix and derived total", async () => {
+    const root = await mkdtemp(join(tmpdir(), "anthill-session-calls-gemini-partial-"));
+    roots.push(root);
+    const source = join(root, "session.jsonl");
+    const messages = [
+      {
+        id: "partial-user",
+        timestamp: at(0),
+        type: "user",
+        content: "Inspect the complete Gemini call series.",
+      },
+      ...Array.from({ length: MAX_GEMINI_REPLAY_MESSAGES }, (_, index) => ({
+        id: `partial-assistant-${index}`,
+        timestamp: at(1),
+        type: "gemini",
+        content: [{ text: `Call ${index}.` }],
+        tokens: { input: 0, output: index + 1, cached: 0, total: index + 1 },
+      })),
+    ];
+    const text = [
+      {
+        sessionId: "abcd1234-e5f6-7890-abcd-ef1234567890",
+        projectHash: "0".repeat(64),
+        startTime: at(0),
+        lastUpdated: at(1),
+        kind: "main",
+      },
+      ...messages,
+    ].map((row) => JSON.stringify(row)).join("\n");
+    await writeFile(source, text);
+    const parsed = parseGeminiJsonl(text, { sourcePath: source, nowMs: Date.parse(at(9)) })!;
+    const agent = {
+      ...parsed,
+      artifacts: [{ kind: "transcript", path: source, label: "Transcript" } as never],
+    };
+
+    const { body } = await serve([agent], agent.id);
+
+    expect(body.calls).toBeNull();
+    expect(body.sessionProcessed).toBeNull();
+    expect(body.prefixSums).toBeNull();
+    expect(body.unavailable).toMatch(/Gemini.*bounded replay.*partial or incomplete/i);
+  });
+
+  test("an aborted Gemini session-call reparse rethrows the exact request reason", async () => {
+    const source = join(
+      import.meta.dir,
+      "fixtures/gemini/demo-project/chats/session-2026-08-19T12-00-abcd1234.jsonl",
+    );
+    const text = await readFile(source, "utf8");
+    const parsed = parseGeminiJsonl(text, { sourcePath: source, nowMs: Date.parse(at(9)) })!;
+    const agent = {
+      ...parsed,
+      artifacts: [{ kind: "transcript", path: source, label: "Transcript" } as never],
+    };
+    const abort = new AbortController();
+    const reason = new Error("cancel Gemini session-call request");
+    const response = serve([agent], agent.id, abort.signal);
+    queueMicrotask(() => abort.abort(reason));
+
+    await expect(response).rejects.toBe(reason);
   });
 
   test("a total that is NOT a prefix does not match one", async () => {

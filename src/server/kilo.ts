@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readdir, realpath } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { makeAgent } from "./collectors";
@@ -15,6 +15,7 @@ import type { CollectedAgent, CollectionResult } from "./types";
 
 export interface KiloCollectOptions {
   extraDataDirs?: readonly string[];
+  sqliteReadBudgetMs?: number;
   readOptions?: KiloReadOptions;
 }
 
@@ -49,8 +50,7 @@ function collectionError(path: string, error: unknown): string {
 
 function evidenceErrors(path: string, evidence: KiloStoreEvidence): string[] {
   return evidence.diagnostics
-    .filter(({ kind }) => kind === "deadline")
-    .map(({ detail }) => `${path}: Kilo ${detail}`);
+    .map(({ kind, detail }) => `${path}: Kilo ${kind}: ${detail}`);
 }
 
 function isQualifiedDataDirError(dataDir: string, error: string): boolean {
@@ -146,42 +146,30 @@ async function collectEvidence(
   return { agents, errors: evidenceErrors(path, evidence) };
 }
 
-async function nonRegularStoreErrors(dataDir: string): Promise<string[]> {
-  try {
-    const entries = await readdir(dataDir, { withFileTypes: true });
-    return entries
-      .filter((entry) => KILO_STORE_NAME.test(entry.name) && !entry.isFile())
-      .map((entry) => `${join(dataDir, entry.name)}: Kilo store is not a regular file.`);
-  } catch {
-    return [];
-  }
-}
-
-async function qualifiedDataDirErrors(dataDir: string, errors: readonly string[]): Promise<string[]> {
-  if (errors.length === 0) return [];
-  let source = dataDir;
-  let storePaths: string[] = [];
-  try {
-    const names = (await readdir(dataDir))
-      .filter((name) => KILO_STORE_NAME.test(name))
-      .sort((left, right) => left.localeCompare(right));
-    storePaths = names.map((name) => join(dataDir, name));
-    if (storePaths[0]) source = storePaths[0];
-  } catch {
-    // The directory path remains the most specific evidence available.
-  }
+function qualifyDataDirErrors(dataDir: string, errors: readonly string[]): string[] {
   return errors.map((error) =>
-    storePaths.some((path) => error.startsWith(`${path}: `))
-      || isQualifiedDataDirError(dataDir, error)
+    isQualifiedDataDirError(dataDir, error)
       ? error
-      : `${source}: ${error}`
+      : `${dataDir}: ${error}`
   );
 }
 
 export async function collectKiloSessions(
   home: string,
   options: KiloCollectOptions = {},
+  signal?: AbortSignal,
 ): Promise<CollectionResult<CollectedAgent[]>> {
+  const readSignal = signal ?? options.readOptions?.signal;
+  if (readSignal?.aborted) throw readSignal.reason;
+  const deadlineAtMs = options.sqliteReadBudgetMs === undefined
+    ? undefined
+    : Date.now() + Math.max(1, Math.floor(options.sqliteReadBudgetMs));
+  if (readSignal?.aborted) throw readSignal.reason;
+  const readOptions: KiloReadOptions = {
+    ...options.readOptions,
+    ...(readSignal ? { signal: readSignal } : {}),
+    ...(deadlineAtMs === undefined ? {} : { deadlineAtMs }),
+  };
   const xdgDataHome = home === homedir() ? process.env.XDG_DATA_HOME?.trim() : undefined;
   const selectedRoot = xdgDataHome
     ? join(xdgDataHome, "kilo")
@@ -193,14 +181,16 @@ export async function collectKiloSessions(
     const absoluteConfigured = isAbsolute(configured);
     const path = absoluteConfigured ? configured : join(selectedRoot, configured);
     try {
-      const evidence = readKiloStore(path, options.readOptions);
+      const evidence = readKiloStore(path, readOptions);
       if (evidence.absent) {
         if (absoluteConfigured) return { value: [], errors: [], absent: true };
         return { value: [], errors: [`${path}: Kilo configured store is absent.`] };
       }
       const collected = await collectEvidence(path, evidence, false);
+      if (readSignal?.aborted) throw readSignal.reason;
       return { value: collected.agents, errors: collected.errors };
     } catch (error) {
+      if (readSignal?.aborted) throw readSignal.reason;
       return { value: [], errors: [collectionError(path, error)] };
     }
   }
@@ -212,6 +202,7 @@ export async function collectKiloSessions(
     ...(options.extraDataDirs ?? []).map((extra) => [extra, true] as const),
   ] as const) {
     const identity = await rootIdentity(path);
+    if (readSignal?.aborted) throw readSignal.reason;
     const existing = rootsByIdentity.get(identity);
     if (existing) {
       existing.identityParent = identity;
@@ -226,19 +217,21 @@ export async function collectKiloSessions(
   const errors: string[] = [];
   let present = false;
   for (const root of roots) {
-    const evidence = readKiloDataDir(root.path, options.readOptions);
+    if (readSignal?.aborted) throw readSignal.reason;
+    const evidence = readKiloDataDir(root.path, readOptions);
     if (!evidence.absent) present = true;
-    errors.push(
-      ...await qualifiedDataDirErrors(root.path, evidence.errors),
-      ...await nonRegularStoreErrors(root.path),
-    );
+    const qualifiedErrors = qualifyDataDirErrors(root.path, evidence.errors);
+    if (readSignal?.aborted) throw readSignal.reason;
+    errors.push(...qualifiedErrors);
     for (const store of evidence.stores) {
+      if (readSignal?.aborted) throw readSignal.reason;
       const collected = await collectEvidence(
         store.path,
         store.evidence,
         root.alternate,
         root.identityParent,
       );
+      if (readSignal?.aborted) throw readSignal.reason;
       agents.push(...collected.agents);
       errors.push(...collected.errors);
     }

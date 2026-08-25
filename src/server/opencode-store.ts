@@ -21,6 +21,7 @@ export interface OpenCodeReadOptions {
   partLimit?: number;
   deadlineAtMs?: number;
   nowMs?: () => number;
+  signal?: AbortSignal;
 }
 
 export interface OpenCodeRawModel {
@@ -177,6 +178,19 @@ interface RawPartRow {
   data_length: unknown;
 }
 
+interface RawPartBoundaryRow {
+  message_order: unknown;
+  ascending_rowids: unknown;
+  descending_rowids: unknown;
+}
+
+interface RankedPartCandidate {
+  partRowid: string;
+  boundaryRank: number;
+  messageOrder: number;
+  boundaryDirection: 0 | 1;
+}
+
 interface RawSessionBundle {
   session: RawSessionRow;
   messages: RawMessageRow[];
@@ -202,6 +216,7 @@ interface DecodedMessage {
 
 const ID_CHARS = 256;
 const MIGRATION_ROWS = 1_000;
+const PART_ADMISSION_INDEX = "part_message_id_id_idx";
 const REQUIRED_COLUMNS = {
   session: [
     "id",
@@ -269,6 +284,25 @@ function boundedLimit(value: number | undefined, fallback: number): number {
   return Math.min(fallback, Math.floor(value as number));
 }
 
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw signal.reason;
+}
+
+/* A signal cannot interrupt a synchronous SQLite statement already executing.
+   Bracket each bounded operation so cancellation is observed before starting
+   another statement and immediately after the current one returns. */
+function runBoundedSync<T>(signal: AbortSignal | undefined, operation: () => T): T {
+  throwIfAborted(signal);
+  try {
+    const result = operation();
+    throwIfAborted(signal);
+    return result;
+  } catch (error) {
+    if (signal?.aborted) throw signal.reason;
+    throw error;
+  }
+}
+
 function compareRows(
   left: { id: unknown; time_created: unknown },
   right: { id: unknown; time_created: unknown },
@@ -279,16 +313,22 @@ function compareRows(
   return String(left.id ?? "").localeCompare(String(right.id ?? ""));
 }
 
-function schemaColumns(database: Database, table: keyof typeof REQUIRED_COLUMNS): Set<string> {
+function schemaColumns(
+  database: Database,
+  table: keyof typeof REQUIRED_COLUMNS,
+  signal?: AbortSignal,
+): Set<string> {
+  throwIfAborted(signal);
   const rows = database.query(`PRAGMA table_info("${table}")`).all() as Array<{ name?: unknown }>;
+  throwIfAborted(signal);
   return new Set(rows.flatMap(({ name }) => typeof name === "string" ? [name] : []));
 }
 
-function assertPinnedSchema(database: Database): void {
+function assertPinnedSchema(database: Database, signal?: AbortSignal): void {
   for (const [table, expected] of Object.entries(REQUIRED_COLUMNS) as Array<
     [keyof typeof REQUIRED_COLUMNS, readonly string[]]
   >) {
-    const columns = schemaColumns(database, table);
+    const columns = schemaColumns(database, table, signal);
     const missing = expected.filter((column) => !columns.has(column));
     if (missing.length > 0) {
       throw new ForeignSqliteReadError(
@@ -298,12 +338,43 @@ function assertPinnedSchema(database: Database): void {
     }
   }
 
+  throwIfAborted(signal);
+  const partIndexes = database.query('PRAGMA index_list("part")').all() as Array<{
+    name?: unknown;
+    partial?: unknown;
+  }>;
+  throwIfAborted(signal);
+  const partAdmissionIndex = partIndexes.find(({ name }) => name === PART_ADMISSION_INDEX);
+  throwIfAborted(signal);
+  const partIndexColumns = partAdmissionIndex
+    ? (database.query(`PRAGMA index_info("${PART_ADMISSION_INDEX}")`).all() as Array<{
+        seqno?: unknown;
+        name?: unknown;
+      }>)
+      .sort((left, right) => Number(left.seqno) - Number(right.seqno))
+      .map(({ name }) => name)
+    : [];
+  throwIfAborted(signal);
+  if (
+    partAdmissionIndex?.partial !== 0 ||
+    partIndexColumns.length !== 2 ||
+    partIndexColumns[0] !== "message_id" ||
+    partIndexColumns[1] !== "id"
+  ) {
+    throw new ForeignSqliteReadError(
+      "schema",
+      `OpenCode store is missing required ${PART_ADMISSION_INDEX}(message_id, id) index`,
+    );
+  }
+
+  throwIfAborted(signal);
   const migrations = database.query(`
     SELECT substr(id, 1, ${ID_CHARS + 1}) AS id, length(id) AS id_length
     FROM migration
     ORDER BY id
     LIMIT ${MIGRATION_ROWS + 1}
   `).all() as Array<{ id?: unknown; id_length?: unknown }>;
+  throwIfAborted(signal);
   if (migrations.length > MIGRATION_ROWS) {
     throw new ForeignSqliteReadError("schema", "OpenCode migration journal exceeds the pinned read bound");
   }
@@ -333,8 +404,10 @@ function readMessageWindow(
   sessionId: string,
   direction: "ASC" | "DESC",
   limit: number,
+  signal?: AbortSignal,
 ): RawMessageRow[] {
-  return database.query(`
+  throwIfAborted(signal);
+  const rows = database.query(`
     SELECT
       substr(id, 1, ${ID_CHARS + 1}) AS id,
       length(id) AS id_length,
@@ -346,6 +419,8 @@ function readMessageWindow(
     ORDER BY time_created ${direction}, id ${direction}
     LIMIT ?
   `).all(sessionId, limit) as RawMessageRow[];
+  throwIfAborted(signal);
+  return rows;
 }
 
 function readSelectedParts(
@@ -353,32 +428,92 @@ function readSelectedParts(
   sessionId: string,
   messageIds: string[],
   limit: number,
+  signal?: AbortSignal,
 ): RawPartRow[] {
+  throwIfAborted(signal);
   if (messageIds.length === 0) return [];
-  const selectedValues = messageIds.map(() => "(?, ?)").join(", ");
-  const bindings: SQLQueryBindings[] = [];
-  for (const [messageOrder, messageId] of messageIds.entries()) {
-    bindings.push(messageId, messageOrder);
+  const boundaryLimit = Math.ceil(limit / 2);
+  const candidates = new Map<string, RankedPartCandidate>();
+
+  const selectedMessages = messageIds.map((_, index) => `(?, ${index})`).join(", ");
+  const boundaries = database.query(`
+    WITH selected_messages(message_id, message_order) AS (
+      VALUES ${selectedMessages}
+    )
+    SELECT
+      message_order,
+      (
+        SELECT group_concat(part_rowid, ',')
+        FROM (
+          SELECT printf('%lld', part.rowid) AS part_rowid
+          FROM part INDEXED BY part_message_id_id_idx
+          WHERE part.message_id = selected_messages.message_id
+          ORDER BY part.id COLLATE BINARY ASC
+          LIMIT ?
+        )
+      ) AS ascending_rowids,
+      (
+        SELECT group_concat(part_rowid, ',')
+        FROM (
+          SELECT printf('%lld', part.rowid) AS part_rowid
+          FROM part INDEXED BY part_message_id_id_idx
+          WHERE part.message_id = selected_messages.message_id
+          ORDER BY part.id COLLATE BINARY DESC
+          LIMIT ?
+        )
+      ) AS descending_rowids
+    FROM selected_messages
+  `).all(...messageIds, boundaryLimit, boundaryLimit) as RawPartBoundaryRow[];
+  throwIfAborted(signal);
+  for (const boundary of boundaries) {
+    throwIfAborted(signal);
+    const messageOrder = nonNegativeInteger(boundary.message_order);
+    if (messageOrder === undefined || messageOrder >= messageIds.length) continue;
+    for (const [boundaryDirection, value] of [
+      boundary.ascending_rowids,
+      boundary.descending_rowids,
+    ].entries()) {
+      const rowids = typeof value === "string" && value.length > 0 ? value.split(",") : [];
+      for (const [boundaryIndex, partRowid] of rowids.entries()) {
+        if (!/^-?\d+$/.test(partRowid)) continue;
+        const candidate: RankedPartCandidate = {
+          partRowid,
+          boundaryRank: boundaryIndex + 1,
+          messageOrder,
+          boundaryDirection: boundaryDirection as 0 | 1,
+        };
+        const existing = candidates.get(candidate.partRowid);
+        if (
+          !existing ||
+          candidate.boundaryRank < existing.boundaryRank ||
+          (candidate.boundaryRank === existing.boundaryRank &&
+            candidate.boundaryDirection < existing.boundaryDirection)
+        ) {
+          candidates.set(candidate.partRowid, candidate);
+        }
+      }
+    }
   }
-  bindings.push(sessionId, limit);
-  return database.query(`
-    WITH selected(message_id, message_order) AS (
-      VALUES ${selectedValues}
-    ), ranked AS (
-      SELECT
-        part.rowid AS part_rowid,
-        part.id AS part_id,
-        selected.message_order,
-        row_number() OVER (PARTITION BY part.message_id ORDER BY part.id) AS early_rank,
-        row_number() OVER (PARTITION BY part.message_id ORDER BY part.id DESC) AS recent_rank
-      FROM part
-      JOIN selected ON selected.message_id = part.message_id
-      WHERE part.session_id = ?
-    ), bounded AS (
-      SELECT part_rowid, part_id, message_order, early_rank, recent_rank
-      FROM ranked
-      ORDER BY min(early_rank, recent_rank), message_order, part_id
-      LIMIT ?
+
+  const admitted = [...candidates.values()]
+    .sort((left, right) =>
+      left.boundaryRank - right.boundaryRank ||
+      left.messageOrder - right.messageOrder ||
+      left.boundaryDirection - right.boundaryDirection
+    )
+    .slice(0, limit);
+  if (admitted.length === 0) return [];
+
+  const admittedValues = admitted.map(() => "(?, ?)").join(", ");
+  const bindings: SQLQueryBindings[] = [];
+  for (const [admissionOrder, candidate] of admitted.entries()) {
+    bindings.push(candidate.partRowid, admissionOrder);
+  }
+  bindings.push(sessionId);
+  throwIfAborted(signal);
+  const rows = database.query(`
+    WITH admitted(part_rowid, admission_order) AS (
+      VALUES ${admittedValues}
     )
     SELECT
       substr(part.id, 1, ${ID_CHARS + 1}) AS id,
@@ -389,10 +524,19 @@ function readSelectedParts(
       part.time_updated,
       substr(part.data, 1, ${OPENCODE_STORE_LIMITS.jsonChars + 1}) AS data,
       length(part.data) AS data_length
-    FROM bounded
-    JOIN part ON part.rowid = bounded.part_rowid
-    ORDER BY min(bounded.early_rank, bounded.recent_rank), bounded.message_order, bounded.part_id
+    FROM admitted
+    JOIN part ON part.rowid = CAST(admitted.part_rowid AS INTEGER)
+    WHERE part.session_id = ?
+    ORDER BY admitted.admission_order
   `).all(...bindings) as RawPartRow[];
+  throwIfAborted(signal);
+  if (rows.length !== admitted.length) {
+    throw new ForeignSqliteReadError(
+      "schema",
+      "OpenCode selected part rows do not belong to their selected session",
+    );
+  }
+  return rows;
 }
 
 function readRawSnapshot(
@@ -402,14 +546,17 @@ function readRawSnapshot(
   partLimit: number,
   pastDeadline: () => boolean,
   selectedSessionId?: string,
+  signal?: AbortSignal,
 ): RawStoreSnapshot {
+  throwIfAborted(signal);
   if (pastDeadline()) return { sessions: [], sessionTruncated: false, deadlineExpired: true };
-  assertPinnedSchema(database);
+  assertPinnedSchema(database, signal);
+  throwIfAborted(signal);
   if (pastDeadline()) return { sessions: [], sessionTruncated: false, deadlineExpired: true };
 
   const selection = selectedSessionId
-    ? "WHERE id = ? ORDER BY time_updated DESC, id DESC LIMIT 1"
-    : "ORDER BY time_updated DESC, id DESC LIMIT ?";
+    ? "WHERE id = ? LIMIT 1"
+    : "ORDER BY session.id DESC LIMIT ?";
   const sessionRows = database.query(`
     SELECT
       substr(id, 1, ${ID_CHARS + 1}) AS id,
@@ -435,10 +582,21 @@ function readRawSnapshot(
     FROM session
     ${selection}
   `).all(selectedSessionId ?? sessionLimit + 1) as RawSessionRow[];
+  throwIfAborted(signal);
   const sessionTruncated = selectedSessionId === undefined && sessionRows.length > sessionLimit;
+  const admittedSessionRows = [...sessionRows].sort((left, right) => {
+    const leftUpdatedAt = nonNegativeInteger(left.time_updated);
+    const rightUpdatedAt = nonNegativeInteger(right.time_updated);
+    if (
+      leftUpdatedAt === undefined || rightUpdatedAt === undefined ||
+      leftUpdatedAt === rightUpdatedAt
+    ) return 0;
+    return leftUpdatedAt > rightUpdatedAt ? -1 : 1;
+  });
   const sessions: RawSessionBundle[] = [];
 
-  for (const session of sessionRows.slice(0, sessionLimit)) {
+  for (const session of admittedSessionRows.slice(0, sessionLimit)) {
+    throwIfAborted(signal);
     if (pastDeadline()) return { sessions, sessionTruncated, deadlineExpired: true };
     const sessionId = nonEmptyString(session.id);
     const idLength = nonNegativeInteger(session.id_length);
@@ -460,9 +618,11 @@ function readRawSnapshot(
       sessionId,
       "ASC",
       OPENCODE_STORE_LIMITS.earlyMessagesPerSession,
+      signal,
     );
+    throwIfAborted(signal);
     if (pastDeadline()) return { sessions, sessionTruncated, deadlineExpired: true };
-    const recentRows = readMessageWindow(database, sessionId, "DESC", messageLimit + 1);
+    const recentRows = readMessageWindow(database, sessionId, "DESC", messageLimit + 1, signal);
     const messageTruncated = recentRows.length > messageLimit;
     const selected = new Map<string, RawMessageRow>();
     for (const message of [...early, ...recentRows.slice(0, messageLimit)]) {
@@ -476,7 +636,7 @@ function readRawSnapshot(
     });
 
     if (pastDeadline()) return { sessions, sessionTruncated, deadlineExpired: true };
-    const partRows = readSelectedParts(database, sessionId, messageIds, partLimit + 1);
+    const partRows = readSelectedParts(database, sessionId, messageIds, partLimit + 1, signal);
     const partTruncated = partRows.length > partLimit;
     const messageOrder = new Map(messageIds.map((messageId, index) => [messageId, index]));
     const parts = partRows.slice(0, partLimit).sort((left, right) => {
@@ -1212,29 +1372,47 @@ export function readOpenCodeStore(
   path: string,
   options: OpenCodeReadOptions = {},
 ): OpenCodeStoreEvidence {
+  throwIfAborted(options.signal);
   const nowMs = options.nowMs ?? Date.now;
-  const pastDeadline = () => options.deadlineAtMs !== undefined && nowMs() >= options.deadlineAtMs;
+  const pastDeadline = () => {
+    throwIfAborted(options.signal);
+    const expired = options.deadlineAtMs !== undefined && nowMs() >= options.deadlineAtMs;
+    throwIfAborted(options.signal);
+    return expired;
+  };
   if (pastDeadline()) return deadlineResult();
 
   const sessionLimit = boundedLimit(options.sessionLimit, OPENCODE_STORE_LIMITS.sessions);
   const messageLimit = boundedLimit(options.messageLimit, OPENCODE_STORE_LIMITS.recentMessagesPerSession);
   const partLimit = boundedLimit(options.partLimit, OPENCODE_STORE_LIMITS.partsPerSession);
-  const raw = readForeignSqlite(path, (database) =>
-    readRawSnapshot(database, sessionLimit, messageLimit, partLimit, pastDeadline, options.sessionId)
+  const raw = runBoundedSync(options.signal, () =>
+    readForeignSqlite(path, (database) =>
+      readRawSnapshot(
+        database,
+        sessionLimit,
+        messageLimit,
+        partLimit,
+        pastDeadline,
+        options.sessionId,
+        options.signal,
+      )
+    )
   );
   const diagnostics: OpenCodeStoreDiagnostic[] = [];
   if (raw.sessionTruncated) {
     diagnostic(diagnostics, {
       kind: "truncated",
       table: "session",
-      detail: `recent session window capped at ${sessionLimit}`,
+      detail: `bounded session window capped at ${sessionLimit}; admission uses native id order and global recency is unproven`,
     });
   }
 
   const sessions: OpenCodeSessionEvidence[] = [];
   const incomplete = raw.deadlineExpired;
   for (const bundle of raw.sessions) {
+    throwIfAborted(options.signal);
     const session = parseSession(bundle, diagnostics);
+    throwIfAborted(options.signal);
     if (session) sessions.push(session);
   }
   if (incomplete) {

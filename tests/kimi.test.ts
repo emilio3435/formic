@@ -1,23 +1,33 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as fsPromises from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import {
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import { instanceIdFor } from "../src/server/collector-instances";
 import { transcriptResponse } from "../src/server/debug-identity";
 import {
+  MAX_HUMAN_MESSAGE_CHARS,
+  readableClosing,
+  readableHumanMessage,
+} from "../src/server/human-message";
+import {
   collectKimiSessions,
   KIMI_DEFAULT_DATA_DIR,
   KIMI_SESSION_META_VERSION,
   KIMI_WIRE_PROTOCOL_VERSION,
+  readKimiWireFile,
   type KimiCollectOptions,
 } from "../src/server/kimi";
+import { MAX_NAME_LENGTH } from "../src/server/naming";
 import { sessionCallsResponse } from "../src/server/session-calls";
 import {
   MAX_TRANSCRIPT_TAIL_CHARS,
@@ -550,6 +560,311 @@ describe("Kimi Code CLI assertion-only source contract", () => {
     });
   });
 
+  test.each(["completed", "cancelled", "failed", "blocked"] as const)(
+    "KIMI-RED-05B a %s source-backed call without usage withholds stale occupancy and the whole call series",
+    async (reason) => {
+      const { operatorHome, fixture } = defaultFixture(`call-without-counters-${reason}`, (draft) => {
+        Object.assign(draft.state ?? {}, { lastTurnReason: reason });
+        wireMutation(draft, (rows) => [...rows,
+          { type: "turn.prompt", agentId: "main", input: [{ type: "text", text: `Run one more ${reason} call without usage.` }], origin: { kind: "user" }, time: UPDATED_AT + 1_000 },
+          { type: "llm.request", agentId: "main", kind: "loop", provider: "anthropic", model: "claude-opus-5", modelAlias: "claude-opus-5", thinkingEffort: "high", turnStep: "1.1", time: UPDATED_AT + 2_000 },
+          { type: "context.append_loop_event", agentId: "main", event: { type: "content.part", uuid: "99999999-9999-4999-8999-999999999999", turnId: "1", step: 1, stepUuid: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", part: { type: "text", text: `This call ended ${reason} without a usage record.` } }, time: UPDATED_AT + 3_000 },
+          { type: "turn.ended", agentId: "main", turnId: 1, reason, durationMs: 3_000, time: UPDATED_AT + 4_000 },
+        ]);
+      });
+      const result = await collectKimi(operatorHome);
+      const agent = onlyAgent(result);
+      const calls = agent
+        ? await sessionCallsResponse(endpointSnapshot(agent), agent.id, {})
+        : undefined;
+      const callsBody = calls ? await calls.json() as Record<string, unknown> : undefined;
+      const incomplete = result.errors.filter((error) =>
+        error.includes(fixture.mainWire) && /usage.*(?:incomplete|missing|withheld)/i.test(error));
+
+      expect({
+        input: agent?.tokens.input,
+        output: agent?.tokens.output,
+        cachedInput: agent?.tokens.cachedInput,
+        total: agent?.tokens.total,
+        contextPct: agent?.contextPct,
+        scope: agent?.tokens.scope,
+        provenance: agent?.tokens.provenance,
+        sessionTotal: agent?.tokens.sessionTotal,
+        sessionCachedInput: agent?.tokens.sessionCachedInput,
+        sessionProcessed: agent?.tokens.sessionProcessed,
+        callSizes: agent?.callSizes,
+        warningCount: incomplete.length,
+        debug: callsBody && {
+          calls: callsBody.calls,
+          sessionProcessed: callsBody.sessionProcessed,
+          prefixSums: callsBody.prefixSums,
+          unavailable: callsBody.unavailable,
+        },
+      }).toEqual({
+        input: undefined,
+        output: undefined,
+        cachedInput: undefined,
+        total: undefined,
+        contextPct: undefined,
+        scope: "session",
+        provenance: "estimated",
+        sessionTotal: undefined,
+        sessionCachedInput: undefined,
+        sessionProcessed: undefined,
+        callSizes: undefined,
+        warningCount: 1,
+        debug: {
+          calls: null,
+          sessionProcessed: null,
+          prefixSums: null,
+          unavailable: expect.stringMatching(/Kimi.*(?:partial|incomplete)|(?:partial|incomplete).*Kimi/i),
+        },
+      });
+    },
+  );
+
+  test("KIMI-RED-05E a newer open prompt/request withholds older occupancy session totals and calls", async () => {
+    const { operatorHome, fixture } = defaultFixture("usage-open-request", (draft) => {
+      wireMutation(draft, (rows) => [...rows,
+        { type: "turn.prompt", agentId: "main", input: [{ type: "text", text: "Start a newer call without terminal usage." }], origin: { kind: "user" }, time: UPDATED_AT + 1_000 },
+        { type: "llm.request", agentId: "main", kind: "loop", provider: "anthropic", model: "claude-opus-5", modelAlias: "claude-opus-5", thinkingEffort: "high", turnStep: "1.1", time: UPDATED_AT + 2_000 },
+      ]);
+    });
+    const evidence = await readKimiWireFile(fixture.mainWire);
+    const result = await collectKimi(operatorHome);
+    const agent = onlyAgent(result);
+    const calls = agent
+      ? await sessionCallsResponse(endpointSnapshot(agent), agent.id, {})
+      : undefined;
+    const callsBody = calls ? await calls.json() as Record<string, unknown> : undefined;
+    const incomplete = result.errors.filter((error) =>
+      error.includes(fixture.mainWire) && /usage.*(?:incomplete|missing|withheld)/i.test(error));
+
+    expect({
+      evidence: {
+        usageIncomplete: evidence.usageIncomplete,
+        input: evidence.tokens.input,
+        output: evidence.tokens.output,
+        cachedInput: evidence.tokens.cachedInput,
+        total: evidence.tokens.total,
+        sessionTotal: evidence.tokens.sessionTotal,
+        sessionCachedInput: evidence.tokens.sessionCachedInput,
+        sessionProcessed: evidence.tokens.sessionProcessed,
+        callSizes: evidence.callSizes,
+      },
+      published: agent && {
+        input: agent.tokens.input,
+        output: agent.tokens.output,
+        cachedInput: agent.tokens.cachedInput,
+        total: agent.tokens.total,
+        sessionTotal: agent.tokens.sessionTotal,
+        sessionCachedInput: agent.tokens.sessionCachedInput,
+        sessionProcessed: agent.tokens.sessionProcessed,
+        callSizes: agent.callSizes,
+        contextPct: agent.contextPct,
+      },
+      warningCount: incomplete.length,
+      debug: callsBody && {
+        calls: callsBody.calls,
+        sessionProcessed: callsBody.sessionProcessed,
+        prefixSums: callsBody.prefixSums,
+        unavailable: callsBody.unavailable,
+      },
+    }).toEqual({
+      evidence: {
+        usageIncomplete: true,
+        input: undefined,
+        output: undefined,
+        cachedInput: undefined,
+        total: undefined,
+        sessionTotal: undefined,
+        sessionCachedInput: undefined,
+        sessionProcessed: undefined,
+        callSizes: undefined,
+      },
+      published: {
+        input: undefined,
+        output: undefined,
+        cachedInput: undefined,
+        total: undefined,
+        sessionTotal: undefined,
+        sessionCachedInput: undefined,
+        sessionProcessed: undefined,
+        callSizes: undefined,
+        contextPct: undefined,
+      },
+      warningCount: 1,
+      debug: {
+        calls: null,
+        sessionProcessed: null,
+        prefixSums: null,
+        unavailable: expect.stringMatching(/Kimi.*(?:partial|incomplete)|(?:partial|incomplete).*Kimi/i),
+      },
+    });
+  });
+
+  test.each(["per-call", "session"] as const)(
+    "KIMI-RED-05D finite %s usage overflow keeps direct evidence but withholds incomplete derived totals",
+    async (overflowAt) => {
+      const { operatorHome, fixture } = defaultFixture(`usage-overflow-${overflowAt}`, (draft) => {
+        wireMutation(draft, (rows) => {
+          for (const row of rows) {
+            const usage = row.type === "usage.record"
+              ? row.usage
+              : row.type === "context.append_loop_event" && row.event?.type === "step.end"
+                ? row.event.usage
+                : undefined;
+            if (!usage) continue;
+            Object.assign(usage, {
+              inputOther: Number.MAX_VALUE,
+              output: overflowAt === "per-call" ? Number.MAX_VALUE : 0,
+              inputCacheRead: overflowAt === "per-call" ? Number.MAX_VALUE : 0,
+              inputCacheCreation: overflowAt === "per-call" ? Number.MAX_VALUE : 0,
+            });
+          }
+          if (overflowAt === "per-call") return rows;
+          return [...rows,
+            { type: "turn.prompt", agentId: "main", input: [{ type: "text", text: "Add a second finite call that overflows the session." }], origin: { kind: "user" }, time: UPDATED_AT + 1_000 },
+            { type: "context.append_loop_event", agentId: "main", event: { type: "step.end", uuid: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", turnId: "1", step: 1, finishReason: "end_turn", usage: { inputOther: Number.MAX_VALUE, output: 0, inputCacheRead: 0, inputCacheCreation: 0 } }, time: UPDATED_AT + 2_000 },
+            { type: "usage.record", agentId: "main", usageScope: "turn", model: "claude-opus-5", usage: { inputOther: Number.MAX_VALUE, output: 0, inputCacheRead: 0, inputCacheCreation: 0 }, time: UPDATED_AT + 2_100 },
+            { type: "turn.ended", agentId: "main", turnId: 1, reason: "completed", durationMs: 1_000, time: UPDATED_AT + 2_200 },
+            { type: "turn.prompt", agentId: "main", input: [{ type: "text", text: "Keep a safe latest call after the session overflow." }], origin: { kind: "user" }, time: UPDATED_AT + 3_000 },
+            { type: "context.append_loop_event", agentId: "main", event: { type: "step.end", uuid: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", turnId: "2", step: 1, finishReason: "end_turn", usage: { inputOther: 2, output: 3, inputCacheRead: 5, inputCacheCreation: 1 } }, time: UPDATED_AT + 4_000 },
+            { type: "usage.record", agentId: "main", usageScope: "turn", model: "claude-opus-5", usage: { inputOther: 2, output: 3, inputCacheRead: 5, inputCacheCreation: 1 }, time: UPDATED_AT + 4_100 },
+            { type: "turn.ended", agentId: "main", turnId: 2, reason: "completed", durationMs: 1_000, time: UPDATED_AT + 4_200 },
+          ];
+        });
+      });
+      const result = await collectKimi(operatorHome);
+      const agent = onlyAgent(result);
+      const calls = agent
+        ? await sessionCallsResponse(endpointSnapshot(agent), agent.id, {})
+        : undefined;
+      const callsBody = calls ? await calls.json() as Record<string, unknown> : undefined;
+      const overflowWarnings = result.errors.filter((reason) =>
+        reason.includes(fixture.mainWire) && /usage.*overflow/i.test(reason));
+
+      expect({
+        input: agent?.tokens.input,
+        output: agent?.tokens.output,
+        cachedInput: agent?.tokens.cachedInput,
+        total: agent?.tokens.total,
+        sessionTotal: agent?.tokens.sessionTotal,
+        sessionCachedInput: agent?.tokens.sessionCachedInput,
+        sessionProcessed: agent?.tokens.sessionProcessed,
+        callSizes: agent?.callSizes,
+        scope: agent?.tokens.scope,
+        provenance: agent?.tokens.provenance,
+        warningCount: overflowWarnings.length,
+        serializedNull: JSON.stringify(agent?.tokens).includes("null"),
+        endpoint: callsBody && {
+          calls: callsBody.calls,
+          sessionProcessed: callsBody.sessionProcessed,
+          prefixSums: callsBody.prefixSums,
+          unavailable: callsBody.unavailable,
+        },
+      }).toEqual({
+        input: overflowAt === "per-call" ? Number.MAX_VALUE : 2,
+        output: overflowAt === "per-call" ? Number.MAX_VALUE : 3,
+        cachedInput: overflowAt === "per-call" ? Number.MAX_VALUE : 5,
+        total: overflowAt === "per-call" ? undefined : 11,
+        sessionTotal: undefined,
+        sessionCachedInput: undefined,
+        sessionProcessed: undefined,
+        callSizes: undefined,
+        scope: "latest-turn",
+        provenance: "observed",
+        warningCount: 1,
+        serializedNull: false,
+        endpoint: {
+          calls: null,
+          sessionProcessed: null,
+          prefixSums: null,
+          unavailable: expect.stringMatching(/Kimi.*(?:partial|incomplete)|(?:partial|incomplete).*Kimi/i),
+        },
+      });
+    },
+  );
+
+  test("KIMI-RED-05C accepted state and wire strings use shared public bounds without clipping Inspector evidence", async () => {
+    const authoredTitle = `Authored Kimi title ${"t".repeat(MAX_NAME_LENGTH + 40)}`;
+    const taskText = `Verify bounded Kimi identity ${"q".repeat(MAX_HUMAN_MESSAGE_CHARS + 80)}`;
+    const userText = `Bounded Kimi user message ${"u".repeat(MAX_HUMAN_MESSAGE_CHARS + 80)}`;
+    const assistantText = `Bounded Kimi assistant message ${"a".repeat(MAX_HUMAN_MESSAGE_CHARS + 80)}`;
+    const authored = defaultFixture("bounds-authored", (draft) => {
+      Object.assign(draft.state ?? {}, { title: authoredTitle, titleKind: "custom" });
+    });
+    const wire = defaultFixture("bounds-wire", (draft) => {
+      Object.assign(draft.state ?? {}, { title: "Generated title is not identity", titleKind: "generated" });
+      wireMutation(draft, (rows) => rows.map((row) => {
+        if (row.type === "turn.prompt") {
+          return { ...row, input: [{ type: "text", text: taskText }] };
+        }
+        if (row.type === "context.append_message" && row.message?.role === "user") {
+          return { ...row, message: { ...row.message, content: [{ type: "text", text: userText }] } };
+        }
+        if (row.type === "context.append_loop_event" && row.event?.type === "content.part" && row.event?.part?.type === "text") {
+          return { ...row, event: { ...row.event, part: { ...row.event.part, text: assistantText } } };
+        }
+        return row;
+      }));
+    });
+    const [authoredAgent, wireAgent] = await Promise.all([
+      collectKimi(authored.operatorHome),
+      collectKimi(wire.operatorHome),
+    ]).then((results) => results.map(onlyAgent));
+    const inspector = wireAgent
+      ? await transcriptResponse(endpointSnapshot(wireAgent), wireAgent.id, 100, {})
+      : undefined;
+    const inspectorBody = inspector
+      ? await inspector.json() as { lines?: Array<{ role?: string; text?: string }> }
+      : undefined;
+    const inspectorLines = inspectorBody?.lines ?? [];
+
+    expect({
+      authoredIdentity: authoredAgent && {
+        displayName: authoredAgent.displayName,
+        name: authoredAgent.identity?.name,
+        base: authoredAgent.identity?.base,
+      },
+      wireIdentity: wireAgent && {
+        displayName: wireAgent.displayName,
+        name: wireAgent.identity?.name,
+        base: wireAgent.identity?.base,
+        task: wireAgent.task,
+      },
+      messages: wireAgent && {
+        human: wireAgent.lastHumanMessage,
+        user: wireAgent.lastUserMessage,
+        agent: wireAgent.lastAgentMessage,
+        closing: wireAgent.lastAgentClosing,
+      },
+      inspectorPreservesNative: {
+        user: inspectorLines.some((line) => line.role === "user" && line.text === userText),
+        assistant: inspectorLines.some((line) => line.role === "assistant" && line.text === assistantText),
+      },
+    }).toEqual({
+      authoredIdentity: {
+        displayName: `${authoredTitle.slice(0, MAX_NAME_LENGTH - 1).trimEnd()}…`,
+        name: `${authoredTitle.slice(0, MAX_NAME_LENGTH - 1).trimEnd()}…`,
+        base: `${authoredTitle.slice(0, MAX_NAME_LENGTH - 1).trimEnd()}…`,
+      },
+      wireIdentity: {
+        displayName: expect.stringMatching(new RegExp(`^.{${MAX_NAME_LENGTH}}$`)),
+        name: expect.stringMatching(new RegExp(`^.{${MAX_NAME_LENGTH}}$`)),
+        base: expect.stringMatching(new RegExp(`^.{${MAX_NAME_LENGTH}}$`)),
+        task: readableHumanMessage(KIMI, taskText),
+      },
+      messages: {
+        human: readableHumanMessage(KIMI, assistantText),
+        user: readableHumanMessage(KIMI, userText),
+        agent: readableHumanMessage(KIMI, assistantText),
+        closing: readableClosing(KIMI, assistantText),
+      },
+      inspectorPreservesNative: { user: true, assistant: true },
+    });
+  });
+
   test("KIMI-RED-06 observed model and effort gain a window only after a real catalog match", async () => {
     const known = defaultFixture("model-known");
     const unknown = defaultFixture("model-unknown", (draft) => {
@@ -773,6 +1088,392 @@ describe("Kimi Code CLI assertion-only source contract", () => {
       malformed: true,
       damagedRows: 0,
       abortPreserved: true,
+    });
+  });
+
+  test.each(["missing", "unreadable"] as const)(
+    "KIMI-RED-10A a %s declared-child evidence scan keeps the main row but degrades source health",
+    async (failure) => {
+      const fixture = directFixture(`health-child-${failure}`, (draft) => {
+        if (failure === "missing") draft.childText = undefined;
+      });
+      const agentsDir = join(fixture.sessionDir, "agents");
+      const originalOpendir = fsPromises.opendir;
+      const opendirSpy = failure === "unreadable"
+        ? spyOn(fsPromises as any, "opendir").mockImplementation(async (path: string, ...args: any[]) => {
+            if (path === agentsDir) {
+              throw Object.assign(new Error("declared child fixture denied"), { code: "EACCES" });
+            }
+            return (originalOpendir as any)(path, ...args);
+          })
+        : undefined;
+      let result: CollectionResult<CollectedAgent[]>;
+      try {
+        result = await collectKimi(tempRoot(`health-child-${failure}-home`), {
+          extraKimiRoots: [fixture.root],
+        });
+      } finally {
+        opendirSpy?.mockRestore();
+      }
+      const agent = onlyAgent(result);
+      const childDiagnostics = result.errors.filter((reason) =>
+        reason.startsWith(`${agentsDir}:`) && /Kimi.*(?:declared child|state declares).*partial/i.test(reason));
+
+      expect({
+        rows: result.value.length,
+        subagentCount: agent?.subagentCount,
+        artifacts: agent?.artifacts,
+        sourceQualifiedDegraded: childDiagnostics.length === 1,
+        diagnosticCount: result.errors.length,
+      }).toEqual({
+        rows: 1,
+        subagentCount: 1,
+        artifacts: [{ label: "Kimi Code session", path: fixture.mainWire, kind: "transcript" }],
+        sourceQualifiedDegraded: true,
+        diagnosticCount: 1,
+      });
+    },
+  );
+
+  test("KIMI-RED-10I a missing named child cannot be substituted by an unrelated physical child", async () => {
+    const fixture = directFixture("health-child-named-substitution", (draft) => {
+      draft.childText = undefined;
+    });
+    const agentsDir = join(fixture.sessionDir, "agents");
+    rmSync(join(agentsDir, "agent-0"), { recursive: true, force: true });
+    const unrelatedWire = join(agentsDir, "unrelated-child", "wire.jsonl");
+    mkdirSync(join(agentsDir, "unrelated-child"), { recursive: true });
+    writeFileSync(unrelatedWire, readFileSync(FIXTURE_CHILD_WIRE, "utf8"));
+
+    const result = await collectKimi(tempRoot("health-child-named-substitution-home"), {
+      extraKimiRoots: [fixture.root],
+    });
+    const agent = onlyAgent(result);
+    const childDiagnostics = result.errors.filter((reason) =>
+      reason.startsWith(`${agentsDir}:`) && /Kimi state declares.*partial/i.test(reason));
+
+    expect({
+      rows: result.value.length,
+      subagentCount: agent?.subagentCount,
+      artifactPaths: agent?.artifacts.map((artifact: { path: string }) => artifact.path),
+      unrelatedPublished: agent?.artifacts.some((artifact: { path: string }) => artifact.path === unrelatedWire),
+      sourceHealthy: result.errors.length === 0,
+      declaredChildDiagnosticCount: childDiagnostics.length,
+    }).toEqual({
+      rows: 1,
+      subagentCount: 1,
+      artifactPaths: [fixture.mainWire],
+      unrelatedPublished: false,
+      sourceHealthy: false,
+      declaredChildDiagnosticCount: 1,
+    });
+  });
+
+  test("KIMI-RED-10B one opened handle prevents pathname replacement from bypassing the wire byte cap", async () => {
+    const { operatorHome, fixture } = defaultFixture("health-replace-race");
+    const originalText = readFileSync(fixture.mainWire, "utf8");
+    const replacementSentinel = "replacement-after-validation-must-not-publish";
+    const replacementText = jsonl([...jsonlRows(originalText), {
+      type: "context.append_message",
+      agentId: "main",
+      message: {
+        role: "user",
+        content: [{ type: "text", text: `${replacementSentinel}${"r".repeat(8 * 1024 * 1024)}` }],
+        toolCalls: [],
+      },
+      time: UPDATED_AT + 1_000,
+    }]);
+    const originalPath = `${fixture.mainWire}.opened`;
+    let replacementAttempted = false;
+    const replacePath = (): void => {
+      if (replacementAttempted) return;
+      replacementAttempted = true;
+      renameSync(fixture.mainWire, originalPath);
+      writeFileSync(fixture.mainWire, replacementText);
+    };
+    const originalStat = fsPromises.stat;
+    const originalOpen = fsPromises.open;
+    const statSpy = spyOn(fsPromises as any, "stat").mockImplementation(async (path: string, ...args: any[]) => {
+      const details = await (originalStat as any)(path, ...args);
+      if (path === fixture.mainWire) replacePath();
+      return details;
+    });
+    const openSpy = spyOn(fsPromises as any, "open").mockImplementation(async (path: string, ...args: any[]) => {
+      const handle = await (originalOpen as any)(path, ...args);
+      if (path === fixture.mainWire) replacePath();
+      return handle;
+    });
+    let result: CollectionResult<CollectedAgent[]>;
+    try {
+      result = await collectKimi(operatorHome);
+    } finally {
+      statSpy.mockRestore();
+      openSpy.mockRestore();
+    }
+    const agent = onlyAgent(result);
+
+    expect({
+      replacementAttempted,
+      replacementExceedsCap: statSync(fixture.mainWire).size > 8 * 1024 * 1024,
+      rows: result.value.length,
+      errors: result.errors,
+      lastHumanMessage: agent?.lastHumanMessage,
+      replacementPublished: agent?.transcriptTail?.includes(replacementSentinel) ?? false,
+    }).toEqual({
+      replacementAttempted: true,
+      replacementExceedsCap: true,
+      rows: 1,
+      errors: [],
+      lastHumanMessage: "I will inspect only the public fixture.",
+      replacementPublished: false,
+    });
+  });
+
+  test("KIMI-RED-10C high-volume provider directory admission is capped with one truncation diagnostic", async () => {
+    const root = join(tempRoot("health-directory-volume"), "kimi-home");
+    const sessions = join(root, "sessions");
+    mkdirSync(sessions, { recursive: true });
+    for (let index = 0; index < 65; index += 1) {
+      const suffix = String(index).padStart(12, "0");
+      mkdirSync(join(
+        sessions,
+        `wd-volume-${String(index).padStart(3, "0")}`,
+        `session_00000000-0000-4000-8000-${suffix}`,
+      ), { recursive: true });
+    }
+    const result = await collectKimi(tempRoot("health-directory-volume-home"), {
+      extraKimiRoots: [root],
+    });
+    const truncationDiagnostics = result.errors.filter((reason) =>
+      reason.includes(root) && /directory admission.*truncat/i.test(reason));
+    const admittedStateReads = result.errors.filter((reason) =>
+      reason.includes(root) && /state\.json: Kimi state could not be read/i.test(reason));
+
+    expect({
+      rows: result.value.length,
+      absent: result.absent,
+      admittedStateReads: admittedStateReads.length,
+      truncationDiagnostics,
+    }).toEqual({
+      rows: 0,
+      absent: undefined,
+      admittedStateReads: 64,
+      truncationDiagnostics: [
+        `${root}: Kimi directory admission truncated at 64 workdir entries or 256 session entries; remaining provider entries were not inspected`,
+      ],
+    });
+  });
+
+  test("KIMI-RED-10D child artifact admission counts irrelevant dirents and reads at most one truncation witness", async () => {
+    const fixture = directFixture("health-child-volume");
+    const agentsDir = join(fixture.sessionDir, "agents");
+    const witnessName = "private-witness-must-not-leak";
+    const originalOpendir = fsPromises.opendir;
+    const originalReaddir = fsPromises.readdir;
+    let reads = 0;
+    let closes = 0;
+    let unboundedReaddirCalls = 0;
+    const opendirSpy = spyOn(fsPromises as any, "opendir").mockImplementation(async (path: string, ...args: any[]) => {
+      if (path !== agentsDir) return (originalOpendir as any)(path, ...args);
+      return {
+        read: async () => {
+          reads += 1;
+          if (reads <= 2) {
+            return { name: `irrelevant-${reads}`, isDirectory: () => false };
+          }
+          if (reads === 3) return { name: witnessName, isDirectory: () => true };
+          throw new Error("Kimi child admission read past its single witness");
+        },
+        close: async () => { closes += 1; },
+      };
+    });
+    const readdirSpy = spyOn(fsPromises as any, "readdir").mockImplementation(async (path: string, ...args: any[]) => {
+      if (path === agentsDir) unboundedReaddirCalls += 1;
+      return (originalReaddir as any)(path, ...args);
+    });
+    let result: CollectionResult<CollectedAgent[]>;
+    try {
+      result = await collectKimi(tempRoot("health-child-volume-home"), { extraKimiRoots: [fixture.root] });
+    } finally {
+      readdirSpy.mockRestore();
+      opendirSpy.mockRestore();
+    }
+    const agent = onlyAgent(result);
+    const childDiagnostics = result.errors.filter((reason) => /child artifact admission.*truncat/i.test(reason));
+
+    expect({
+      rows: result.value.length,
+      artifacts: agent?.artifacts,
+      reads,
+      closes,
+      unboundedReaddirCalls,
+      childDiagnostics,
+      witnessLeaked: result.errors.some((reason) => reason.includes(witnessName)),
+    }).toEqual({
+      rows: 1,
+      artifacts: [{ label: "Kimi Code session", path: fixture.mainWire, kind: "transcript" }],
+      reads: 3,
+      closes: 1,
+      unboundedReaddirCalls: 0,
+      childDiagnostics: [
+        `${agentsDir}: Kimi child artifact admission truncated at 2 total entries; remaining child entries were not inspected`,
+      ],
+      witnessLeaked: false,
+    });
+  });
+
+  test("KIMI-RED-10E child artifact admission preserves cancellation raised by directory close", async () => {
+    const fixture = directFixture("health-child-close-abort");
+    const agentsDir = join(fixture.sessionDir, "agents");
+    const controller = new AbortController();
+    const reason = new Error("Kimi child close abort sentinel");
+    const originalOpendir = fsPromises.opendir;
+    let reads = 0;
+    let closes = 0;
+    const opendirSpy = spyOn(fsPromises as any, "opendir").mockImplementation(async (path: string, ...args: any[]) => {
+      if (path !== agentsDir) return (originalOpendir as any)(path, ...args);
+      return {
+        read: async () => {
+          reads += 1;
+          return null;
+        },
+        close: async () => {
+          closes += 1;
+          controller.abort(reason);
+        },
+      };
+    });
+    let caught: unknown;
+    try {
+      await collectKimi(
+        tempRoot("health-child-close-abort-home"),
+        { extraKimiRoots: [fixture.root] },
+        controller.signal,
+      );
+    } catch (error) {
+      caught = error;
+    } finally {
+      opendirSpy.mockRestore();
+    }
+
+    expect({ caughtIsExactReason: caught === reason, reads, closes }).toEqual({
+      caughtIsExactReason: true,
+      reads: 1,
+      closes: 1,
+    });
+  });
+
+  test("KIMI-RED-10F child artifact admission reports a deadline raised by directory close", async () => {
+    const fixture = directFixture("health-child-close-deadline");
+    const agentsDir = join(fixture.sessionDir, "agents");
+    const originalOpendir = fsPromises.opendir;
+    const clock = UPDATED_AT + 100_000;
+    let expired = false;
+    let reads = 0;
+    let closes = 0;
+    const nowSpy = spyOn(Date, "now").mockImplementation(() => expired ? clock + 10 : clock);
+    const opendirSpy = spyOn(fsPromises as any, "opendir").mockImplementation(async (path: string, ...args: any[]) => {
+      if (path !== agentsDir) return (originalOpendir as any)(path, ...args);
+      return {
+        read: async () => {
+          reads += 1;
+          return null;
+        },
+        close: async () => {
+          closes += 1;
+          expired = true;
+        },
+      };
+    });
+    let result: CollectionResult<CollectedAgent[]>;
+    try {
+      result = await collectKimi(
+        tempRoot("health-child-close-deadline-home"),
+        { extraKimiRoots: [fixture.root], kimiReadDeadlineMs: 10 },
+      );
+    } finally {
+      opendirSpy.mockRestore();
+      nowSpy.mockRestore();
+    }
+
+    expect({ rows: result.value.length, reads, closes, errors: result.errors }).toEqual({
+      rows: 1,
+      reads: 1,
+      closes: 1,
+      errors: [
+        `${agentsDir}: Kimi child artifact scan exceeded 10ms aggregate read deadline; remaining child entries were not inspected`,
+      ],
+    });
+  });
+
+  test("KIMI-RED-10G capped reads preserve cancellation raised by file-handle close", async () => {
+    const { operatorHome, fixture } = defaultFixture("health-wire-close-abort");
+    const controller = new AbortController();
+    const reason = new Error("Kimi wire close abort sentinel");
+    const originalOpen = fsPromises.open;
+    let closes = 0;
+    const openSpy = spyOn(fsPromises as any, "open").mockImplementation(async (path: string, ...args: any[]) => {
+      const handle = await (originalOpen as any)(path, ...args);
+      if (path !== fixture.mainWire) return handle;
+      return {
+        stat: handle.stat.bind(handle),
+        read: handle.read.bind(handle),
+        close: async () => {
+          closes += 1;
+          await handle.close();
+          controller.abort(reason);
+        },
+      };
+    });
+    let caught: unknown;
+    try {
+      await collectKimi(operatorHome, {}, controller.signal);
+    } catch (error) {
+      caught = error;
+    } finally {
+      openSpy.mockRestore();
+    }
+
+    expect({ caughtIsExactReason: caught === reason, closes }).toEqual({
+      caughtIsExactReason: true,
+      closes: 1,
+    });
+  });
+
+  test("KIMI-RED-10H capped reads report a deadline raised by file-handle close before publishing", async () => {
+    const { operatorHome, fixture } = defaultFixture("health-wire-close-deadline");
+    const originalOpen = fsPromises.open;
+    const clock = UPDATED_AT + 100_000;
+    let expired = false;
+    let closes = 0;
+    const nowSpy = spyOn(Date, "now").mockImplementation(() => expired ? clock + 10 : clock);
+    const openSpy = spyOn(fsPromises as any, "open").mockImplementation(async (path: string, ...args: any[]) => {
+      const handle = await (originalOpen as any)(path, ...args);
+      if (path !== fixture.mainWire) return handle;
+      return {
+        stat: handle.stat.bind(handle),
+        read: handle.read.bind(handle),
+        close: async () => {
+          closes += 1;
+          await handle.close();
+          expired = true;
+        },
+      };
+    });
+    let result: CollectionResult<CollectedAgent[]>;
+    try {
+      result = await collectKimi(operatorHome, { kimiReadDeadlineMs: 10 });
+    } finally {
+      openSpy.mockRestore();
+      nowSpy.mockRestore();
+    }
+
+    expect({ rows: result.value.length, closes, errors: result.errors }).toEqual({
+      rows: 0,
+      closes: 1,
+      errors: [
+        `${fixture.mainWire}: Kimi wire could not be read: exceeded 10ms aggregate read deadline`,
+      ],
     });
   });
 

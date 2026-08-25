@@ -33,6 +33,7 @@ const PARSER_PATH = join(import.meta.dir, "..", "src", "server", "kilo-store.ts"
 const ROOT_SESSION_ID = "ses_fixture_root";
 const CHILD_SESSION_ID = "ses_fixture_child";
 const ARCHIVED_SESSION_ID = "ses_fixture_archived";
+const WHOLE_SCAN_DIRENT_LIMIT = 64;
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
@@ -505,7 +506,7 @@ test("14 V1 transcript survives an empty V2 reset and later stray V2 projection"
   expect(JSON.stringify(projected)).not.toContain("REJECTED_POST_RESET_V2_TEXT");
 });
 
-test("15 bounded newest-session enumeration is ordered newest-first with explicit truncation", async () => {
+test("15 bounded session enumeration sorts only the native-id-admitted window by updated time", async () => {
   const path = await fixtureStore();
   openStore(path, (database) => {
     database.exec("BEGIN");
@@ -525,11 +526,112 @@ test("15 bounded newest-session enumeration is ordered newest-first with explici
   );
   expect(evidence.sessions).toHaveLength(KILO_STORE_LIMITS.sessions);
   expect(evidence.sessions[0]?.sessionId).toBe("ses_bound_054");
-  expect(evidence.sessions.at(-1)?.sessionId).toBe("ses_bound_005");
+  expect(evidence.sessions.at(-1)?.sessionId).toBe(ARCHIVED_SESSION_ID);
+  expect(evidence.sessions.map(({ sessionId }) => sessionId)).not.toContain("ses_bound_006");
   expect(evidence.diagnostics).toContainEqual(expect.objectContaining({
     kind: "truncated",
     table: "session",
   }));
+});
+
+test("15a session admission bounds hostile work through the native id index without claiming global recency", async () => {
+  const path = await fixtureStore();
+  openStore(path, (database) => {
+    database.exec("DELETE FROM part; DELETE FROM message; DELETE FROM session;");
+    for (const [id, updatedAt] of [
+      ["ses_zeta_3", 1800000500101],
+      ["ses_zeta_2", 1800000500103],
+      ["ses_zeta_1", 1800000500102],
+      ["ses_alpha_global_newest", 1800000599999],
+    ] as const) {
+      database.run(
+        "INSERT INTO session(id, project_id, slug, directory, path, title, version, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write, time_created, time_updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+          id,
+          "prj_fixture",
+          id,
+          `/synthetic/kilo/project/${id}`,
+          id,
+          id,
+          "synthetic",
+          0,
+          0,
+          0,
+          0,
+          0,
+          updatedAt,
+          updatedAt,
+        ],
+      );
+    }
+  });
+
+  const descriptor = Object.getOwnPropertyDescriptor(Database.prototype, "query");
+  if (!descriptor || typeof descriptor.value !== "function") {
+    throw new Error("bun:sqlite Database.query is unavailable for session query-plan capture");
+  }
+  const originalQuery = descriptor.value as (...args: unknown[]) => unknown;
+  const executedSql: string[] = [];
+  Object.defineProperty(Database.prototype, "query", {
+    ...descriptor,
+    value: function (this: Database, ...args: unknown[]) {
+      executedSql.push(String(args[0] ?? ""));
+      return Reflect.apply(originalQuery, this, args);
+    },
+  });
+
+  let evidence: KiloStoreEvidence;
+  try {
+    evidence = readStoreForClaim(
+      "hostile session admission stops at the native id-index boundary",
+      path,
+      { sessionLimit: 2 },
+    );
+  } finally {
+    Object.defineProperty(Database.prototype, "query", descriptor);
+  }
+  const sessionQueries = executedSql.filter((sql) =>
+    /\bFROM\s+session\b/i.test(sql) && /\bLIMIT\s+\?/i.test(sql)
+  );
+  const planDatabase = new Database(path, { readonly: true });
+  let planDetails: string[];
+  try {
+    planDetails = sessionQueries.flatMap((query) =>
+      (planDatabase.query(`EXPLAIN QUERY PLAN ${query}`).all(3) as Array<{ detail?: unknown }>)
+        .flatMap(({ detail }) => typeof detail === "string" ? [detail] : [])
+    );
+  } finally {
+    planDatabase.close();
+  }
+  const truncationDetail = evidence.diagnostics.find(({ kind, table }) =>
+    kind === "truncated" && table === "session"
+  )?.detail;
+
+  expect({
+    retainedSessionIds: evidence.sessions.map(({ sessionId }) => sessionId),
+    globallyNewestRetained: evidence.sessions.some(({ sessionId }) =>
+      sessionId === "ses_alpha_global_newest"
+    ),
+    sessionQueryShapes: sessionQueries.length,
+    indexedNativeIdScans: planDetails.filter((detail) =>
+      detail === "SCAN session USING INDEX sqlite_autoindex_session_1"
+    ).length,
+    usesTemporaryBTree: planDetails.some((detail) => /\bUSE\s+TEMP\s+B-TREE\b/i.test(detail)),
+    ordersByUnindexedRecency: sessionQueries.some((query) =>
+      /\bORDER\s+BY\s+time_updated\b/i.test(query)
+    ),
+    truncationNamesTradeoff: /native id order.*global recency is unproven/i.test(
+      truncationDetail ?? "",
+    ),
+  }).toEqual({
+    retainedSessionIds: ["ses_zeta_2", "ses_zeta_1"],
+    globallyNewestRetained: false,
+    sessionQueryShapes: 1,
+    indexedNativeIdScans: 1,
+    usesTemporaryBTree: false,
+    ordersByUnindexedRecency: false,
+    truncationNamesTradeoff: true,
+  });
 });
 
 test("16 early-plus-recent message windows preserve first task and newest closing", async () => {
@@ -783,23 +885,27 @@ test("17a selected-part SQL pairs test 17 with fixed indexed early/recent reads 
       /\bmessage_id\b/i.test(query)
     );
   const boundaryQueries = [...new Set(activeQueries.filter((query) =>
-    /\bWHERE\s+message_id\s*=\s*\?/i.test(query) &&
-    /\bORDER\s+BY\s+id\s+(?:ASC|DESC)\b/i.test(query)
+    /\bWITH\s+selected_messages\b/i.test(query) &&
+    /\bWHERE\s+message_id\s*=\s*selected_messages\.message_id\b/i.test(query) &&
+    /\bORDER\s+BY\s+id\s+COLLATE\s+BINARY\s+ASC\b/i.test(query) &&
+    /\bORDER\s+BY\s+id\s+COLLATE\s+BINARY\s+DESC\b/i.test(query)
   ))];
-  const plans: Record<"ASC" | "DESC", string[]> = { ASC: [], DESC: [] };
+  const planDetails: string[] = [];
   const planDatabase = new Database(path, { readonly: true });
   try {
     for (const query of boundaryQueries) {
-      const direction: "ASC" | "DESC" = /\bORDER\s+BY\s+id\s+DESC\b/i.test(query)
-        ? "DESC"
-        : "ASC";
-      const rows = planDatabase.query(`EXPLAIN QUERY PLAN ${query}`).all(
-        "msg_fixture_assistant_2",
+      const placeholderCount = query.match(/\?/g)?.length ?? 0;
+      const bindings = [
+        ...Array.from({ length: placeholderCount - 2 }, () => "msg_fixture_assistant_2"),
         9,
-      ) as Array<{ detail?: unknown }>;
-      plans[direction] = rows.flatMap(({ detail }) =>
+        9,
+      ];
+      const rows = planDatabase.query(`EXPLAIN QUERY PLAN ${query}`).all(...bindings) as Array<{
+        detail?: unknown;
+      }>;
+      planDetails.push(...rows.flatMap(({ detail }) =>
         typeof detail === "string" ? [detail] : []
-      );
+      ));
     }
   } finally {
     planDatabase.close();
@@ -828,19 +934,97 @@ test("17a selected-part SQL pairs test 17 with fixed indexed early/recent reads 
     boundedEarlyQuery: true,
     boundedRecentQuery: true,
   });
-  expect(plans).toEqual({
-    ASC: ["SEARCH part USING COVERING INDEX part_message_id_id_idx (message_id=?)"],
-    DESC: ["SEARCH part USING COVERING INDEX part_message_id_id_idx (message_id=?)"],
-  });
-  const planDetails = [...plans.ASC, ...plans.DESC];
   expect({
     boundaryQueryShapes: boundaryQueries.length,
+    indexedBoundarySearches: planDetails.filter((detail) =>
+      detail === "SEARCH part USING COVERING INDEX part_message_id_id_idx (message_id=?)"
+    ).length,
     scansPart: planDetails.some((detail) => /\bSCAN\s+part\b/i.test(detail)),
     usesTemporaryBTree: planDetails.some((detail) => /\bUSE\s+TEMP\s+B-TREE\b/i.test(detail)),
   }).toEqual({
-    boundaryQueryShapes: 2,
+    boundaryQueryShapes: 1,
+    indexedBoundarySearches: 2,
     scansPart: false,
     usesTemporaryBTree: false,
+  });
+});
+
+test("17b maximum message window admits part boundaries with one session query", async () => {
+  const path = await fixtureStore();
+  const maximumMessageWindow =
+    KILO_STORE_LIMITS.earlyMessagesPerSession + KILO_STORE_LIMITS.recentMessagesPerSession;
+  openStore(path, (database) => {
+    database.exec("BEGIN");
+    try {
+      for (let index = 0; index < maximumMessageWindow + 4; index += 1) {
+        const suffix = String(index).padStart(3, "0");
+        const createdAt = 1800000300000 + index;
+        database.run(
+          "INSERT INTO message(id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)",
+          [
+            `msg_query_bound_${suffix}`,
+            ROOT_SESSION_ID,
+            createdAt,
+            createdAt,
+            JSON.stringify({
+              role: "assistant",
+              time: { created: createdAt, completed: createdAt },
+              parentID: "msg_fixture_user_2",
+              finish: "stop",
+            }),
+          ],
+        );
+      }
+      database.exec("COMMIT");
+    } catch (error) {
+      database.exec("ROLLBACK");
+      throw error;
+    }
+  });
+
+  const descriptor = Object.getOwnPropertyDescriptor(Database.prototype, "query");
+  if (!descriptor || typeof descriptor.value !== "function") {
+    throw new Error("bun:sqlite Database.query is unavailable for part query-count capture");
+  }
+  const originalQuery = descriptor.value as (...args: unknown[]) => unknown;
+  const executedSql: string[] = [];
+  Object.defineProperty(Database.prototype, "query", {
+    ...descriptor,
+    value: function (this: Database, ...args: unknown[]) {
+      executedSql.push(String(args[0] ?? ""));
+      return Reflect.apply(originalQuery, this, args);
+    },
+  });
+
+  let evidence: KiloStoreEvidence;
+  try {
+    evidence = readStoreForClaim(
+      "maximum message windows use one session-bounded part admission query",
+      path,
+      { sessionId: ROOT_SESSION_ID },
+    );
+  } finally {
+    Object.defineProperty(Database.prototype, "query", descriptor);
+  }
+  expect(Object.getOwnPropertyDescriptor(Database.prototype, "query")).toEqual(descriptor);
+
+  const partQueries = executedSql.filter((sql) => /\bFROM\s+part\b/i.test(sql));
+  const boundaryAdmissionQueries = partQueries.filter((sql) =>
+    /\bmessage_id\b/i.test(sql) && !/\bWHERE\s+rowid\s+IN\s*\(/i.test(sql)
+  );
+  const materializationQueries = partQueries.filter((sql) =>
+    /\bWHERE\s+rowid\s+IN\s*\(/i.test(sql)
+  );
+  expect({
+    selectedMessages: rootSession(evidence).messages.length,
+    boundaryAdmissionQueries: boundaryAdmissionQueries.length,
+    materializationQueries: materializationQueries.length,
+    totalPartQueries: partQueries.length,
+  }).toEqual({
+    selectedMessages: maximumMessageWindow,
+    boundaryAdmissionQueries: 1,
+    materializationQueries: 1,
+    totalPartQueries: 2,
   });
 });
 
@@ -1097,6 +1281,90 @@ test("22c Kilo data-dir reads cap matching stores at sixteen with one fixed rema
       database.close();
     }
   }
+});
+
+test("22f irrelevant dirents consume the strict whole-scan budget with one witness", async () => {
+  const dataDir = await temporaryDirectory("formic-kilo-total-dirent-limit-");
+  for (let index = 0; index <= WHOLE_SCAN_DIRENT_LIMIT; index += 1) {
+    await writeFile(join(dataDir, `irrelevant-${String(index).padStart(3, "0")}`), "noise");
+  }
+  await fixtureStore("kilo.db", dataDir);
+  const observed: string[] = [];
+  const options = {
+    testHooks: {
+      onDataDirEntry(_path: string, name: string) { observed.push(name); },
+    },
+  } as KiloReadOptions;
+
+  const result = readDirForClaim(
+    "irrelevant entries consume Kilo whole-scan capacity before matching stores",
+    dataDir,
+    options,
+  );
+
+  expect(observed).toHaveLength(WHOLE_SCAN_DIRENT_LIMIT + 1);
+  expect(result.stores.every(({ path }) =>
+    observed.slice(0, WHOLE_SCAN_DIRENT_LIMIT).includes(basename(path))
+  )).toBe(true);
+  expect(result.errors).toEqual([
+    expect.stringMatching(/directory entry limit 64.*not enumerated/i),
+  ]);
+});
+
+test("22g non-regular store diagnostics come from the bounded primary scan", async () => {
+  const dataDir = await temporaryDirectory("formic-kilo-nonregular-primary-scan-");
+  const path = join(dataDir, "kilo-beta.db");
+  await mkdir(path);
+
+  expect(readDirForClaim(
+    "the bounded Kilo scan owns non-regular diagnostics",
+    dataDir,
+  )).toEqual({
+    stores: [],
+    errors: [`${path}: Kilo store is not a regular file.`],
+    absent: false,
+  });
+});
+
+test("22h data-dir abort during admission preserves exact reason identity", async () => {
+  const dataDir = await temporaryDirectory("formic-kilo-data-dir-abort-");
+  await writeFile(join(dataDir, "irrelevant"), "noise");
+  const controller = new AbortController();
+  const reason = new Error("stop Kilo data-dir admission");
+  const options = {
+    signal: controller.signal,
+    testHooks: {
+      onDataDirEntry() { controller.abort(reason); },
+    },
+  } as KiloReadOptions;
+
+  let caught: unknown;
+  try {
+    readKiloDataDir(dataDir, options);
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBe(reason);
+});
+
+test("22i data-dir admission stops on the shared absolute deadline", async () => {
+  const dataDir = await temporaryDirectory("formic-kilo-data-dir-mid-deadline-");
+  await writeFile(join(dataDir, "irrelevant-0"), "noise");
+  await fixtureStore("kilo.db", dataDir);
+  let expired = false;
+  const options = {
+    deadlineAtMs: 10,
+    nowMs: () => expired ? 10 : 0,
+    testHooks: {
+      onDataDirEntry() { expired = true; },
+    },
+  } as KiloReadOptions;
+
+  const result = readKiloDataDir(dataDir, options);
+  expect(result.stores).toEqual([]);
+  expect(result.errors).toEqual([
+    expect.stringMatching(/deadline.*not enumerated/i),
+  ]);
 });
 
 test("23 missing latest migration fails closed as schema", async () => {
@@ -3917,6 +4185,21 @@ test("34 an already-expired deadline returns no invented rows and names unenumer
   }));
 });
 
+test("34a an already-aborted read rethrows the exact signal reason", async () => {
+  const abort = new AbortController();
+  const reason = new Error("cancel Kilo store read");
+  const path = await fixtureStore();
+  abort.abort(reason);
+
+  let caught: unknown;
+  try {
+    readKiloStore(path, { signal: abort.signal });
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toBe(reason);
+});
+
 test("35 in-flight deadline preserves an accepted prefix and reports the unenumerated remainder", async () => {
   const path = await fixtureStore();
   openStore(path, (database) => {
@@ -3981,7 +4264,7 @@ test("35a expiry during the selected-part query rejects the unfinished session",
   });
 });
 
-test("35c expiry after the first part boundary prevents all later part SQL", async () => {
+test("35c expiry after session boundary admission prevents final part SQL", async () => {
   const path = await fixtureStore();
   const descriptor = Object.getOwnPropertyDescriptor(Database.prototype, "query");
   if (!descriptor || typeof descriptor.value !== "function") {
@@ -3998,7 +4281,10 @@ test("35c expiry after the first part boundary prevents all later part SQL", asy
       const sql = String(args[0] ?? "");
       if (/\bFROM\s+part\b/i.test(sql)) {
         partSql.push(sql);
-        if (/\bWHERE\s+message_id\s*=\s*\?/i.test(sql)) {
+        if (
+          /\bWITH\s+selected_messages\b/i.test(sql) &&
+          /\bWHERE\s+message_id\s*=\s*selected_messages\.message_id\b/i.test(sql)
+        ) {
           boundaryQueriesCreated += 1;
           if (boundaryQueriesCreated === 1) expired = true;
         }
@@ -4009,17 +4295,17 @@ test("35c expiry after the first part boundary prevents all later part SQL", asy
   let evidence: KiloStoreEvidence;
   try {
     evidence = readStoreForClaim(
-      "expiry after the first real part boundary stops later SQL and rejects the session",
+      "expiry after session boundary admission stops final part SQL and rejects the session",
       path,
       { sessionId: ROOT_SESSION_ID, deadlineAtMs: 10, nowMs: () => expired ? 10 : 0 },
     );
   } finally {
     Object.defineProperty(Database.prototype, "query", descriptor);
   }
-  const boundaryDirections = partSql.flatMap((sql) => {
-    const match = sql.match(/\bORDER\s+BY\s+id\s+(ASC|DESC)\b/i);
-    return match?.[1] ? [match[1].toUpperCase()] : [];
-  });
+  const boundaryDirections = partSql.flatMap((sql) =>
+    [...sql.matchAll(/\bORDER\s+BY\s+id(?:\s+COLLATE\s+BINARY)?\s+(ASC|DESC)\b/gi)]
+      .map((match) => match[1]!.toUpperCase())
+  );
   expect({
     partQueriesStarted: partSql.length,
     boundaryDirections,
@@ -4031,7 +4317,7 @@ test("35c expiry after the first part boundary prevents all later part SQL", asy
     deadlineDiagnostics: evidence.diagnostics.filter(({ kind }) => kind === "deadline"),
   }).toEqual({
     partQueriesStarted: 1,
-    boundaryDirections: ["ASC"],
+    boundaryDirections: ["ASC", "DESC"],
     finalPartQueries: 0,
     sessions: [],
     incomplete: true,
