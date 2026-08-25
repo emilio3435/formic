@@ -3761,15 +3761,33 @@ describe("B12 the bell's spoken line cannot deny a backlog", () => {
 });
 
 describe("B9 the alert outline: repo ink, not a second status hue", () => {
-  test("the mark exists, shimmers, and derives its ink from --repo-tint", () => {
+  test("the mark exists, sweeps, and derives its ink from --repo-tint", () => {
     // 78% repo tint darkened 22% — a bolder version of the row's own colour,
     // so the loud state is still recognisably that repository. The fallback is
     // amber, never ember: ember is reserved for blocking notification badges.
     const block = styles.match(/\.agent-row\.is-alert-hot \{[^}]*\}/)?.[0] ?? "";
     expect(block).not.toBe("");
     expect(block).toContain("--alert-ink: color-mix(in srgb, var(--repo-tint, var(--color-status-warning)) 78%, #000 22%)");
-    expect(block).toContain("transform: translateY(-2px) scale(1.02)");
-    expect(styles).toContain("@keyframes alert-outline-shimmer");
+    /* The mark used to be a LIFT: `translateY(-2px) scale(1.02)` about a left
+       origin, under an outward `0 0 0 2px` ring. Both spent their effect
+       outside the row's own border box — the scale walked CTX/TOKENS/QUIET
+       rightward under `.program { overflow: clip }` until QUIET clipped off
+       the card, and the spread painted over the WAITING/ACTIVE band label
+       above the row. This assertion used to PIN that geometry; it now forbids
+       it, which is the same guard pointed the other way. */
+    expect(block).not.toContain("transform");
+    expect(block).not.toContain("scale(");
+    expect(block).not.toContain("translateY(");
+    // The ring stays inside the box the row already occupies.
+    expect(block).toMatch(/box-shadow:\s*inset 0 0 0/);
+    /* And the mark is still alive rather than merely present — the pulse moved
+       from the ring's thickness to a comet on a masked ::after, driven by a
+       REGISTERED angle. Registration is load-bearing: an unregistered custom
+       property is an untyped token, so the sweep would jump 0deg→360deg once
+       per cycle instead of travelling. */
+    expect(styles).toContain("@keyframes alert-edge-sweep");
+    expect(styles).toMatch(/@property --alert-sweep \{[^}]*syntax: "<angle>"/);
+    expect(styles).toMatch(/\.agent-row\.is-alert-hot::after \{[^}]*conic-gradient\(from var\(--alert-sweep\)/);
   });
 
   test("rule 6 holds — the outline is a shadow, never text colour", () => {
@@ -3779,34 +3797,78 @@ describe("B9 the alert outline: repo ink, not a second status hue", () => {
   });
 
   test("reduced motion is a STATIC outline, not a suppressed one", () => {
-    /* The failure mode a blanket `animation: none` guard would hide: killing
-       the shimmer without restating the resting box-shadow leaves the row with
-       whatever the last frame painted, or nothing. The reduce block has to name
-       this class and re-assert both the outline and the neutralized transform. */
-    const reduce = styles.match(/@media \(prefers-reduced-motion: reduce\) \{[^@]*?\.agent-row\.is-alert-hot \{[^}]*\}/)?.[0] ?? "";
-    expect(reduce).not.toBe("");
-    expect(reduce).toContain("animation: none");
-    expect(reduce).toContain("transform: none");
-    expect(reduce).toMatch(/box-shadow:\s*\n?\s*0 0 0 2px color-mix\(in srgb, var\(--alert-ink\)/);
-    // …and the shimmer itself is opt-IN on no-preference, so a UA that reports
+    /* The invariant is unchanged: a reduced-motion reader must still get a
+       VISIBLE outline in repo ink, not a blanked row. Only the mechanism that
+       delivers it changed, and the new one is the reason this test is shorter.
+
+       The shimmer animated the row's own box-shadow, so killing it left the
+       row wearing whatever the last frame painted — the reduce block had to
+       reconstruct the resting outline by hand, and this test had to check that
+       reconstruction. The sweep animates a ::after instead, so the ring now
+       lives on an un-animated base rule and simply SURVIVES the reduce block
+       intact. That un-animated base rule is therefore the load-bearing fact,
+       and it is what gets asserted in the reconstruction's place. */
+    const block = styles.match(/\.agent-row\.is-alert-hot \{[^}]*\}/)?.[0] ?? "";
+    expect(block).not.toBe("");
+    expect(block).toMatch(/box-shadow:\s*inset 0 0 0 1px color-mix\(in srgb, var\(--alert-ink\)/);
+    expect(block).not.toContain("animation");
+    // The comet is still explicitly stilled, naming the class rather than
+    // leaning on the sheet-wide universal guard alone.
+    const reduceBlocks = [...styles.matchAll(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?\n\}/g)].map((m) => m[0]);
+    const alertReduce = reduceBlocks.find((b) => b.includes(".agent-row.is-alert-hot::after")) ?? "";
+    expect(alertReduce).not.toBe("");
+    expect(alertReduce).toMatch(/\.agent-row\.is-alert-hot::after \{[^}]*animation: none/);
+    // …and the sweep itself is opt-IN on no-preference, so a UA that reports
     // neither answer gets the static outline rather than a moving one.
-    expect(styles).toMatch(/@media \(prefers-reduced-motion: no-preference\) \{\s*\.agent-row\.is-alert-hot \{[^}]*animation: alert-outline-shimmer/);
+    expect(styles).toMatch(/@media \(prefers-reduced-motion: no-preference\) \{\s*\.agent-row\.is-alert-hot::after \{[^}]*animation: alert-edge-sweep/);
   });
 
   test("retro C1 — focus on a hot row is a composite that still names the ring", () => {
-    /* Two ways this row could swallow the keyboard ring, and both are closed
-       here: the box-shadow slot is already occupied by the outline, AND a
-       running animation outranks every normal declaration in that slot — so the
-       focus rule has to stop the shimmer as well as restate the ring, or the
-       ring is invisible for 2.4s at a time on the one row an operator most
-       likely reached with the keyboard. */
-    for (const rule of [...styles.matchAll(/\.agent-row\.is-alert-hot:focus-visible \{[^}]*\}/g)].map((m) => m[0])) {
+    /* Three ways this row could swallow the keyboard ring; all three closed.
+
+       (1) The box-shadow slot is already occupied by the alert ring, so the
+       focus rule restates the keyboard ring in a composite rather than
+       assuming it. Unchanged.
+
+       (2) A running animation outranks every normal declaration in the slot it
+       animates. The shimmer animated box-shadow, so the focus rule had to say
+       `animation: none` or the ring blinked on a 2.4s cycle. The sweep animates
+       a ::after, so nothing touches this rule's box-shadow any more — and that
+       absence is now what gets asserted, since a future edit re-animating the
+       base rule is exactly what would reopen the hole. This is the same guard
+       as the old `animation: none`, moved to the cause from the symptom.
+
+       (3) NEW with the sweep: the comet would otherwise keep crawling around
+       the focused row's edge, competing with the one cue that says "you are
+       here". It is hidden outright while the row holds focus.
+
+       And the inverse hazard, which the ring must not swallow either: this
+       composite REPLACES the base rule's inset ring, and (3) has just hidden
+       the comet — so a focus rule that names only the interactive ring leaves
+       an alert row looking exactly like a calm one for as long as an operator
+       has it focused. Which is the row they were sent to deal with. All three
+       layers are therefore named here, ink outermost: inset shadows paint
+       first-listed on top, so the 1px alert ring holds the edge and the 3px
+       interactive spread reads as a 2px band beneath it. */
+    const focusRules = [...styles.matchAll(/\.agent-row\.is-alert-hot:focus-visible \{[^}]*\}/g)].map((m) => m[0]);
+    for (const rule of focusRules) {
       expect(rule).toContain("var(--color-focus-ring)");
-      expect(rule).toContain("inset 0 0 0 2px var(--color-interactive)");
-      expect(rule).toContain("animation: none");
+      expect(rule).toContain("inset 0 0 0 1px color-mix(in srgb, var(--alert-ink) 85%, transparent)");
+      expect(rule).toContain("inset 0 0 0 3px var(--color-interactive)");
+      expect(rule.indexOf("var(--alert-ink)")).toBeLessThan(rule.indexOf("var(--color-interactive)"));
     }
-    // Both the default and the reduced-motion copy exist.
-    expect([...styles.matchAll(/\.agent-row\.is-alert-hot:focus-visible \{/g)]).toHaveLength(2);
+    const base = styles.match(/\.agent-row\.is-alert-hot \{[^}]*\}/)?.[0] ?? "";
+    expect(base).not.toContain("animation");
+    /* ONE rule now, where there were two. The second was the reduced-motion
+       copy, and it existed only to re-suppress the shimmer for a reader whose
+       reduce block had already rebuilt the outline by hand. With nothing
+       animating the base rule there is nothing for a reduced-motion copy to
+       suppress, and a duplicate would be a second place for the ring to drift
+       out of sync. The count is pinned so a copy cannot creep back unnoticed. */
+    expect(focusRules).toHaveLength(1);
+    const focusSweep = styles.match(/\.agent-row\.is-alert-hot:focus-visible::after \{[^}]*\}/)?.[0] ?? "";
+    expect(focusSweep).not.toBe("");
+    expect(focusSweep).toMatch(/display: none|opacity: 0/);
   });
 
   test("the repo tick yields the shadow slot to the outline but never the wash", () => {
@@ -6495,17 +6557,30 @@ describe("motion + responsive conformance for the restyled body (A6)", () => {
        guard kills it; the same reduce block also freezes the verb on working
        blue and drops the indigo glow so reduced-motion users still get the
        word without a walk through the palette. */
-    /* alert-outline-shimmer is the unacked row's outline pulse. Confirmed
-       covered twice over, which is what this list is for: the universal rule
-       above kills it like every other keyframe, AND it is only ever applied
-       inside a `no-preference` block, so it is never switched on for a reduced
-       -motion reader in the first place. The dedicated reduce block then gives
-       that reader the STATIC variant — a 2px outline in the same repo ink, with
-       the magnify neutralized — so the row is still the loud one without
-       moving. Live verification of that variant is impossible in this harness
-       (it cannot emulate prefers-reduced-motion), so it is asserted at rule
-       level and recorded as unverified rather than claimed. */
-    expect(keyframes).toEqual(["alert-outline-shimmer", "chat-message-enter", "chat-tool-enter", "chat-tool-reveal", "cleanup-spin", "conn-beat", "drawer-in", "dw-pulse", "row-time-verb-shimmer", "sheet-up", "sk-pulse", "sun-pulse"]);
+    /* alert-edge-sweep is the unacked row's edge comet — it replaced
+       alert-outline-shimmer, the outline pulse that breathed the ring 2px→3px
+       while the row lifted and magnified. Confirmed covered twice over, which
+       is what this list is for: the universal rule above kills it like every
+       other keyframe, AND it is only ever applied inside a `no-preference`
+       block, so it is never switched on for a reduced-motion reader in the
+       first place. A dedicated reduce block stills it by name as well.
+
+       The STATIC variant that reader gets is now free rather than
+       reconstructed: the sweep animates a masked ::after, so the row's own
+       inset hairline ring carries no animation and survives every one of those
+       three switches untouched — same ink, same thickness, no travel. The
+       shimmer needed a hand-rebuilt outline in the reduce block precisely
+       because it animated the row's box-shadow slot itself.
+
+       One caveat carried forward unchanged: live verification of the
+       reduced-motion variant is impossible in this harness (it cannot emulate
+       prefers-reduced-motion), so it is asserted at rule level and recorded as
+       unverified rather than claimed.
+
+       alert-edge-sweep drives a REGISTERED custom property (`@property
+       --alert-sweep`, `syntax: "<angle>"`). That registration is what makes it
+       interpolate at all; B9 above pins it. */
+    expect(keyframes).toEqual(["alert-edge-sweep", "chat-message-enter", "chat-tool-enter", "chat-tool-reveal", "cleanup-spin", "conn-beat", "drawer-in", "dw-pulse", "row-time-verb-shimmer", "sheet-up", "sk-pulse", "sun-pulse"]);
     /* Found by CONTENT, not by position. This used to slice from the last
        reduce block in the file, which quietly asserted "the cleanup chip's
        static variant is the last thing anyone added" — a claim about editing

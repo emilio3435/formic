@@ -6592,72 +6592,142 @@ a.artifact-path:hover { text-decoration: underline; }
   box-shadow: inset 3px 0 color-mix(in srgb, var(--repo-tint) 55%, transparent), var(--color-focus-ring);
 }
 
-/* ---------- the alert mark: status as geometry and repo ink ----------
+/* ---------- the alert mark: status as an edge, in repo ink ----------
 
    `is-alert-hot` ⇔ stripAlerting (alerting && !acked), stamped by
    renderAgentRow in BOTH modes — the strip's rows and the inline group's — so
    one rule paints both surfaces and a session drawn once is painted once.
 
-   The outline is a bolder version of the row's OWN colour rather than a second
+   The ink is a bolder version of the row's OWN colour rather than a second
    status hue: an operator scanning eight repos should read "this repo, and it
    needs me", not "some alert, somewhere". Fallback is amber, never ember —
    ember belongs to blocking notification badges (DESIGN-LANGUAGE), and giving
    it back to rows is how the retired wash would return by the side door.
 
-   Outline only. No background, no inset rail: SORT-INK-1 stays green and the
-   4% repo wash above is the row's whole ground. */
+   The mark used to LIFT: `translateY(-2px) scale(1.02)` from a left origin,
+   under an outward `0 0 0 2px` ring that breathed to 3px. Both halves cost
+   more than they bought, and they failed in the two axes for the same reason —
+   each spent its effect OUTSIDE the row's own border box.
+
+   The scale magnified a full-width row by 2% about its LEFT edge, so all of
+   the growth went rightward: CTX, TOKENS and QUIET walked out under
+   `.program { overflow: clip }` and QUIET clipped off the card entirely. The
+   row that most needs reading became the one row whose instruments could not
+   be read. Vertically, box-shadow spread paints beyond the border box by
+   definition, so the ring drew over the WAITING / ACTIVE band label sitting
+   directly above the row — the mark defaced its own heading.
+
+   So the mark now stays inside the box it already owns. A static hairline
+   inset ring says "this one"; a comet sweeping the perimeter says "still, and
+   right now". Attention with a pulse and no geometry: nothing moves, nothing
+   grows, nothing paints over a neighbour.
+
+   Outline only, still. No background, no inset rail: SORT-INK-1 stays green
+   and the 4% repo wash above is the row's whole ground. The sweep's conic
+   gradient is a ring rather than a fill ONLY because the two-layer mask xors
+   the content box away — take the mask off and this rule is the retired wash
+   back by the side door. */
+@property --alert-sweep {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
 .agent-row.is-alert-hot {
   --alert-ink: color-mix(in srgb, var(--repo-tint, var(--color-status-warning)) 78%, #000 22%);
-  transform: translateY(-2px) scale(1.02);
-  transform-origin: center left;
-  z-index: 2;
-  box-shadow:
-    0 0 0 2px color-mix(in srgb, var(--alert-ink) 85%, transparent),
-    0 10px 22px -16px color-mix(in srgb, var(--alert-ink) 45%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--alert-ink) 55%, transparent);
 }
-/* Opt-IN, so a UA that answers neither query gets the static outline. */
+/* The comet. `background-image` rather than the `background` shorthand on
+   purpose: SORT-INK-1's guard reads this sheet as text and cannot see the mask
+   two lines below, so the shorthand would trip a rule whose intent that guard
+   actually protects. Identical paint, and the guard keeps its teeth.
+
+   The row is already `position: relative`, so it is this layer's containing
+   block — and an absolutely positioned box resolves `inset: 0` against that
+   block's PADDING box, never its border box. THAT is the mechanism that lands
+   the comet inside the 4px identity rail and short of the 1px border-bottom,
+   covering neither; `box-sizing` has nothing to do with it. Inset box-shadow
+   is drawn from the padding edge as well, which is why the static ring and
+   this comet are coincident rather than a hairline apart. Sitting inside the
+   rail is intended — the rail is identity, the ring is status, and the two
+   must not be confusable. */
+.agent-row.is-alert-hot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  padding: 1.5px;                       /* ring thickness */
+  border-radius: inherit;
+  background-image: conic-gradient(from var(--alert-sweep),
+    transparent 0 72%,
+    color-mix(in srgb, var(--alert-ink) 95%, transparent) 90%,
+    transparent 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+}
+/* Opt-IN, so a UA that answers neither query gets the static ring. */
 @media (prefers-reduced-motion: no-preference) {
-  .agent-row.is-alert-hot {
-    animation: alert-outline-shimmer 2.4s ease-in-out infinite;
+  .agent-row.is-alert-hot::after {
+    animation: alert-edge-sweep 6s linear infinite;
   }
 }
-@keyframes alert-outline-shimmer {
-  0%, 100% {
-    box-shadow:
-      0 0 0 2px color-mix(in srgb, var(--alert-ink) 70%, transparent),
-      0 10px 22px -16px color-mix(in srgb, var(--alert-ink) 35%, transparent);
-  }
-  50% {
-    box-shadow:
-      0 0 0 3px color-mix(in srgb, var(--alert-ink) 100%, transparent),
-      0 12px 26px -14px color-mix(in srgb, var(--alert-ink) 55%, transparent);
-  }
+/* The angle is registered as an <angle> above, and that registration is what
+   makes this interpolate at all: an unregistered custom property is an untyped
+   token, so the comet would jump from 0deg to 360deg once per cycle instead of
+   travelling. 6s is deliberately slower than the 2.4s pulse it replaces — a
+   sweep reads as alive at a pace a breathing outline would read as agitated
+   at, and eight of these can be on screen at once. */
+@keyframes alert-edge-sweep {
+  to { --alert-sweep: 360deg; }
 }
-/* Retro C1's composite, with one addition the shimmer forces: a running
-   animation outranks every normal declaration in the slot it animates, so
-   restating the ring in box-shadow is not enough on its own — the shimmer has
-   to stand down while the row is focused, or the ring blinks in and out on a
-   2.4s cycle on the row an operator most likely arrived at by keyboard. */
+/* Retro C1's composite — and box-shadow is winner-takes-all, so a composite
+   here has to name every layer the row is meant to be wearing. Three of them.
+
+   The shimmer's `animation: none` leaves with the shimmer: nothing animates
+   this rule's box-shadow any more, so there is no running animation left to
+   out-rank a normal declaration in that slot. What does have to stand down is
+   the comet — left running it crawls around the edge of the focused row,
+   competing with the one cue that says "you are here".
+
+   Which opens the inverse trap, and it is why the alert ink is restated here
+   rather than left to the base rule. This declaration REPLACES that ring, and
+   the line below has just hidden the comet — so a focus rule carrying only the
+   interactive ring leaves an alerting row looking exactly like a calm one for
+   as long as an operator holds it focused. That is the row they were sent to
+   deal with: the one moment the mark is least affordable to lose is the moment
+   it would have gone.
+
+   Ink outermost. Inset shadows paint first-listed on top, so the 1px alert
+   ring holds the edge and the 3px interactive spread shows through beneath it
+   as a 2px band — the same 2px ring every other focused row wears, moved in by
+   a hairline to make room. Both ALERT layers stay inset, so the mark itself
+   still never paints outside the row's own border box, focused or not — which
+   is the whole point of the change. The third layer is not ours and does
+   spread: `--color-focus-ring` resolves to `0 0 0 3px rgba(91,79,209,.28)`,
+   outset, exactly as it is on every other focused row on the board. Borrowing
+   the shared ring means wearing its geometry too. */
 .agent-row.is-alert-hot:focus-visible {
-  animation: none;
   box-shadow:
-    0 0 0 2px color-mix(in srgb, var(--alert-ink) 85%, transparent),
-    inset 0 0 0 2px var(--color-interactive),
+    inset 0 0 0 1px color-mix(in srgb, var(--alert-ink) 85%, transparent),
+    inset 0 0 0 3px var(--color-interactive),
     var(--color-focus-ring);
 }
+.agent-row.is-alert-hot:focus-visible::after { display: none; }
+/* Reduced motion needs no box-shadow restatement, and that is the point of
+   moving the motion off the row: the ring lives on the base rule with no
+   animation of its own, so it simply survives this block intact — same ink,
+   same hairline, no travel. The old shimmer had to be reconstructed here
+   because killing an animation that owned the box-shadow slot left the row
+   wearing whatever the last frame painted.
+
+   Only the comet is stilled. The universal
+   `*, *::before, *::after { animation: none !important }` guard would already
+   have done it; naming the class keeps the intent legible at the rule instead
+   of inferred from a sheet-wide sweep. */
 @media (prefers-reduced-motion: reduce) {
-  .agent-row.is-alert-hot {
+  .agent-row.is-alert-hot::after {
     animation: none;
-    transform: none;
-    box-shadow:
-      0 0 0 2px color-mix(in srgb, var(--alert-ink) 85%, transparent);
-  }
-  .agent-row.is-alert-hot:focus-visible {
-    animation: none;
-    box-shadow:
-      0 0 0 2px color-mix(in srgb, var(--alert-ink) 85%, transparent),
-      inset 0 0 0 2px var(--color-interactive),
-      var(--color-focus-ring);
   }
 }
 .strip-repo-pill {
