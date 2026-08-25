@@ -52,6 +52,58 @@ const surface: CmuxSurface = {
 };
 
 describe("TTY and open-session identity evidence", () => {
+  test("a Gemini main-file prefix resolves only through that row's exact transcript path", async () => {
+    const prefix = "abcd1234";
+    const activeId = `${prefix}-1111-4111-8111-111111111111`;
+    const heldId = `${prefix}-2222-4222-8222-222222222222`;
+    const activePath = `/Users/me/.gemini/tmp/demo/chats/session-2026-08-19T12-00-${prefix}.jsonl`;
+    const heldPath = `/Users/me/.gemini-alt/tmp/demo/chats/session-2026-08-19T13-00-${prefix}.jsonl`;
+    const active: CollectedAgent = {
+      ...agent,
+      id: `gemini:${activeId}`,
+      provider: "gemini",
+      sourceSessionId: activeId,
+      status: "running",
+      artifacts: [{ kind: "transcript", label: "GEMINI transcript", path: activePath }],
+    };
+    const held: CollectedAgent = {
+      ...active,
+      id: `gemini:${heldId}`,
+      sourceSessionId: heldId,
+      status: "stale",
+      artifacts: [{ kind: "transcript", label: "GEMINI transcript", path: heldPath }],
+    };
+    const runner = new SequenceRunner([
+      {
+        exitCode: 0,
+        stdout: "202 ttys033 /Users/me/.local/bin/gemini",
+        stderr: "",
+        timedOut: false,
+      },
+      {
+        exitCode: 0,
+        stdout: ["p202", `n${heldPath}`].join("\n"),
+        stderr: "",
+        timedOut: false,
+      },
+    ]);
+
+    const enriched = await enrichCmuxIdentity([surface], [active, held], runner);
+
+    expect(enriched.errors).toEqual([]);
+    expect(enriched.value[0]?.sourceSessionClaims).toEqual([
+      { provider: "gemini", sessionId: heldId },
+    ]);
+    expect(enriched.value[0]?.identityTrace?.openFileMatches).toEqual([{
+      pid: 202,
+      path: heldPath,
+      provider: "gemini",
+      sessionId: heldId,
+    }]);
+    expect(active.processIds).toBeUndefined();
+    expect(held.processIds).toEqual([202]);
+  });
+
   test("the process table is read with start times, in a locale that renders them predictably", async () => {
     const runner = new SequenceRunner([
       { exitCode: 0, stdout: "", stderr: "", timedOut: false },
@@ -444,6 +496,149 @@ describe("TTY and open-session identity evidence", () => {
       outcome: "command-hint-match",
       commandHints: [{ resolvedSessionId: runtimeSessionId }],
     });
+  });
+
+  test.each([
+    ["pi", "Pi.Native_Case.V1", "pi --session-id pi.native_case.v1", "pi.native_case.v1"],
+    [
+      "opencode",
+      "ses_ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      "opencode --session ses_abcdefghijklmnopqrstuvwxyz",
+      "ses_abcdefghijklmnopqrstuvwxyz",
+    ],
+    [
+      "kilo",
+      "ses_abcdefghijklmnopqrstuvwxyz",
+      "kilo --session ses_ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      "ses_ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    ],
+    ["hermes", "hermes_case_id", "hermes --resume Hermes_Case_ID", "Hermes_Case_ID"],
+  ] as const)("%s byte-unequal native session selectors fail closed", async (
+    provider,
+    sourceSessionId,
+    command,
+    selector,
+  ) => {
+    const nativeAgent: CollectedAgent = {
+      ...agent,
+      id: `${provider}:${sourceSessionId}`,
+      provider,
+      sourceSessionId,
+      processIds: undefined,
+      processStarts: undefined,
+      processAlive: undefined,
+      transcriptOpen: undefined,
+    };
+    const runner = new SequenceRunner([
+      {
+        exitCode: 0,
+        stdout: `202 ttys033 ${command}`,
+        stderr: "",
+        timedOut: false,
+      },
+      { exitCode: 0, stdout: "", stderr: "", timedOut: false },
+    ]);
+
+    expect(selector).not.toBe(sourceSessionId);
+    const enriched = await enrichCmuxIdentity([surface], [nativeAgent], runner);
+
+    expect(enriched.value[0]).toMatchObject({
+      sourceSessionClaims: [],
+      sourceSessionIds: [],
+      identityTrace: {
+        outcome: "command-hint-conflict",
+        commandHints: [{
+          provider,
+          value: selector,
+          full: true,
+          resolvedSessionId: undefined,
+          rejectionReason: expect.stringMatching(/byte-exact/i),
+        }],
+      },
+    });
+    expect(enriched.errors).toHaveLength(1);
+    expect(nativeAgent.processIds).toBeUndefined();
+  });
+
+  test.each([
+    ["pi", "Pi.Native_Case.V1", "pi.native_case.v1"],
+    ["opencode", "ses_ABCDEFGHIJKLMNOPQRSTUVWXYZ", "ses_abcdefghijklmnopqrstuvwxyz"],
+    ["kilo", "ses_abcdefghijklmnopqrstuvwxyz", "ses_ABCDEFGHIJKLMNOPQRSTUVWXYZ"],
+    ["hermes", "hermes_case_id", "Hermes_Case_ID"],
+  ] as const)("%s provider-qualified byte-unequal native claim fails closed", (
+    provider,
+    sourceSessionId,
+    claimSessionId,
+  ) => {
+    const nativeAgent: CollectedAgent = {
+      ...agent,
+      id: `${provider}:${sourceSessionId}`,
+      provider,
+      sourceSessionId,
+    };
+    const target = resolveAgentTarget(nativeAgent, [{
+      surfaceId: `SURFACE-${provider.toUpperCase()}-CASE-VARIANT`,
+      sourceSessionIds: [claimSessionId],
+      sourceSessionClaims: [{ provider, sessionId: claimSessionId }],
+    }], [nativeAgent]);
+
+    expect(claimSessionId).not.toBe(sourceSessionId);
+    expect({ resolution: target.resolution, writable: canWriteToTarget(target) }).toEqual({
+      resolution: "missing",
+      writable: false,
+    });
+  });
+
+  test("canonical UUID claim case variants remain case-insensitive in target routing", () => {
+    const sourceSessionId = "abcdefab-cdef-4abc-8def-abcdefabcdef";
+    const claimSessionId = sourceSessionId.toUpperCase();
+    const hermesAgent: CollectedAgent = {
+      ...agent,
+      id: `hermes:${sourceSessionId}`,
+      provider: "hermes",
+      sourceSessionId,
+    };
+    const target = resolveAgentTarget(hermesAgent, [{
+      surfaceId: "SURFACE-HERMES-UUID-CASE-VARIANT",
+      sourceSessionIds: [claimSessionId],
+      sourceSessionClaims: [{ provider: "hermes", sessionId: claimSessionId }],
+    }], [hermesAgent]);
+
+    expect(target).toMatchObject({ resolution: "exact", attestation: "live" });
+    expect(canWriteToTarget(target)).toBeTrue();
+  });
+
+  test("canonical UUID selector case variants remain case-insensitive", async () => {
+    const sourceSessionId = "abcdefab-cdef-4abc-8def-abcdefabcdef";
+    const selector = sourceSessionId.toUpperCase();
+    const hermesAgent: CollectedAgent = {
+      ...agent,
+      id: `hermes:${sourceSessionId}`,
+      provider: "hermes",
+      sourceSessionId,
+    };
+    const runner = new SequenceRunner([
+      {
+        exitCode: 0,
+        stdout: `202 ttys033 hermes --resume ${selector}`,
+        stderr: "",
+        timedOut: false,
+      },
+      { exitCode: 0, stdout: "", stderr: "", timedOut: false },
+    ]);
+
+    const enriched = await enrichCmuxIdentity([surface], [hermesAgent], runner);
+
+    expect(enriched.errors).toEqual([]);
+    expect(enriched.value[0]).toMatchObject({
+      sourceSessionClaims: [{ provider: "hermes", sessionId: sourceSessionId }],
+      sourceSessionIds: [sourceSessionId],
+      identityTrace: {
+        outcome: "command-hint-match",
+        commandHints: [{ resolvedSessionId: sourceSessionId }],
+      },
+    });
+    expect(hermesAgent.processIds).toEqual([202]);
   });
 
   test("a completed process scan marks retained exact PIDs absent without guessing on probe failure", async () => {

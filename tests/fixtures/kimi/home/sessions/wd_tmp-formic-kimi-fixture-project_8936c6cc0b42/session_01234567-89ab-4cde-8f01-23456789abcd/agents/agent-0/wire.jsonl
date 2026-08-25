@@ -1,0 +1,7 @@
+{"type":"metadata","protocol_version":"1.5","created_at":1787324403500}
+{"type":"turn.prompt","agentId":"agent-0","input":[{"type":"text","text":"Check one public child relation."}],"origin":{"kind":"user"},"time":1787324403600}
+{"type":"context.append_message","agentId":"agent-0","message":{"role":"user","content":[{"type":"text","text":"Check one public child relation."}],"toolCalls":[]},"time":1787324403700}
+{"type":"context.append_loop_event","agentId":"agent-0","event":{"type":"step.begin","uuid":"55555555-5555-4555-8555-555555555555","turnId":"0","step":1},"time":1787324403800}
+{"type":"context.append_loop_event","agentId":"agent-0","event":{"type":"content.part","uuid":"66666666-6666-4666-8666-666666666666","turnId":"0","step":1,"stepUuid":"55555555-5555-4555-8555-555555555555","part":{"type":"text","text":"The public child relation is present."}},"time":1787324403900}
+{"type":"context.append_loop_event","agentId":"agent-0","event":{"type":"step.end","uuid":"55555555-5555-4555-8555-555555555555","turnId":"0","step":1,"finishReason":"end_turn"},"time":1787324404000}
+{"type":"turn.ended","agentId":"agent-0","turnId":0,"reason":"completed","durationMs":500,"time":1787324404100}

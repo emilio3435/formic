@@ -57,10 +57,16 @@ function routingSource(agent: AgentSnapshot): CollectedAgent {
     artifacts: agent.artifacts,
     gates: agent.gates,
     recordedTarget,
-    allowCwdFallback: agent.target.resolution === "unique-cwd"
-      ? true
-      : agent.provider === "cursor"
-        ? false
+    allowCwdFallback: agent.provider === "cursor"
+      || agent.provider === "antigravity"
+      || agent.provider === "gemini"
+      || agent.provider === "opencode"
+      || agent.provider === "pi"
+      || agent.provider === "kilo"
+      || agent.provider === "kimi"
+      ? false
+      : agent.target.resolution === "unique-cwd"
+        ? true
         : undefined,
   };
 }

@@ -57,7 +57,7 @@ import type {
   CommandRunner,
   SpendSource,
 } from "./types";
-import { enrichCmuxIdentity } from "./identity";
+import { enrichCmuxIdentity, parseProcessTable } from "./identity";
 import { bridgeAgentsWithBindings, updateBindingsFromScan, type IdentityBindingStore } from "./identity-bindings";
 import {
   DEFAULT_PROVIDER_WAIT_MS,
@@ -88,14 +88,19 @@ import {
   type SenderTranscriptTailReader,
 } from "./sender-verification";
 import { ProviderSettlementCoordinator } from "./provider-settlement";
+import {
+  canonicalPiLaunchObservations,
+  piLaunchObservationFromCommand,
+  type PiLaunchObservation,
+} from "./pi";
 
 type Abortable<T extends (...args: any[]) => any> = (
   ...args: [...Parameters<T>, signal?: AbortSignal]
 ) => ReturnType<T>;
 
 export interface HubCollectors {
-  sessions: Abortable<typeof collectSessions>;
-  sessionProvider?: Abortable<typeof collectSessionProvider>;
+  sessions: typeof collectSessions;
+  sessionProvider?: typeof collectSessionProvider;
   finalizeSessions?: typeof finalizeSessionProviders;
   spendSources?: typeof collectHermesSpendSources;
   cmux: Abortable<typeof collectCmux>;
@@ -140,8 +145,96 @@ export function providerCollectionConfigKey(
   extraGrokBotRoots: readonly string[] = [],
   extraGrokCliRoots: readonly string[] = [],
   extraCopilotRoots: readonly string[] = [],
+  extraGeminiCliRoots: readonly string[] = [],
+  extraOpenCodeRoots: readonly string[] = [],
+  extraPiRoots: readonly string[] = [],
+  piLaunchObservations: readonly PiLaunchObservation[] = [],
+  piReadDeadlineMs?: number,
+  extraKiloRoots: readonly string[] = [],
+  extraKimiRoots: readonly string[] = [],
 ): string {
-  return `${windowMs}:${thresholds?.freshMs ?? "default"}:${thresholds?.quietMs ?? "default"}:${extraCursorGuiRoots.join(",")}:bot=${extraGrokBotRoots.join(",")}:cli=${extraGrokCliRoots.join(",")}:copilot=${extraCopilotRoots.join(",")}`;
+  const launches = canonicalPiLaunchObservations(piLaunchObservations);
+  return JSON.stringify({
+    windowMs,
+    freshMs: thresholds?.freshMs ?? null,
+    quietMs: thresholds?.quietMs ?? null,
+    extraCursorGuiRoots,
+    extraGrokBotRoots,
+    extraGrokCliRoots,
+    extraCopilotRoots,
+    extraGeminiCliRoots,
+    extraOpenCodeRoots,
+    extraPiRoots,
+    extraKiloRoots,
+    extraKimiRoots,
+    piLaunchObservations: launches,
+    piReadDeadlineMs: piReadDeadlineMs ?? null,
+  });
+}
+
+function cwdByPid(output: string): Map<number, string> {
+  const result = new Map<number, string>();
+  let pid: number | undefined;
+  let cwd = false;
+  for (const line of output.split("\n")) {
+    if (/^p\d+$/.test(line)) {
+      pid = Number(line.slice(1));
+      cwd = false;
+    } else if (line.startsWith("f")) {
+      cwd = line === "fcwd";
+    } else if (cwd && pid !== undefined && line.startsWith("n") && line.length > 1) {
+      result.set(pid, line.slice(1));
+      cwd = false;
+    }
+  }
+  return result;
+}
+
+async function readPiLaunchObservations(
+  runner: CommandRunner,
+  signal?: AbortSignal,
+  budgetMs = 8_000,
+): Promise<PiLaunchObservation[]> {
+  const deadlineAtMs = Date.now() + Math.max(0, Math.floor(budgetMs));
+  const remainingBudgetMs = (): number => Math.max(0, deadlineAtMs - Date.now());
+  try {
+    if (signal?.aborted) throw signal.reason;
+    const processBudgetMs = remainingBudgetMs();
+    if (processBudgetMs === 0) return [];
+    const processes = await runner.run(
+      ["env", "LC_ALL=C", "ps", "-axo", "pid=,tty=,command="],
+      Math.min(8_000, processBudgetMs),
+      signal,
+    );
+    if (signal?.aborted) throw signal.reason;
+    if (processes.cancelled || processes.timedOut || processes.exitCode !== 0) return [];
+    const piProcesses = parseProcessTable(processes.stdout).flatMap((process) => {
+      const observation = piLaunchObservationFromCommand(process.command);
+      return observation === undefined ? [] : [{ pid: process.pid, observation }];
+    });
+    if (piProcesses.length === 0) return [];
+    const pids = [...new Set(piProcesses.map(({ pid }) => pid))].sort((left, right) => left - right);
+    const cwdBudgetMs = remainingBudgetMs();
+    if (cwdBudgetMs === 0) return canonicalPiLaunchObservations(
+      piProcesses.map(({ observation }) => observation),
+    );
+    const cwdResult = await runner.run(
+      ["/usr/sbin/lsof", "-n", "-P", "-a", "-p", pids.join(","), "-d", "cwd", "-Fn"],
+      Math.min(8_000, cwdBudgetMs),
+      signal,
+    );
+    if (signal?.aborted) throw signal.reason;
+    const cwds = cwdResult.cancelled || cwdResult.timedOut || cwdResult.exitCode !== 0
+      ? new Map<number, string>()
+      : cwdByPid(cwdResult.stdout);
+    return canonicalPiLaunchObservations(piProcesses.map(({ pid, observation }) => ({
+      ...(cwds.get(pid) ? { launchCwd: cwds.get(pid) } : {}),
+      ...observation,
+    })));
+  } catch (error) {
+    if (signal?.aborted) throw signal.reason;
+    return [];
+  }
 }
 
 function waitWithAbort<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -229,6 +322,16 @@ export interface HubStateOptions {
   botRootsReader?: () => readonly string[];
   grokCliRootsReader?: () => readonly string[];
   copilotRootsReader?: () => readonly string[];
+  geminiRootsReader?: () => readonly string[];
+  openCodeRootsReader?: () => readonly string[];
+  piRootsReader?: () => readonly string[];
+  kiloRootsReader?: () => readonly string[];
+  kimiRootsReader?: () => readonly string[];
+  piLaunchReader?: (
+    runner: CommandRunner,
+    signal?: AbortSignal,
+    budgetMs?: number,
+  ) => Promise<readonly PiLaunchObservation[]>;
   triageReader?: () => readonly TriageQueueSummary[];
   burnReader?: () => Promise<UsageSummary>;
   cmuxExecutable?: string;
@@ -307,6 +410,16 @@ export class HubState {
   private readonly botRootsReader?: () => readonly string[];
   private readonly grokCliRootsReader?: () => readonly string[];
   private readonly copilotRootsReader?: () => readonly string[];
+  private readonly geminiRootsReader?: () => readonly string[];
+  private readonly openCodeRootsReader?: () => readonly string[];
+  private readonly piRootsReader?: () => readonly string[];
+  private readonly kiloRootsReader?: () => readonly string[];
+  private readonly kimiRootsReader?: () => readonly string[];
+  private readonly piLaunchReader: (
+    runner: CommandRunner,
+    signal?: AbortSignal,
+    budgetMs?: number,
+  ) => Promise<readonly PiLaunchObservation[]>;
   private readonly triageReader?: () => readonly TriageQueueSummary[];
   private readonly burnReader?: () => Promise<UsageSummary>;
   private readonly cmuxExecutable: string;
@@ -334,6 +447,12 @@ export class HubState {
     this.botRootsReader = options.botRootsReader;
     this.grokCliRootsReader = options.grokCliRootsReader;
     this.copilotRootsReader = options.copilotRootsReader;
+    this.geminiRootsReader = options.geminiRootsReader;
+    this.openCodeRootsReader = options.openCodeRootsReader;
+    this.piRootsReader = options.piRootsReader;
+    this.kiloRootsReader = options.kiloRootsReader;
+    this.kimiRootsReader = options.kimiRootsReader;
+    this.piLaunchReader = options.piLaunchReader ?? readPiLaunchObservations;
     this.triageReader = options.triageReader;
     this.burnReader = options.burnReader;
     this.cmuxExecutable = options.cmuxExecutable ?? DEFAULT_CMUX_EXECUTABLE;
@@ -797,6 +916,7 @@ export class HubState {
       }
       console.error(`[HubState] refresh watchdog dropped a pass pending for ${pendingMs}ms`);
       this.#refreshAbort?.abort(new Error("refresh superseded by watchdog"));
+      this.#providerSettlement.discardInFlight();
       this.#refreshing = undefined;
       this.#refreshAbort = undefined;
       this.#refreshStartedAtMs = undefined;
@@ -890,6 +1010,46 @@ export class HubState {
        the source unhealthy — with a green suite, because nothing tested that
        every collected provider survives the refresh. */
     const providers: Provider[] = [...PROVIDERS];
+    const providerTimeoutMs = this.refreshAggregateTimeoutMs ?? providerWaitMs;
+    const controlTimeoutMs = this.refreshAggregateTimeoutMs
+      ?? Math.max(MIN_CONTROL_AGGREGATE_TIMEOUT_MS, providerWaitMs);
+    const passStartedMs = Date.now();
+    const providerDeadlineAtMs = passStartedMs + providerTimeoutMs;
+    let controlDeadlineExpired = false;
+    const preflightAbort = new AbortController();
+    const providerDeadlineReason = new Error(
+      `Pi launch discovery exceeded ${providerTimeoutMs}ms provider aggregate deadline`,
+    );
+    const abortPreflightFromCaller = (): void => preflightAbort.abort(signal.reason);
+    signal.addEventListener("abort", abortPreflightFromCaller, { once: true });
+    let providerDeadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    const providerDeadlineReached = new Promise<void>((resolve) => {
+      providerDeadlineTimer = setTimeout(() => {
+        preflightAbort.abort(providerDeadlineReason);
+        resolve();
+      }, providerTimeoutMs);
+    });
+    let controlDeadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    const controlDeadlineReached = new Promise<void>((resolve) => {
+      controlDeadlineTimer = setTimeout(() => {
+        controlDeadlineExpired = true;
+        resolve();
+      }, controlTimeoutMs);
+    });
+    const remainingProviderBudgetMs = (): number =>
+      Math.max(0, providerDeadlineAtMs - Date.now());
+    const timings = new Map<string, number>();
+    const pending = new Set<string>();
+    const track = async <T>(label: string, work: Promise<T>): Promise<T> => {
+      const startedMs = Date.now();
+      pending.add(label);
+      try {
+        return await work;
+      } finally {
+        pending.delete(label);
+        timings.set(label, Date.now() - startedMs);
+      }
+    };
     this.#scanWindowHours = settings?.scanWindowHours ?? this.#scanWindowHours;
     const windowMs = Math.max(1, this.#scanWindowHours) * 60 * 60 * 1_000 || DEFAULT_SESSION_WINDOW_MS;
     /* Read every refresh, not at construction: a settings POST triggers a
@@ -901,6 +1061,37 @@ export class HubState {
     const extraGrokBotRoots = this.botRootsReader?.() ?? [];
     const extraGrokCliRoots = this.grokCliRootsReader?.() ?? [];
     const extraCopilotRoots = this.copilotRootsReader?.() ?? [];
+    const extraGeminiCliRoots = this.geminiRootsReader?.() ?? [];
+    const extraOpenCodeRoots = this.openCodeRootsReader?.() ?? [];
+    const extraPiRoots = this.piRootsReader?.() ?? [];
+    const extraKiloRoots = this.kiloRootsReader?.() ?? [];
+    const extraKimiRoots = this.kimiRootsReader?.() ?? [];
+    const piLaunchDeadline = Symbol("Pi launch deadline");
+    let launchOutcome: readonly PiLaunchObservation[] | typeof piLaunchDeadline;
+    try {
+      launchOutcome = await Promise.race([
+        waitWithAbort(track(
+          "Pi launch discovery",
+          this.piLaunchReader(this.runner, preflightAbort.signal, remainingProviderBudgetMs()),
+        ), signal),
+        providerDeadlineReached.then((): typeof piLaunchDeadline => piLaunchDeadline),
+      ]);
+    } catch (error) {
+      if (providerDeadlineTimer) clearTimeout(providerDeadlineTimer);
+      if (controlDeadlineTimer) clearTimeout(controlDeadlineTimer);
+      if (signal.aborted) throw signal.reason ?? error;
+      if (preflightAbort.signal.reason === providerDeadlineReason) {
+        launchOutcome = piLaunchDeadline;
+      } else {
+        throw error;
+      }
+    } finally {
+      signal.removeEventListener("abort", abortPreflightFromCaller);
+    }
+    const piLaunchObservations = launchOutcome === piLaunchDeadline
+      ? []
+      : canonicalPiLaunchObservations(launchOutcome);
+    if (signal.aborted) throw signal.reason;
     type SessionsResult = Awaited<ReturnType<HubCollectors["sessions"]>>;
     type SpendSourcesResult = Awaited<ReturnType<typeof collectHermesSpendSources>>;
     type CmuxResult = Awaited<ReturnType<HubCollectors["cmux"]>>;
@@ -924,7 +1115,6 @@ export class HubState {
     let syncNotificationsResult: SyncNotificationsResult | undefined;
     let identityResult: IdentityResult | undefined;
     const collectionErrors: string[] = [];
-    let controlDeadlineExpired = false;
     /* Which collector actually spent the deadline. Two investigations named a
        culprit from code reading and both dissolved on measurement — the
        transcript walk reads one file, and Cursor's store measures fast while the
@@ -934,19 +1124,6 @@ export class HubState {
        What names the guilty collector is `pending`, not `timings`: at the moment
        the deadline fires the slow one has not returned, so it has no duration to
        report. The set of labels still outstanding IS the finding. */
-    const passStartedMs = Date.now();
-    const timings = new Map<string, number>();
-    const pending = new Set<string>();
-    const track = async <T>(label: string, work: Promise<T>): Promise<T> => {
-      const startedMs = Date.now();
-      pending.add(label);
-      try {
-        return await work;
-      } finally {
-        pending.delete(label);
-        timings.set(label, Date.now() - startedMs);
-      }
-    };
     const passBreakdown = (): string => {
       const finished = [...timings.entries()]
         .sort(([, a], [, b]) => b - a)
@@ -971,51 +1148,58 @@ export class HubState {
         }
       }
     };
-    const providerTimeoutMs = this.refreshAggregateTimeoutMs ?? providerWaitMs;
-    const controlTimeoutMs = this.refreshAggregateTimeoutMs
-      ?? Math.max(MIN_CONTROL_AGGREGATE_TIMEOUT_MS, providerWaitMs);
+    const piReadDeadlineMs = Math.max(1, Math.min(providerTimeoutMs, providerWaitMs));
+    const providerSettlementWaitMs = remainingProviderBudgetMs();
+    const collectionOptions = {
+      extraCursorGuiRoots,
+      extraGrokBotRoots,
+      extraGrokCliRoots,
+      extraCopilotRoots,
+      extraGeminiCliRoots,
+      extraOpenCodeRoots,
+      extraPiRoots,
+      extraKiloRoots,
+      extraKimiRoots,
+      piLaunchObservations,
+      piReadDeadlineMs,
+      kimiReadDeadlineMs: piReadDeadlineMs,
+      sqliteReadBudgetMs: piReadDeadlineMs,
+    };
     const tailTimeoutMs = Math.min(
       PUBLISHING_TAIL_TIMEOUT_MS,
       this.refreshAggregateTimeoutMs ?? PUBLISHING_TAIL_TIMEOUT_MS,
     );
-    let providerDeadlineTimer: ReturnType<typeof setTimeout> | undefined;
-    const providerDeadlineReached = new Promise<void>((resolve) => {
-      providerDeadlineTimer = setTimeout(resolve, providerTimeoutMs);
-    });
-    let controlDeadlineTimer: ReturnType<typeof setTimeout> | undefined;
-    const controlDeadlineReached = new Promise<void>((resolve) => {
-      controlDeadlineTimer = setTimeout(() => {
-        controlDeadlineExpired = true;
-        resolve();
-      }, controlTimeoutMs);
-    });
     const providerCollection = (this.collectors.sessionProvider && this.collectors.finalizeSessions
       ? track("providers", (async () => {
           const configKey = providerCollectionConfigKey(
-            windowMs, thresholds, extraCursorGuiRoots, extraGrokBotRoots, extraGrokCliRoots, extraCopilotRoots,
+            windowMs, thresholds, extraCursorGuiRoots, extraGrokBotRoots, extraGrokCliRoots, extraCopilotRoots, extraGeminiCliRoots, extraOpenCodeRoots, extraPiRoots,
+            piLaunchObservations, piReadDeadlineMs, extraKiloRoots, extraKimiRoots,
           );
           const selection = await this.#providerSettlement.settle(
             providers,
             async (provider) => {
               try {
                 return await this.collectors.sessionProvider!(
-                  provider, homedir(), windowMs, thresholds, { extraCursorGuiRoots, extraGrokBotRoots, extraGrokCliRoots, extraCopilotRoots }, signal,
+                  provider, homedir(), windowMs, thresholds, collectionOptions, signal,
                 );
               } catch (error) {
+                if (signal.aborted) throw signal.reason ?? error;
                 return {
                   value: [],
                   errors: [`${provider} collection failed: ${error instanceof Error ? error.message : String(error)}`],
                 };
               }
             },
-            { waitMs: providerTimeoutMs, configKey, wait: () => providerDeadlineReached },
+            { waitMs: providerSettlementWaitMs, configKey, wait: () => providerDeadlineReached },
           );
           Object.assign(providerSettledAtMs, selection.settledAtMs);
           const selected = Object.fromEntries(providers.map((provider) => {
             const current = selection.current[provider];
             if (current) return [provider, current];
             const seconds = providerWaitMs / 1_000;
-            const label = `${provider[0]!.toUpperCase()}${provider.slice(1)}`;
+            const label = provider === "kimi"
+              ? "Kimi Code"
+              : `${provider[0]!.toUpperCase()}${provider.slice(1)}`;
             const fallback = selection.lastKnown[provider];
             const hasFallbackRows = (fallback?.value.length ?? 0) > 0;
             const reason = `${label} collection exceeded the ${seconds}s provider wait; `
@@ -1024,7 +1208,7 @@ export class HubState {
             return [provider, { value: [], errors: [reason] }];
           })) as SessionProviderResults;
           try {
-            sessionsResult = this.collectors.finalizeSessions!(selected, homedir());
+            sessionsResult = this.collectors.finalizeSessions!(selected, homedir(), collectionOptions);
             lastKnownAgents = providers.flatMap((provider) => selection.lastKnown[provider]?.value ?? []);
           } catch (error) {
             collectionErrors.push(
@@ -1032,7 +1216,7 @@ export class HubState {
             );
           }
         })())
-      : capture("session collection failed", this.collectors.sessions(homedir(), windowMs, thresholds, { extraCursorGuiRoots, extraGrokBotRoots, extraGrokCliRoots, extraCopilotRoots }, signal), (value) => {
+      : capture("session collection failed", this.collectors.sessions(homedir(), windowMs, thresholds, collectionOptions, signal), (value) => {
           sessionsResult = value;
         })).catch((error) => {
           if (!signal.aborted) {
@@ -1182,7 +1366,7 @@ export class HubState {
        on this pass while it was collecting, stop before the first write. */
     if (signal.aborted || this.#superseded(generation)) return this.#snapshot;
     const deadlineError = `collector aggregate exceeded ${controlTimeoutMs}ms deadline`;
-    if (!aggregateSettled) {
+    if (controlDeadlineExpired || !aggregateSettled) {
       collectionErrors.push(deadlineError);
       console.error(`[HubState] ${deadlineError}; publishing partial snapshot`);
       /* Only on a miss. A healthy pass says nothing, so this cannot become the

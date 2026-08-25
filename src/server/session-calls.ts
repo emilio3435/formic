@@ -1,6 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import { parseClaudeJsonl, parseCodexJsonl, parseOmpJsonl } from "./collectors";
+import { parseGeminiConversation, readGeminiConversationFile } from "./gemini";
+import { readOpenCodeStore } from "./opencode-store";
+import { readKiloStore } from "./kilo-store";
+import { readKimiWireFile } from "./kimi";
+import { readPiSessionFile } from "./pi";
 import type { CollectedAgent } from "./types";
 import type { HubSnapshot } from "../shared/types";
 
@@ -49,13 +54,29 @@ export interface SessionCallsPayload {
     the published total. A second extraction written here would be a second
     derivation, and the whole value of the series is that it is the one the
     board actually added up. */
-function reparse(agent: { provider: string }, source: string, text: string): CollectedAgent | null {
+async function reparse(
+  agent: { provider: string },
+  source: string,
+  signal?: AbortSignal,
+): Promise<{ parsed: CollectedAgent | null; unavailable?: string }> {
   const meta = { sourcePath: source };
+  if (agent.provider === "gemini") {
+    const conversation = await readGeminiConversationFile(source, signal);
+    if (conversation?.partial) {
+      const detail = conversation.warnings?.[0];
+      return {
+        parsed: null,
+        unavailable: `Gemini call series is unavailable because the bounded replay is partial or incomplete${detail ? `: ${detail}` : "."}`,
+      };
+    }
+    return { parsed: conversation ? parseGeminiConversation(conversation, meta) : null };
+  }
+  const text = await readFile(source, { encoding: "utf8", signal });
   switch (agent.provider) {
-    case "claude": return parseClaudeJsonl(text, meta);
-    case "omp": return parseOmpJsonl(text, meta);
-    case "codex": return parseCodexJsonl(text, meta);
-    default: return null;
+    case "claude": return { parsed: parseClaudeJsonl(text, meta) };
+    case "omp": return { parsed: parseOmpJsonl(text, meta) };
+    case "codex": return { parsed: parseCodexJsonl(text, meta) };
+    default: return { parsed: null };
   }
 }
 
@@ -71,7 +92,9 @@ export async function sessionCallsResponse(
   snapshot: HubSnapshot,
   agentId: string,
   headers: Readonly<Record<string, string>>,
+  signal?: AbortSignal,
 ): Promise<Response> {
+  if (signal?.aborted) throw signal.reason;
   const responseHeaders = { ...headers, "cache-control": "no-store" };
   const agent = snapshot.programs
     .flatMap((program) => program.agents)
@@ -105,10 +128,124 @@ export async function sessionCallsResponse(
     });
   }
 
-  let parsed: CollectedAgent | null;
+  if ((agent.provider as string) === "kimi") {
+    try {
+      const evidence = await readKimiWireFile(source, { signal });
+      if (evidence.usageIncomplete) {
+        return answer({
+          source, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
+          unavailable: "Kimi call series is unavailable because the transcript usage is partial or incomplete.",
+        });
+      }
+      const calls = evidence.callSizes;
+      if (!calls || calls.length === 0) {
+        return answer({
+          source, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
+          unavailable: "The Kimi transcript records no per-call usage for this session.",
+        });
+      }
+      let running = 0;
+      const prefixSums = calls.map((size) => (running += size));
+      return answer({ source, calls, sessionProcessed: running, prefixSums, processedSnapshots: null });
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason;
+      return answer({
+        source, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
+        unavailable: `The Kimi transcript could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  }
+
+  if (agent.provider === "opencode" || agent.provider === "kilo") {
+    try {
+      const evidence = agent.provider === "kilo"
+        ? readKiloStore(source, { sessionId: agent.sourceSessionId, signal })
+        : readOpenCodeStore(source, { sessionId: agent.sourceSessionId, signal });
+      const session = evidence.sessions[0];
+      const label = agent.provider === "kilo" ? "Kilo" : "OpenCode";
+      if (!session) {
+        return answer({
+          source, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
+          unavailable: `The ${label} store does not contain this session in the bounded read window.`,
+        });
+      }
+      if (!session.callSizesComplete) {
+        return answer({
+          source, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
+          unavailable: `The ${label} per-call series is corrupt, invalid, truncated, or incomplete, so it cannot be published as complete.`,
+        });
+      }
+      const calls = session.callSizes;
+      if (!calls || calls.length === 0) {
+        return answer({
+          source, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
+          unavailable: `The ${label} store records no per-call usage for this session.`,
+        });
+      }
+      let running = 0;
+      const prefixSums = calls.map((size) => (running += size));
+      return answer({
+        source,
+        calls,
+        sessionProcessed: running,
+        prefixSums,
+        processedSnapshots: null,
+      });
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason;
+      return answer({
+        source, calls: null, sessionProcessed: null, prefixSums: null, processedSnapshots: null,
+        unavailable: `The ${agent.provider === "kilo" ? "Kilo" : "OpenCode"} store could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  }
+
+  if (agent.provider === "pi") {
+    try {
+      const evidence = await readPiSessionFile(source, { signal });
+      if (evidence.partial) {
+        const detail = evidence.warnings[0];
+        return answer({
+          source,
+          calls: null,
+          sessionProcessed: null,
+          prefixSums: null,
+          processedSnapshots: null,
+          unavailable: `Pi call series is unavailable because the bounded transcript is partial or incomplete${detail ? `: ${detail}` : "."}`,
+        });
+      }
+      const calls = evidence.evidence?.callSizes;
+      if (!calls || calls.length === 0) {
+        return answer({
+          source,
+          calls: null,
+          sessionProcessed: null,
+          prefixSums: null,
+          processedSnapshots: null,
+          unavailable: "The Pi transcript records no per-call usage for this session.",
+        });
+      }
+      let running = 0;
+      const prefixSums = calls.map((size) => (running += size));
+      return answer({ source, calls, sessionProcessed: running, prefixSums, processedSnapshots: null });
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason;
+      return answer({
+        source,
+        calls: null,
+        sessionProcessed: null,
+        prefixSums: null,
+        processedSnapshots: null,
+        unavailable: `The Pi transcript could not be read: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+  }
+
+  let reparsed: Awaited<ReturnType<typeof reparse>>;
   try {
-    parsed = reparse(agent, source, await readFile(source, "utf8"));
+    reparsed = await reparse(agent, source, signal);
   } catch (error) {
+    if (signal?.aborted) throw signal.reason;
     /* Loud, not empty. A transcript that has rotated away is a reason the
        series is missing, and reporting [] would let a caller conclude the
        session made no calls. */
@@ -118,6 +255,18 @@ export async function sessionCallsResponse(
     });
   }
 
+  if (reparsed.unavailable) {
+    return answer({
+      source,
+      calls: null,
+      sessionProcessed: null,
+      prefixSums: null,
+      processedSnapshots: null,
+      unavailable: reparsed.unavailable,
+    });
+  }
+
+  const parsed = reparsed.parsed;
   const calls = parsed?.callSizes;
   if (!calls || calls.length === 0) {
     return answer({

@@ -31,6 +31,7 @@ import {
   isGrokBotTarget,
   resolveGrokBotControlTarget,
 } from "./grok-bot-gateway";
+import { normalizeIdentityValue } from "./identity";
 import type { CmuxSurface, CollectedAgent } from "./types";
 
 function normalizeCwd(value?: string): string {
@@ -46,19 +47,22 @@ function sameCwd(left?: string, right?: string): boolean {
 
 type SessionIdentitySource = Pick<CollectedAgent, "provider" | "sourceSessionId">;
 
+const PI_SESSION_ID = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
+const KIMI_SESSION_ID = /^session_[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 export type SessionIdentityProviderIndex = ReadonlyMap<
   string,
-  ReadonlySet<CollectedAgent["provider"]>
+  ReadonlyMap<CollectedAgent["provider"], number>
 >;
 
 export function indexSessionIdentityProviders(
   sources: readonly SessionIdentitySource[],
 ): SessionIdentityProviderIndex {
-  const providersBySession = new Map<string, Set<CollectedAgent["provider"]>>();
+  const providersBySession = new Map<string, Map<CollectedAgent["provider"], number>>();
   for (const source of sources) {
     const sessionId = source.sourceSessionId.toLowerCase();
-    const providers = providersBySession.get(sessionId) ?? new Set();
-    providers.add(source.provider);
+    const providers = providersBySession.get(sessionId) ?? new Map();
+    providers.set(source.provider, (providers.get(source.provider) ?? 0) + 1);
     providersBySession.set(sessionId, providers);
   }
   return providersBySession;
@@ -68,7 +72,12 @@ export function sourceSessionHasProviderCollision(
   sessionId: string,
   providersBySession: SessionIdentityProviderIndex,
 ): boolean {
-  return (providersBySession.get(sessionId.toLowerCase())?.size ?? 0) > 1;
+  const providers = providersBySession.get(sessionId.toLowerCase());
+  return (providers?.size ?? 0) > 1
+    || (providers?.get("opencode") ?? 0) > 1
+    || (providers?.get("pi") ?? 0) > 1
+    || (providers?.get("kilo") ?? 0) > 1
+    || (providers?.get("kimi") ?? 0) > 1;
 }
 
 function sourceSessionClaims(surface: CmuxSurface): SessionIdentityClaim[] {
@@ -82,9 +91,12 @@ export function surfaceClaimsSourceSession(
   agent: SessionIdentitySource,
   providersBySession: SessionIdentityProviderIndex,
 ): boolean {
-  const sessionId = agent.sourceSessionId.toLowerCase();
+  if (agent.provider === "pi" && !PI_SESSION_ID.test(agent.sourceSessionId)) return false;
+  if (agent.provider === "kimi" && !KIMI_SESSION_ID.test(agent.sourceSessionId)) return false;
+  const collisionSessionId = agent.sourceSessionId.toLowerCase();
   const claims = sourceSessionClaims(surface).filter(
-    (claim) => claim.sessionId.toLowerCase() === sessionId,
+    (claim) => normalizeIdentityValue(agent.provider, claim.sessionId)
+      === normalizeIdentityValue(agent.provider, agent.sourceSessionId),
   );
   const qualifiedProviders = new Set(
     claims.flatMap(({ provider }) => provider ? [provider] : []),
@@ -93,8 +105,8 @@ export function surfaceClaimsSourceSession(
     return qualifiedProviders.size === 1 && qualifiedProviders.has(agent.provider);
   }
   if (!claims.some(({ provider }) => provider === undefined)) return false;
-  const providers = providersBySession.get(sessionId);
-  return !sourceSessionHasProviderCollision(sessionId, providersBySession)
+  const providers = providersBySession.get(collisionSessionId);
+  return !sourceSessionHasProviderCollision(collisionSessionId, providersBySession)
     && (providers === undefined || providers.size === 0 || providers.has(agent.provider));
 }
 
@@ -213,6 +225,25 @@ function resolveAgentTargetInternal(
     return finish(resolved.target, resolved.trace.matchedTier);
   }
 
+  const providersBySession = indexSessionIdentityProviders(sources);
+  const normalizedSessionId = normalizeIdentityValue(agent.provider, agent.sourceSessionId);
+  const sameProviderOwners = sources.filter(
+    (source) => source.provider === agent.provider
+      && normalizeIdentityValue(agent.provider, source.sourceSessionId) === normalizedSessionId,
+  ).length;
+  if ((agent.provider === "pi" || agent.provider === "kimi") && sameProviderOwners > 1) {
+    const label = agent.provider === "kimi" ? "Kimi Code" : "Pi";
+    steps?.push({
+      tier: "session",
+      outcome: "ambiguous",
+      detail: `${label} source session ID is duplicated; exact target selection is disabled.`,
+    });
+    return finish({
+      resolution: "ambiguous",
+      reason: `${label} source session ID is duplicated; controls are disabled.`,
+    });
+  }
+
   const routableSurfaces = surfaces.filter((surface) => surface.runtimeSurfaceReady !== false);
   const sharedHostSurface = routableSurfaces.find(
     (surface) => surface.identityTrace?.outcome === "shared-host" && surfaceNamesAgent(surface, agent),
@@ -225,7 +256,10 @@ function resolveAgentTargetInternal(
     });
     return finish(target(sharedHostSurface, "shared-host", SHARED_HOST_REASON, agent));
   }
-  const hookRecord = hookRecordFor(agent.provider, agent.sourceSessionId);
+  const hookRecord = (agent.provider === "opencode" || agent.provider === "kilo" || agent.provider === "kimi")
+    && sameProviderOwners > 1
+    ? undefined
+    : hookRecordFor(agent.provider, agent.sourceSessionId);
   if (hookRecord) {
     const matches = routableSurfaces.filter((surface) => surface.surfaceId === hookRecord.surfaceId);
     const quarantine = quarantined(matches);
@@ -303,7 +337,12 @@ function resolveAgentTargetInternal(
     steps?.push({ tier: "recorded", outcome: "skipped", detail: "No recorded cmux target IDs on this source." });
   }
 
-  const providersBySession = indexSessionIdentityProviders(sources);
+  if (agent.provider === "kilo" && sameProviderOwners > 1) {
+    const reason = `${sameProviderOwners} Kilo instances claim source session ${agent.sourceSessionId}; an instance-qualified target is required.`;
+    steps?.push({ tier: "session", outcome: "ambiguous", detail: reason });
+    return finish({ resolution: "ambiguous", reason });
+  }
+
   const sessionMatches = routableSurfaces.filter((surface) =>
     surfaceClaimsSourceSession(surface, agent, providersBySession),
   );
@@ -341,10 +380,13 @@ function resolveAgentTargetInternal(
   steps?.push({ tier: "session", outcome: "no-match", detail: "Source session ID is not present on any ready cmux surface this scan." });
 
   if (agent.allowCwdFallback === false) {
-    steps?.push({ tier: "cwd", outcome: "rejected", detail: "Cursor GUI agents require exact cmux identity; cwd fallback is disabled." });
+    const reason = agent.provider === "opencode"
+      ? "OpenCode agents require exact cmux identity; cwd fallback is disabled."
+      : "This harness requires exact cmux identity; cwd fallback is disabled.";
+    steps?.push({ tier: "cwd", outcome: "rejected", detail: reason });
     return finish({
       resolution: "missing",
-      reason: "Cursor GUI agents require exact cmux identity; cwd fallback is disabled.",
+      reason,
     });
   }
 
@@ -671,17 +713,19 @@ export function transmitRefusal(agent: {
     return null;
   }
   if (!canAddressTarget(agent.target)) {
-    const cursorRequiresExact = agent.identityTrace?.steps.some(
-      ({ detail }) => detail === "Cursor GUI agents require exact cmux identity; cwd fallback is disabled.",
+    const requiresExactCmux = agent.identityTrace?.steps.some(
+      ({ detail }) =>
+        detail === "This harness requires exact cmux identity; cwd fallback is disabled." ||
+        /agents require exact cmux identity; cwd fallback is disabled\.$/.test(detail),
     ) ?? false;
     return refuse(
       "UNSAFE_TARGET",
-      cursorRequiresExact
+      requiresExactCmux
         ? "No safe cmux target is linked to this session."
         : agent.target.reason ?? "No safe cmux surface target is available.",
       agent.target.resolution === "ambiguous"
         ? "Inspect the routing evidence, then remove the conflicting claim so one exact session identity remains."
-        : cursorRequiresExact
+        : requiresExactCmux
           ? "Open it in a cmux pane (or start the agent from one); the next scan binds it."
           : "Open or start the agent in a cmux pane; the next scan links it when cmux reports the session.",
       routingEvidence,

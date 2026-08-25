@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { instanceIdFor } from "../src/server/collector-instances";
 import {
   collectGrokBotSessions,
   decodeBlobKey,
@@ -75,7 +76,7 @@ describe("Grok Bot sand-client-persistence", () => {
       id: `grok:bot:${SESSION_ID}`,
       provider: "grok",
       sourceSessionId: `bot:${SESSION_ID}`,
-      instanceId: "grok-bot:grok-bot-2",
+      instanceId: instanceIdFor("grok-bot", FIXTURE_ROOT),
       instanceLabel: "Grok Bot 2",
     });
   });
@@ -134,16 +135,15 @@ describe("Grok Bot sand-client-persistence", () => {
     copyFixture(bot2, REPLICA_FILE);
 
     const result = await collectGrokBotSessions([bot1, bot2], NOW);
+    const instance1 = instanceIdFor("grok-bot", bot1);
+    const instance2 = instanceIdFor("grok-bot", bot2);
     const ids = result.value.map((agent) => agent.id).sort();
     expect(ids).toEqual([
-      `grok:bot:grok-bot-2:${SESSION_ID}`,
-      `grok:bot:grok-bot:${SESSION_ID}`,
-    ]);
+      `grok:bot:${instance1.slice("grok-bot:".length)}:${SESSION_ID}`,
+      `grok:bot:${instance2.slice("grok-bot:".length)}:${SESSION_ID}`,
+    ].sort());
     expect(result.value.every((agent) => agent.sourceSessionId === `bot:${SESSION_ID}`)).toBe(true);
-    expect(new Set(result.value.map((agent) => agent.instanceId))).toEqual(new Set([
-      "grok-bot:grok-bot",
-      "grok-bot:grok-bot-2",
-    ]));
+    expect(new Set(result.value.map((agent) => agent.instanceId))).toEqual(new Set([instance1, instance2]));
   });
 
   test("treats lastActivityAt 0 as missing and keeps the row via updatedAt", async () => {

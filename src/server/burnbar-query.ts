@@ -70,7 +70,6 @@ async function main(): Promise<void> {
 
   Database.setCustomSQLite(resolveDylib());
   const rows = readForeignSqlite(dbPath, (db) => {
-    db.run(`PRAGMA key = '${key}'`);
     const cipher = db.query("PRAGMA cipher_version").get() as { cipher_version?: string } | null;
     if (!cipher?.cipher_version) {
       throw new Error("SQLCipher codec not active after keying.");
@@ -78,6 +77,10 @@ async function main(): Promise<void> {
     // Force a page read so a wrong key fails here instead of later.
     db.query("SELECT count(*) AS n FROM sqlite_master").get();
     return db.query(sql).all(...params);
+  }, {
+    initialize(db) {
+      db.run(`PRAGMA key = '${key}'`);
+    },
   });
   process.stdout.write(`${JSON.stringify({ ok: true, rows })}\n`);
 }

@@ -201,7 +201,7 @@ describe("the name never moves once the session has one", () => {
       ).name,
     );
     expect(new Set(names).size).toBe(1);
-    expect(names[0]).toBe("Claude · the-mountain-main");
+    expect(names[0]).toBe("Claude Code · the-mountain-main");
   });
 
   /* The counter-proof: if the wire ever carries the latest cwd into this field
@@ -255,8 +255,8 @@ describe("the session tag separates what the name could not", () => {
       { sourceSessionId: "", identity },
     ]);
     expect(named.map((entry) => entry.name)).toEqual([
-      "Claude · the-mountain-main",
-      "Claude · the-mountain-main",
+      "Claude Code · the-mountain-main",
+      "Claude Code · the-mountain-main",
     ]);
   });
 });

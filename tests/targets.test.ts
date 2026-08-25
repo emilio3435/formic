@@ -1,18 +1,48 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseCmuxTerminals } from "../src/server/cmux";
 import { readHookSessionStores } from "../src/server/cmux-hook-sessions";
+import { controlsFor } from "../src/server/snapshot-agent";
 import { canWriteToTarget, resolveAgentTarget, resolveAgentTargetWithTrace } from "../src/server/targets";
 import type { CollectedAgent } from "../src/server/types";
+import type { Provider } from "../src/shared/types";
 
 const surfaces = parseCmuxTerminals(
   readFileSync(join(import.meta.dir, "fixtures", "cmux-discovery.json"), "utf8"),
 );
+const temporaryRoots: string[] = [];
+const nativeHookCases = [
+  ["pi", "Pi.Native_Case.V1", "pi.native_case.v1"],
+  ["opencode", "ses_ABCDEFGHIJKLMNOPQRSTUVWXYZ", "ses_abcdefghijklmnopqrstuvwxyz"],
+  ["kilo", "ses_abcdefghijklmnopqrstuvwxyz", "ses_ABCDEFGHIJKLMNOPQRSTUVWXYZ"],
+  ["hermes", "hermes_case_id", "Hermes_Case_ID"],
+] as const;
 
 afterEach(() => {
   readHookSessionStores(join(import.meta.dir, "fixtures", "missing-hook-sessions"));
+  for (const root of temporaryRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
+
+function hookStore(provider: Provider, sessionId: string, surfaceId: string): string {
+  const root = mkdtempSync(join(tmpdir(), "anthill-target-hook-case-"));
+  temporaryRoots.push(root);
+  writeFileSync(join(root, `${provider}-hook-sessions.json`), JSON.stringify({
+    sessions: {
+      [sessionId]: {
+        sessionId,
+        surfaceId,
+        workspaceId: `${provider}-workspace`,
+        cwd: "/tmp/formic",
+        pid: 4242,
+        agentLifecycle: "running",
+        updatedAt: 1_800_000_000,
+      },
+    },
+  }));
+  return root;
+}
 
 function agent(overrides: Partial<CollectedAgent>): CollectedAgent {
   return {
@@ -138,6 +168,121 @@ describe("safe cmux target resolution", () => {
       attestation: "live",
     });
   });
+
+  test.each(nativeHookCases)(
+    "HOOK-CASE-EXACT %s byte-unequal native hook identity cannot route or enable target controls",
+    (provider, sourceSessionId, hookSessionId) => {
+      const surfaceId = `${provider}-case-surface`;
+      readHookSessionStores(hookStore(provider, hookSessionId, surfaceId));
+      const source = agent({
+        id: `${provider}:${sourceSessionId}`,
+        provider,
+        sourceSessionId,
+      });
+      const target = resolveAgentTarget(source, [{ surfaceId, sourceSessionIds: [] }], [source]);
+      const enabledTargetControls = controlsFor(source, target, false)
+        .filter(({ action, enabled }) => enabled
+          && (action === "focus" || action === "instruct" || action === "interrupt"))
+        .map(({ action }) => action);
+
+      expect({
+        resolution: target.resolution,
+        writable: canWriteToTarget(target),
+        enabledTargetControls,
+      }).toEqual({
+        resolution: "missing",
+        writable: false,
+        enabledTargetControls: [],
+      });
+    },
+  );
+
+  test.each(nativeHookCases.map(([provider]) => provider))(
+    "HOOK-CASE-EXACT %s canonical UUID hook identity remains exact and writable across case",
+    (provider) => {
+      const hookSessionId = "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE";
+      const sourceSessionId = hookSessionId.toLowerCase();
+      const surfaceId = `${provider}-uuid-surface`;
+      readHookSessionStores(hookStore(provider, hookSessionId, surfaceId));
+      const source = agent({
+        id: `${provider}:${sourceSessionId}`,
+        provider,
+        sourceSessionId,
+      });
+      const target = resolveAgentTarget(source, [{ surfaceId, sourceSessionIds: [] }], [source]);
+      const enabledTargetControls = controlsFor(source, target, false)
+        .filter(({ action, enabled }) => enabled
+          && (action === "focus" || action === "instruct" || action === "interrupt"))
+        .map(({ action }) => action);
+
+      expect(target).toMatchObject({
+        surfaceId,
+        resolution: "exact",
+        attestation: "hook-store",
+      });
+      expect(canWriteToTarget(target)).toBeTrue();
+      expect(enabledTargetControls).toEqual(["focus", "instruct", "interrupt"]);
+    },
+  );
+
+  test.each(nativeHookCases.slice(0, 3))(
+    "TARGET-OWNER-COUNT %s case-distinct native owners route independently and exact duplicates remain quarantined",
+    (provider, sourceSessionId, siblingSessionId) => {
+      const surfaceId = `${provider}-case-owner-surface`;
+      readHookSessionStores(hookStore(provider, sourceSessionId, surfaceId));
+      const source = agent({
+        id: `${provider}:${sourceSessionId}`,
+        provider,
+        sourceSessionId,
+        allowCwdFallback: false,
+      });
+      const sibling = agent({
+        id: `${provider}:${siblingSessionId}`,
+        provider,
+        sourceSessionId: siblingSessionId,
+        allowCwdFallback: false,
+      });
+      const liveSurfaces = [{ surfaceId, sourceSessionIds: [] }];
+
+      const exactTarget = resolveAgentTarget(source, liveSurfaces, [source, sibling]);
+      const siblingTarget = resolveAgentTarget(sibling, liveSurfaces, [source, sibling]);
+      const exactControls = controlsFor(source, exactTarget, false)
+        .filter(({ action, enabled }) => enabled
+          && (action === "focus" || action === "instruct" || action === "interrupt"))
+        .map(({ action }) => action);
+      const siblingControls = controlsFor(sibling, siblingTarget, false)
+        .filter(({ action, enabled }) => enabled
+          && (action === "focus" || action === "instruct" || action === "interrupt"))
+        .map(({ action }) => action);
+
+      expect(exactTarget).toMatchObject({
+        surfaceId,
+        resolution: "exact",
+        attestation: "hook-store",
+      });
+      expect(canWriteToTarget(exactTarget)).toBeTrue();
+      expect(exactControls).toEqual(["focus", "instruct", "interrupt"]);
+      expect({
+        resolution: siblingTarget.resolution,
+        writable: canWriteToTarget(siblingTarget),
+        enabledTargetControls: siblingControls,
+      }).toEqual({
+        resolution: "missing",
+        writable: false,
+        enabledTargetControls: [],
+      });
+
+      const duplicate = agent({ ...source, id: `${source.id}:duplicate` });
+      const duplicateTarget = resolveAgentTarget(source, liveSurfaces, [source, duplicate]);
+      const duplicateControls = controlsFor(source, duplicateTarget, false)
+        .filter(({ action, enabled }) => enabled
+          && (action === "focus" || action === "instruct" || action === "interrupt"))
+        .map(({ action }) => action);
+      expect(duplicateTarget.resolution).not.toBe("exact");
+      expect(canWriteToTarget(duplicateTarget)).toBeFalse();
+      expect(duplicateControls).toEqual([]);
+    },
+  );
 
   test("an exact source session ID wins even when cwd would be ambiguous", () => {
     const target = resolveAgentTarget(

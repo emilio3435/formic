@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   renameSync,
+  rmSync,
   statSync,
   truncateSync,
   unlinkSync,
@@ -17,10 +18,14 @@ import {
   claudeContextWindow,
   collectSessions,
   DEFAULT_SESSION_WINDOW_MS,
+  finalizeSessionProviders,
   parseClaudeJsonl,
   parseCodexJsonl,
   parseOmpJsonl,
+  type SessionProviderResults,
 } from "../src/server/collectors";
+import type { CollectedAgent } from "../src/server/types";
+import { PROVIDERS, type Provider } from "../src/shared/types";
 
 const fixture = (name: string): string =>
   readFileSync(join(import.meta.dir, "fixtures", name), "utf8");
@@ -32,6 +37,12 @@ const fixture = (name: string): string =>
 const HOME_DIR = homedir();
 
 const nowMs = Date.parse("2026-07-21T23:31:00.000Z");
+const nativeHookCaseIds = [
+  ["pi", "Pi.Native_Case.V1", "pi.native_case.v1", true],
+  ["opencode", "ses_ABCDEFGHIJKLMNOPQRSTUVWXYZ", "ses_abcdefghijklmnopqrstuvwxyz", true],
+  ["kilo", "ses_abcdefghijklmnopqrstuvwxyz", "ses_ABCDEFGHIJKLMNOPQRSTUVWXYZ", true],
+  ["hermes", "hermes_case_id", "Hermes_Case_ID", false],
+] as const;
 
 describe("human-facing recency remains separate from provider activity", () => {
   test("OMP ignores later model and session machinery", () => {
@@ -890,7 +901,7 @@ describe("collector identity and usage truth", () => {
     ].join("\n"), { nowMs });
 
     expect(agent?.task).toBe("Mission: Redesign the Platforms operating room.");
-    expect(agent?.displayName).toBe("Claude · Home");
+    expect(agent?.displayName).toBe("Claude Code · Home");
   });
 
   /* The drawer prints `task` under the heading as the standing objective, so
@@ -1127,6 +1138,295 @@ describe("collector identity and usage truth", () => {
       processAlive: false,
       endEvidence: "worktree-deleted",
     });
+  });
+
+  test("OpenCode and Pi hook facts require exactly one provider-native session owner", () => {
+    const home = mkdtempSync(join(tmpdir(), "mountain-collector-hook-owner-"));
+    const hookRoot = join(home, ".cmuxterm");
+    const sessionId = "shared-native-session";
+    const hookCwd = join(home, "hook-cwd");
+    const launchCwd = join(home, "launch-cwd");
+    mkdirSync(hookRoot, { recursive: true });
+    for (const provider of ["opencode", "pi"] as const) {
+      writeFileSync(join(hookRoot, `${provider}-hook-sessions.json`), JSON.stringify({
+        version: 1,
+        sessions: {
+          [sessionId]: {
+            sessionId,
+            surfaceId: `${provider}-surface`,
+            workspaceId: `${provider}-workspace`,
+            cwd: hookCwd,
+            pid: 4242,
+            pidStartSeconds: 1_800_000_000,
+            agentLifecycle: "ended",
+            launchCommand: {
+              executablePath: provider,
+              arguments: [],
+              workingDirectory: launchCwd,
+            },
+            updatedAt: 1_800_000_009,
+          },
+        },
+      }));
+    }
+    const agent = (provider: Provider, instance: string): CollectedAgent => ({
+      id: `${provider}:${instance}:${sessionId}`,
+      provider,
+      instanceId: `${provider}:${instance}`,
+      instanceLabel: instance,
+      sourceSessionId: sessionId,
+      displayName: `${provider} ${instance}`,
+      status: "running",
+      statusReason: "Source activity is current.",
+      updatedAt: "2026-08-20T12:00:00.000Z",
+      tokens: { provenance: "observed" },
+      artifacts: [],
+      gates: [],
+    });
+    const results = (owners: number): SessionProviderResults => Object.fromEntries(
+      PROVIDERS.map((provider) => [provider, {
+        value: provider === "opencode" || provider === "pi"
+          ? Array.from({ length: owners }, (_, index) => agent(provider, `instance-${index + 1}`))
+          : [],
+        errors: [],
+      }]),
+    ) as unknown as SessionProviderResults;
+    const facts = (row: CollectedAgent) => ({
+      cwd: row.cwd,
+      launchCwd: row.launchCwd,
+      hookLifecycle: row.hookLifecycle,
+      hookLifecycleAt: row.hookLifecycleAt,
+      processIds: row.processIds,
+      processStarts: row.processStarts,
+      processAlive: row.processAlive,
+      endEvidence: row.endEvidence,
+    });
+    const options = { hookProcessStarts: () => new Map<number, number>() };
+
+    try {
+      const unique = finalizeSessionProviders(results(1), home, options);
+      const duplicate = finalizeSessionProviders(results(2), home, options);
+
+      expect(Object.fromEntries(["opencode", "pi"].map((provider) => [
+        provider,
+        facts(unique[provider as "opencode" | "pi"].value[0]!),
+      ]))).toEqual({
+        opencode: {
+          cwd: hookCwd,
+          launchCwd,
+          hookLifecycle: "ended",
+          hookLifecycleAt: "2027-01-15T08:00:09.000Z",
+          processIds: [4242],
+          processStarts: { 4242: 1_800_000_000 },
+          processAlive: false,
+          endEvidence: "session-exit",
+        },
+        pi: {
+          cwd: hookCwd,
+          launchCwd,
+          hookLifecycle: "ended",
+          hookLifecycleAt: "2027-01-15T08:00:09.000Z",
+          processIds: [4242],
+          processStarts: { 4242: 1_800_000_000 },
+          processAlive: false,
+          endEvidence: "session-exit",
+        },
+      });
+      const absentFacts = {
+        cwd: undefined,
+        launchCwd: undefined,
+        hookLifecycle: undefined,
+        hookLifecycleAt: undefined,
+        processIds: undefined,
+        processStarts: undefined,
+        processAlive: undefined,
+        endEvidence: undefined,
+      };
+      expect(Object.fromEntries(["opencode", "pi"].map((provider) => [
+        provider,
+        duplicate[provider as "opencode" | "pi"].value.map(facts),
+      ]))).toEqual({
+        opencode: [
+          absentFacts,
+          absentFacts,
+        ],
+        pi: [
+          absentFacts,
+          absentFacts,
+        ],
+      });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test.each(nativeHookCaseIds)(
+    "HOOK-CASE-EXACT %s hook facts require byte-equal native identity and preserve unique ownership",
+    (provider, sourceSessionId, caseDifferentSessionId, requiresUniqueOwner) => {
+      const home = mkdtempSync(join(tmpdir(), "mountain-collector-hook-case-"));
+      const hookRoot = join(home, ".cmuxterm");
+      const hookCwd = join(home, "hook-cwd");
+      const launchCwd = join(home, "launch-cwd");
+      mkdirSync(hookRoot, { recursive: true });
+      const writeHook = (sessionId: string): void => {
+        writeFileSync(join(hookRoot, `${provider}-hook-sessions.json`), JSON.stringify({
+          sessions: {
+            [sessionId]: {
+              sessionId,
+              surfaceId: `${provider}-surface`,
+              workspaceId: `${provider}-workspace`,
+              cwd: hookCwd,
+              pid: 4242,
+              pidStartSeconds: 1_800_000_000,
+              agentLifecycle: "ended",
+              launchCommand: {
+                executablePath: provider,
+                arguments: [],
+                workingDirectory: launchCwd,
+              },
+              updatedAt: 1_800_000_009,
+            },
+          },
+        }));
+      };
+      const collected = (sessionId: string, instance: number): CollectedAgent => ({
+        id: `${provider}:instance-${instance}:${sessionId}`,
+        provider,
+        instanceId: `${provider}:instance-${instance}`,
+        instanceLabel: `instance-${instance}`,
+        sourceSessionId: sessionId,
+        displayName: `${provider} instance ${instance}`,
+        status: "running",
+        statusReason: "Source activity is current.",
+        updatedAt: "2026-08-20T12:00:00.000Z",
+        tokens: { provenance: "observed" },
+        artifacts: [],
+        gates: [],
+      });
+      const results = (agents: CollectedAgent[]): SessionProviderResults => Object.fromEntries(
+        PROVIDERS.map((candidate) => [candidate, {
+          value: candidate === provider ? agents : [],
+          errors: [],
+        }]),
+      ) as unknown as SessionProviderResults;
+      const facts = (row: CollectedAgent) => ({
+        cwd: row.cwd,
+        launchCwd: row.launchCwd,
+        hookLifecycle: row.hookLifecycle,
+        hookLifecycleAt: row.hookLifecycleAt,
+        processIds: row.processIds,
+        processStarts: row.processStarts,
+        processAlive: row.processAlive,
+        endEvidence: row.endEvidence,
+      });
+      const absentFacts: ReturnType<typeof facts> = {
+        cwd: undefined,
+        launchCwd: undefined,
+        hookLifecycle: undefined,
+        hookLifecycleAt: undefined,
+        processIds: undefined,
+        processStarts: undefined,
+        processAlive: undefined,
+        endEvidence: undefined,
+      };
+      const attachedFacts: ReturnType<typeof facts> = {
+        cwd: hookCwd,
+        launchCwd,
+        hookLifecycle: "ended",
+        hookLifecycleAt: "2027-01-15T08:00:09.000Z",
+        processIds: [4242],
+        processStarts: { 4242: 1_800_000_000 },
+        processAlive: false,
+        endEvidence: "session-exit",
+      };
+      const options = { hookProcessStarts: () => new Map<number, number>() };
+
+      try {
+        writeHook(caseDifferentSessionId);
+        const caseDifferent = finalizeSessionProviders(
+          results([collected(sourceSessionId, 1)]),
+          home,
+          options,
+        )[provider].value[0]!;
+        expect(facts(caseDifferent)).toEqual(absentFacts);
+
+        writeHook(sourceSessionId);
+        const exact = finalizeSessionProviders(
+          results([collected(sourceSessionId, 1)]),
+          home,
+          options,
+        )[provider].value[0]!;
+        expect(facts(exact)).toEqual(attachedFacts);
+
+        const caseDistinctOwners = finalizeSessionProviders(results([
+          collected(sourceSessionId, 1),
+          collected(caseDifferentSessionId, 2),
+        ]), home, options)[provider].value;
+        expect(caseDistinctOwners.map(facts)).toEqual([attachedFacts, absentFacts]);
+
+        if (requiresUniqueOwner) {
+          const duplicateOwners = finalizeSessionProviders(results([
+            collected(sourceSessionId, 1),
+            collected(sourceSessionId, 2),
+          ]), home, options)[provider].value;
+          expect(duplicateOwners.map(facts)).toEqual([absentFacts, absentFacts]);
+        }
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("HOOK-CASE-EXACT canonical UUID hook facts remain case-insensitive", () => {
+    const home = mkdtempSync(join(tmpdir(), "mountain-collector-hook-uuid-case-"));
+    const hookRoot = join(home, ".cmuxterm");
+    const hookSessionId = "AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE";
+    const sourceSessionId = hookSessionId.toLowerCase();
+    const hookCwd = join(home, "hook-cwd");
+    mkdirSync(hookRoot, { recursive: true });
+    writeFileSync(join(hookRoot, "pi-hook-sessions.json"), JSON.stringify({
+      sessions: {
+        [hookSessionId]: {
+          sessionId: hookSessionId,
+          surfaceId: "pi-uuid-surface",
+          workspaceId: "pi-uuid-workspace",
+          cwd: hookCwd,
+          pid: 4242,
+          agentLifecycle: "running",
+          updatedAt: 1_800_000_009,
+        },
+      },
+    }));
+    const source: CollectedAgent = {
+      id: `pi:${sourceSessionId}`,
+      provider: "pi",
+      sourceSessionId,
+      displayName: "Pi UUID case",
+      status: "running",
+      statusReason: "Source activity is current.",
+      updatedAt: "2026-08-20T12:00:00.000Z",
+      tokens: { provenance: "observed" },
+      artifacts: [],
+      gates: [],
+    };
+    const results = Object.fromEntries(PROVIDERS.map((provider) => [provider, {
+      value: provider === "pi" ? [source] : [],
+      errors: [],
+    }])) as unknown as SessionProviderResults;
+
+    try {
+      const attached = finalizeSessionProviders(results, home, {
+        hookProcessStarts: () => new Map<number, number>(),
+      }).pi.value[0];
+
+      expect(attached).toMatchObject({
+        cwd: hookCwd,
+        hookLifecycle: "running",
+        hookLifecycleAt: "2027-01-15T08:00:09.000Z",
+      });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   /* Measured on this machine 2026-08-05: three hook records sat on live pids

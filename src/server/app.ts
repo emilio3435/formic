@@ -908,7 +908,7 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
       }
       const limit = limitFrom(url, 200, 1_000);
       if (limit instanceof Response) return limit;
-      return transcriptResponse(dependencies.state.get(), agentId, limit, SECURITY_HEADERS);
+      return transcriptResponse(dependencies.state.get(), agentId, limit, SECURITY_HEADERS, request.signal);
     }
     if (url.pathname === "/api/publish") {
       if (request.method !== "GET") {
@@ -1186,7 +1186,7 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
       if (!agentId) {
         return responseError(400, "AGENT_REQUIRED", "Pass ?agent=<agent id> to read a session's per-call series.");
       }
-      return sessionCallsResponse(dependencies.state.get(), agentId, SECURITY_HEADERS);
+      return sessionCallsResponse(dependencies.state.get(), agentId, SECURITY_HEADERS, request.signal);
     }
     if (request.method === "GET" && url.pathname === "/api/debug/identity") {
       return identityDebugResponse(url, dependencies.state.get(), dependencies.state.surfaces?.() ?? [], SECURITY_HEADERS);

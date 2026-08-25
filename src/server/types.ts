@@ -11,10 +11,12 @@ import type {
   SessionIdentityClaim,
   SessionKind,
   SessionKindSource,
+  SourceTitleEvidence,
   SurfaceIdentityTrace,
   TokenUsage,
   HookLifecycle,
   HubSnapshot,
+  RawModelEvidence,
 } from "../shared/types";
 
 export const MAX_TRANSCRIPT_TAIL_CHARS = 800;
@@ -56,6 +58,8 @@ export interface CollectedAgent {
   instanceId?: string;
   instanceLabel?: string;
   sourceSessionId: string;
+  sourceTitle?: SourceTitleEvidence;
+  rawModel?: RawModelEvidence;
   /** Provider runtime identity when it differs from the transcript's source identity. */
   runtimeSessionId?: string;
   displayName: string;

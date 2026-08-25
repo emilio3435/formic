@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { PROVIDERS, type HookLifecycle, type Provider } from "../shared/types";
+import { normalizeIdentityValue } from "./identity";
 
 // cursor and factory records come from the T8 shims rather than native hooks;
 // the reader treats every provider store identically.
@@ -104,11 +105,14 @@ function readStore(root: string, provider: HookProvider): HookSessionRecord[] {
 export function readHookSessionStores(root = join(homedir(), ".cmuxterm")): HookSessionRecord[] {
   const records = HOOK_PROVIDERS.flatMap((provider) => readStore(root, provider));
   recordsBySession = new Map(
-    records.map((record) => [`${record.provider}:${record.sessionId.toLowerCase()}`, record]),
+    records.map((record) => [
+      `${record.provider}:${normalizeIdentityValue(record.provider, record.sessionId)}`,
+      record,
+    ]),
   );
   return records;
 }
 
-export function hookRecordFor(provider: string, sessionId: string): HookSessionRecord | undefined {
-  return recordsBySession.get(`${provider.toLowerCase()}:${sessionId.toLowerCase()}`);
+export function hookRecordFor(provider: Provider, sessionId: string): HookSessionRecord | undefined {
+  return recordsBySession.get(`${provider}:${normalizeIdentityValue(provider, sessionId)}`);
 }

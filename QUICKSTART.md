@@ -1,15 +1,15 @@
 # Quickstart
 
 Formic shows every AI coding session running on your Mac in one window —
-which one is working, which one is stuck waiting on you. It reads the log files
-Claude Code, Codex, and Cursor already write. Nothing leaves `127.0.0.1`, and it
-never opens your source code.
+which one is working, which one is stuck waiting on you. It reads the local
+session stores that supported coding harnesses already write. Nothing leaves
+`127.0.0.1`, and it never opens your source code.
 
 The public product name is Formic. Startup banners, scripts, and launchd labels may
 still say `The Ant Hill` / `anthill` — those are ops compatibility surfaces.
 
-**You need:** a Mac, and at least one of Claude Code / Codex CLI / Cursor already
-in use.
+**You need:** a Mac and at least one of the 16 supported collectors listed
+below already in use.
 
 ## Install
 
@@ -30,8 +30,8 @@ bun start
 ```
 
 `bun start` defaults to <http://127.0.0.1:4701> and reuses an instance that is
-already up. Open that address. Start Claude, Codex, or Cursor in any folder. A
-row appears within about five seconds — no refresh needed.
+already up. Open that address. Start any supported harness in a folder. A row
+appears within about five seconds — no refresh needed.
 
 If `bun` is missing, the installer prints this two-liner (the first line pipes
 curl to bash — review https://bun.sh/docs/installation if you prefer not to):
@@ -65,9 +65,9 @@ The Ant Hill: http://127.0.0.1:4701 · no cmux auth (titles/controls may stay of
 **All three are expected, including the first.** `cmux binary not found.` is
 printed to standard error, so your terminal may colour it red — it is the
 dashboard reporting that it looked for cmux and did not find one, which is
-exactly right on a machine without it. The board comes up regardless. Focus and
-Send are the only things you lose, and [§ Optional](#optional-enable-focus-and-send)
-turns them on later if you want them.
+exactly right on a machine without it. The board comes up regardless. Focus,
+Send, and Interrupt are disabled until cmux supplies a safe target; [§ Optional](#optional-enable-focus-and-send)
+turns the controls on later if you want them.
 
 **Working correctly when:** the badge top-right reads **Live**, and a new session
 shows up on its own.
@@ -96,21 +96,23 @@ it is a disclosure of what cannot be accounted for, not a list of recent things.
 
   | You have | The line reads |
   |---|---|
-  | none of the eleven yet | `No collectors installed yet — Claude Code, Codex, Cursor, Grok Build or Copilot CLI will appear here` |
-  | one of them | `1 of 1 collectors healthy · 10 not installed` |
-  | all eleven | `11 of 11 collectors healthy` |
+  | none of the sixteen yet | `No collectors installed yet — Claude Code, Codex, Cursor, Grok Build or Copilot CLI will appear here` |
+  | one of them | `1 of 1 collectors healthy · 15 not installed` |
+  | all sixteen | `16 of 16 collectors healthy` |
 
   That line is the proof the board is working: a stalled client cannot
   manufacture a ticking snapshot age. **It counts collectors that can SEE, not
-  tools you have installed** — a tool you do not use is *absent*, which is a
-  complete answer ("this never ran here") rather than a gap, so it is named
-  separately and never counted as a fault. If a collector really is *degraded*
+  tools you have installed** — an *absent* collector is a complete answer for
+  the default or configured roots Formic checked, so it is named separately and
+  never counted as a fault. It is not proof that the tool has no historical,
+  custom, or unadvertised root elsewhere. If a collector really is *degraded*
   the line says that instead, because an empty board with a blind collector is
   an *unknown* fleet rather than an empty one.
 - **A `Readings healthy` health chip.** Not having cmux is not a fault: it
-  collects no sessions, so its absence cannot hide a row. You lose Focus and Send
-  and nothing else, and [§ Optional](#optional-enable-focus-and-send) turns them
-  on later. A row you cannot act on says so on the row itself, with the reason.
+  collects no sessions, so its absence cannot hide a row. Focus, Send, and
+  Interrupt are disabled, while monitoring remains available; [§ Optional](#optional-enable-focus-and-send)
+  turns the controls on later. A row you cannot act on says so on the row itself,
+  with the reason.
 
   The chip judges the **instruments**, not the fleet — whether the numbers beside
   it can be trusted — which is why it says "Readings", not "All clear".
@@ -126,41 +128,48 @@ it is a disclosure of what cannot be accounted for, not a list of recent things.
 - **Blank cost figures.** Dollar amounts come from OpenBurnBar; without it, cost
   reads unavailable rather than `$0`.
 
-### What the eleven collectors are
+### What the sixteen collectors are
 
 The count is of collectors that can **see**, not of tools you have installed.
-There are eleven, and they read what each tool already writes to disk:
+There are sixteen, and they read what each tool already writes to disk:
 
 | Collector | Reads | You have it if |
 |---|---|---|
-| **Claude** | `~/.claude/projects/` | you use Claude Code |
+| **Claude Code** | `~/.claude/projects/` | you use Claude Code |
 | **Codex** | `~/.codex/sessions/` | you use Codex CLI |
 | **Cursor** | Cursor's own session store | you use Cursor |
 | **Factory** | `~/.factory/sessions/` | you use Factory (droid) |
 | **OMP** | `~/.omp/agent/sessions/` | almost certainly not — it is a legacy source kept for old history |
 | **Prime** | `~/.prime/agent/sessions/` | you use Prime Agent |
-| **Grok** | `~/.grok/sessions/<encoded-cwd>/<session-id>/` or `$GROK_HOME/sessions/…` | you use Grok Build |
+| **Grok Build** | `~/.grok/sessions/<encoded-cwd>/<session-id>/` or `$GROK_HOME/sessions/…` | you use Grok Build |
 | **Hermes** | `~/.hermes/` | you use Hermes |
-| **Muse** | `~/.local/share/muse/` | you use Muse |
+| **Muse Code** | `~/.local/share/muse/` | you use Muse Code |
 | **Antigravity** | `~/.gemini/antigravity/` (or `antigravity-cli` / `antigravity-ide`) | you use Antigravity |
-| **Copilot** | `~/.copilot/session-state/` or `$COPILOT_HOME/session-state/` | you use Copilot CLI |
+| **Copilot CLI** | `~/.copilot/session-state/` or `$COPILOT_HOME/session-state/` | you use Copilot CLI |
+| **Gemini CLI** | `~/.gemini/tmp/<project>/chats/` or `$GEMINI_CLI_HOME/.gemini/tmp/<project>/chats/` | you use Gemini CLI |
+| **OpenCode** | `$XDG_DATA_HOME/opencode/opencode.db` or `~/.local/share/opencode/opencode.db` (plus `opencode-*.db`); `OPENCODE_DB` selects one absolute or data-root-relative database, while `:memory:` means present-empty | you use OpenCode |
+| **Pi** | `~/.pi/agent/sessions/` (or an exact configured/onboarded direct session root) | you use Pi |
+| **Kilo** | `~/.local/share/kilo/kilo.db` (plus `kilo-*.db` and Kilo-local `opencode-*.db`) | you use Kilo Code |
+| **Kimi Code** | `~/.kimi-code/sessions/<encoded-cwd>/session_<uuid>/` | you use Kimi Code |
 
-Extra copies of these homes opt in under **Settings → Collectors**; they are not new providers.
+Only `cursor-gui`, `grok-cli`, `grok-bot`, `copilot`, `gemini-cli`, `opencode`, `pi`, `kilo`, `kimi`
+support alternate-home onboarding under **Settings → Collectors** today; those
+extra copies are not new providers. Other detected homes stay visible as
+`needs-parser` and cannot be enabled as working collectors yet.
 
-**Expect most of these to be absent, and expect that to be fine.** A directory
-that does not exist is a complete answer — *this tool never ran here* — and no
-session can be hiding behind it, so an absent collector is named separately and
-never counted as a fault. Most people run one or two of these and see a line
-like `1 of 1 collectors healthy · 10 not installed`. Watch for `degraded`
-instead, which means something *stopped* a collector reading — a permissions or
-I/O failure — and is the only case where sessions could exist that the board
-cannot show you.
+**Expect most of these to be absent, and expect that to be fine.** A missing
+default or configured directory is a complete answer for the enumerated roots:
+Formic found no sessions there. Historical, custom, or unadvertised roots can
+still sit outside that answer until they are configured or supported. Most
+people run one or two of these and see a line like `1 of 1 collectors healthy ·
+15 not installed`. Watch for `degraded` instead, which means something stopped
+Formic from reading a root it did enumerate — a permissions or I/O failure.
 
-**cmux is not one of the eleven.** It does not collect sessions; it resolves which
-terminal a session is sitting in, which is what Focus and Send need. Not having
-it costs you those buttons and nothing else — it cannot hide a row, so it must
-never move the collector count. If you ever see a degraded collector *caused by*
-a missing cmux, that is a bug, not your setup.
+**cmux is not one of the sixteen.** It does not collect sessions; it resolves which
+terminal a session is sitting in, which is what Focus, Send, and Interrupt need.
+Not having it disables those controls but cannot hide a row, so it must never
+move the collector count. If you ever see a degraded collector *caused by* a
+missing cmux, that is a bug, not your setup.
 
 ## Optional: enable Focus and Send
 
@@ -177,7 +186,10 @@ config file on first launch, and there is nothing to edit until it has.
 **cmux installed is not the same as cmux naming your session.** With cmux
 running you may still find **Send and Interrupt greyed out on a row where Focus
 works**. That is deliberate, and it is worth knowing before you meet it, because
-the row otherwise looks completely healthy.
+the row otherwise looks completely healthy. That folder-only recovery path is
+available only to collectors that permit a working-directory fallback. Gemini
+CLI, OpenCode, Pi, Kilo, and Kimi Code require exact session identity for all
+three controls, so Focus stays off too until cmux attests the session.
 
 ### What Formic promises never to do
 
@@ -206,10 +218,12 @@ everything.** A cost window reports what falls outside it rather than presenting
 its own horizon as the whole record — the server returns that figure today, and
 the card is being taught to print it.
 
-**Focus is exempt from all of it, on purpose.** Looking costs nothing and going
-to the pane is how you recover, so there is always a way in. The board is never
-the reason you cannot reach an agent — it is the reason you do not reach the
-wrong one.
+**When Formic has a unique working-directory target, Focus is exempt from the
+write gates on purpose.** Looking costs nothing and going to the pane is how you
+recover. Exact-identity-only collectors — Gemini CLI, OpenCode, Pi, Kilo, and
+Kimi Code — keep Focus off until cmux attests the session, because before then
+there is no terminal Formic can safely take you to. The board never substitutes
+a guessed terminal for the agent you meant to reach.
 
 So: **start agents inside cmux panes, leave them there, and keep them running**,
 and the write controls stay on. There is no setting for any of this and nothing

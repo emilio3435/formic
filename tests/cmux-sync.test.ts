@@ -318,6 +318,11 @@ async function livenessFixture() {
     muse: { value: [], errors: [] },
     antigravity: { value: [], errors: [] },
     copilot: { value: [], errors: [] },
+    gemini: { value: [], errors: [] },
+    opencode: { value: [], errors: [] },
+    pi: { value: [], errors: [] },
+    kilo: { value: [], errors: [] },
+    kimi: { value: [], errors: [] },
   });
   const collectors: HubCollectors = {
     sessions: async () => empty(),

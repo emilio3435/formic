@@ -661,10 +661,21 @@ export function buildClusters(agents) {
 
 export function tokenSummary(tokens) {
   const label = tokens && tokens.scope === "latest-turn" ? "latest call" : "tokens";
-  /* Zero is absence here, not a measurement: a session whose every figure is 0
-     has reported nothing, and a bold "0" styled exactly like a reading claimed
-     a measurement the source never made. */
-  const absent = (v) => v == null || v === 0;
+  /* Zero is absence only when nobody counted.
+
+     This keyed on the VALUE — every 0 was absence — which was right about the
+     case it was written for (a spend-limit-locked session whose counters were
+     never populated) and wrong about the rule, because `provenance` is the
+     field that already separates the two. A source saying "observed, 0" has
+     counted and found none; a source that says nothing carries `unknown`.
+     Collapsing them discarded a real reading: OpenCode's archived child
+     sessions genuinely report zero of everything, and the board answered "not
+     reported" about counters it had been handed.
+
+     A block with no counters at all is still absence either way — there is no
+     zero there to report, only silence. */
+  const observedCounts = Boolean(tokens && tokens.provenance === "observed");
+  const absent = (v) => v == null || (v === 0 && !observedCounts);
   if (!tokens || (absent(tokens.total) && absent(tokens.input) && absent(tokens.output) && absent(tokens.cachedInput))) {
     const provenance = tokens ? tokens.provenance : "unknown";
     return {

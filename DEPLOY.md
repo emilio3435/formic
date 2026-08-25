@@ -80,11 +80,11 @@ production worktree and deploy again. Do not move the production checkout behind
 
 ## Do NOT deploy a lane over `main`
 
-`main` is the integration target; other agents land multiple lanes into it. Lane
-branches — for example the harness-parity lane (`feat/harness-parity-files-ultra`)
-— are *sources*, not deploy targets — pointing :4701
-at a lane can regress work that was landed into `main` from elsewhere. Always
-land INTO `main`.
+`main` is the integration target; other agents land multiple lanes into it.
+Development branches and lane worktrees are sources, not deploy targets. Their
+names are intentionally omitted because they are temporary; pointing :4701 at
+any lane can regress work that landed into `main` from elsewhere. Always land
+into `main` first.
 
 ## Preview a change safely (no risk to :4701)
 

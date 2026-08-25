@@ -30,15 +30,20 @@ export const MAX_NAME_LENGTH = 80;
 export const PROVIDER_DISPLAY_NAMES = {
   codex: "Codex",
   omp: "OMP",
-  claude: "Claude",
+  claude: "Claude Code",
   cursor: "Cursor",
   factory: "Factory",
   prime: "Prime",
-  grok: "Grok",
+  grok: "Grok Build",
   hermes: "Hermes",
-  muse: "Muse",
+  muse: "Muse Code",
   antigravity: "Antigravity",
-  copilot: "Copilot",
+  copilot: "Copilot CLI",
+  gemini: "Gemini CLI",
+  opencode: "OpenCode",
+  pi: "Pi",
+  kilo: "Kilo",
+  kimi: "Kimi Code",
 };
 
 /* Strings that arrive in a name-shaped field but are not names: OMP's periodic

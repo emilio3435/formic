@@ -2,6 +2,27 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  isArrowFunction,
+  isBlock,
+  isCallExpression,
+  isComputedPropertyName,
+  isExpressionStatement,
+  isFunctionExpression,
+  isIdentifier,
+  isImportDeclaration,
+  isMethodDeclaration,
+  isNamedImports,
+  isObjectLiteralExpression,
+  isPropertyAssignment,
+  isPropertyAccessExpression,
+  isSpreadAssignment,
+  isStringLiteralLikeNode,
+  isTemplateExpression,
+  type CallExpression,
+  type Node,
+} from "typescript/unstable/ast";
+import { API } from "typescript/unstable/async";
 
 /* burnbar-query.ts — entry 1 of docs/UNTESTED-PATHS-MAP.md, and the only file
    in src/server that no test imported at all.
@@ -27,6 +48,136 @@ const dylib =
 const canSqlcipher = Boolean(dylib && Bun.file(dylib).size > 0);
 
 interface HelperResult { ok: boolean; rows?: unknown[]; error?: string }
+
+test("SQLCipher keying is the sole pre-transaction foreign-SQLite initializer", async () => {
+  const api = new API({ cwd: join(import.meta.dir, "..") });
+  try {
+    const snapshot = await api.updateSnapshot({ openFiles: [HELPER] });
+    try {
+      const project = await snapshot.getDefaultProjectForFile(HELPER);
+      if (!project) {
+        throw new Error("installed TypeScript AST could not load the default project");
+      }
+      const sourceFile = await project.program.getSourceFile(HELPER);
+      if (!sourceFile) {
+        throw new Error("installed TypeScript AST could not load burnbar-query.ts");
+      }
+      let readImportName: Node | undefined;
+      for (const statement of sourceFile.statements) {
+        if (
+          !isImportDeclaration(statement) ||
+          !isStringLiteralLikeNode(statement.moduleSpecifier) ||
+          statement.moduleSpecifier.text !== "./foreign-sqlite"
+        ) continue;
+        const bindings = statement.importClause?.namedBindings;
+        if (!bindings || !isNamedImports(bindings)) continue;
+        const specifier = bindings.elements.find((element) =>
+          (element.propertyName ?? element.name).text === "readForeignSqlite"
+        );
+        if (specifier) readImportName = specifier.name;
+      }
+      const readImportSymbol = readImportName
+        ? await project.checker.getSymbolAtLocation(readImportName)
+        : undefined;
+      const readCalls: CallExpression[] = [];
+      const keyCalls: CallExpression[] = [];
+      const identifierCalls: CallExpression[] = [];
+      const collect = (node: Node): void => {
+        if (isCallExpression(node)) {
+          if (isIdentifier(node.expression)) identifierCalls.push(node);
+          const argument = node.arguments[0];
+          const keyPrefix = argument && isStringLiteralLikeNode(argument)
+            ? argument.text
+            : argument && isTemplateExpression(argument)
+              ? argument.head.text
+              : undefined;
+          if (keyPrefix !== undefined && /^\s*PRAGMA\s+key\s*=/i.test(keyPrefix)) keyCalls.push(node);
+        }
+        node.forEachChild(collect);
+      };
+      collect(sourceFile);
+      for (const call of identifierCalls) {
+        const calleeSymbol = await project.checker.getSymbolAtLocation(call.expression);
+        if (
+          readImportSymbol !== undefined &&
+          calleeSymbol !== undefined &&
+          calleeSymbol.id === readImportSymbol.id
+        ) readCalls.push(call);
+      }
+
+      const readCall = readCalls[0];
+      const options = readCall?.arguments[2];
+      const optionProperties = options && isObjectLiteralExpression(options)
+        ? [...options.properties]
+        : [];
+      const initializeProperties = optionProperties.filter((property) => {
+        if (isSpreadAssignment(property)) return false;
+        const name = property.name;
+        if (isComputedPropertyName(name)) {
+          return isStringLiteralLikeNode(name.expression) && name.expression.text === "initialize";
+        }
+        return (isIdentifier(name) || isStringLiteralLikeNode(name)) && name.text === "initialize";
+      });
+      const initializeProperty = initializeProperties.length === 1
+        ? initializeProperties[0]
+        : undefined;
+      const initializer = initializeProperty && isMethodDeclaration(initializeProperty)
+        ? initializeProperty
+        : initializeProperty && isPropertyAssignment(initializeProperty) &&
+            (isArrowFunction(initializeProperty.initializer) ||
+              isFunctionExpression(initializeProperty.initializer))
+          ? initializeProperty.initializer
+          : undefined;
+      const initializerParameter = initializer?.parameters[0]?.name;
+      const initializerParameterSymbol = initializerParameter && isIdentifier(initializerParameter)
+        ? await project.checker.getSymbolAtLocation(initializerParameter)
+        : undefined;
+      const keyCall = keyCalls.length === 1 ? keyCalls[0] : undefined;
+      const keyAccess = keyCall && isPropertyAccessExpression(keyCall.expression)
+        ? keyCall.expression
+        : undefined;
+      const keyReceiver = keyAccess?.expression;
+      const keyReceiverSymbol = keyReceiver && isIdentifier(keyReceiver)
+        ? await project.checker.getSymbolAtLocation(keyReceiver)
+        : undefined;
+      const initializerStatements = initializer?.body && isBlock(initializer.body)
+        ? initializer.body.statements
+        : [];
+      const keyIsSoleDirectInitializerDatabaseOperation =
+        keyAccess !== undefined &&
+        (keyAccess.name.text === "run" || keyAccess.name.text === "exec") &&
+        initializerStatements.length === 1 &&
+        isExpressionStatement(initializerStatements[0]) &&
+        initializerStatements[0].expression === keyCall &&
+        initializerParameterSymbol !== undefined &&
+        keyReceiverSymbol !== undefined &&
+        keyReceiverSymbol.id === initializerParameterSymbol.id;
+
+      const actual = {
+        readForeignSqliteImportResolved: readImportSymbol !== undefined,
+        readForeignSqliteCalls: readCalls.length,
+        optionsObject: options !== undefined && isObjectLiteralExpression(options),
+        initializeProperties: initializeProperties.length,
+        spreadAssignments: optionProperties.filter(isSpreadAssignment).length,
+        pragmaKeyCalls: keyCalls.length,
+        keyIsSoleDirectInitializerDatabaseOperation,
+      };
+      expect(actual).toEqual({
+        readForeignSqliteImportResolved: true,
+        readForeignSqliteCalls: 1,
+        optionsObject: true,
+        initializeProperties: 1,
+        spreadAssignments: 0,
+        pragmaKeyCalls: 1,
+        keyIsSoleDirectInitializerDatabaseOperation: true,
+      });
+    } finally {
+      await snapshot.dispose();
+    }
+  } finally {
+    await api.close();
+  }
+});
 
 /** Spawns the helper exactly as burnbar.ts does and returns its parsed reply. */
 async function ask(

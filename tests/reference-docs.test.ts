@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { buildSnapshot, withPulse } from "../src/server/snapshot";
 import { PulseTracker } from "../src/server/pulse";
 import type { CollectedAgent } from "../src/server/types";
+import { SUPPORTED_ALTERNATE_HOME_KINDS } from "../src/server/collector-instances";
 
 /* README.md and ARCHITECTURE.md drift faster than anyone re-reads them. A label
    documented one afternoon was already wrong the next morning — "Show panes"
@@ -28,6 +29,7 @@ const architecture = read("ARCHITECTURE.md");
 const quickstart = read("QUICKSTART.md");
 const triage = read("TRIAGE-WORKFLOW.md");
 const deploy = read("DEPLOY.md");
+const parity = read("docs/PARITY.md");
 const security = read("SECURITY.md");
 const pkg = read("package.json");
 
@@ -103,6 +105,245 @@ const workingAgent: CollectedAgent = {
   startedAt: "2026-08-02T11:00:00.000Z", updatedAt: "2026-08-02T12:00:00.000Z",
   tokens: { provenance: "unknown" }, artifacts: [], gates: [],
 } as CollectedAgent;
+
+describe("docs/PARITY.md preserves the standing incompatibility ledger", () => {
+  test("collector additions append IDs instead of reusing Issue #21 boundaries", () => {
+    const rows = [...parity.matchAll(/^\| (I-\d{3}) \| ([^|]+) \|/gm)]
+      .map((match) => [match[1], match[2].trim()] as const);
+    expect(rows.map(([id]) => id)).toEqual(
+      Array.from({ length: 26 }, (_, index) => `I-${100 + index}`),
+    );
+    expect(Object.fromEntries(rows)).toMatchObject({
+      "I-115": "Claude Desktop",
+      "I-116": "Consumer ChatGPT app",
+      "I-117": "Provider-routed models",
+      "I-118": "Aider",
+      "I-119": "Windsurf",
+      "I-120": "Cloud sessions",
+      "I-121": "Gemini CLI",
+      "I-122": "OpenCode",
+      "I-123": "Pi",
+      "I-124": "Kilo",
+      "I-125": "Kimi Code",
+    });
+  });
+
+  test("the ledger distinguishes supported-cohort boundaries from future candidates", () => {
+    const flattened = parity.replace(/\s+/g, " ");
+    expect(flattened).toMatch(/I-100[^.]*I-114[^.]*I-121[^.]*I-125[^.]*supported 16-provider cohort/i);
+    expect(flattened).toMatch(/I-115[^.]*I-120[^.]*future[^.]*not provider registrations/i);
+  });
+});
+
+describe("the 16-provider reference docs preserve collector-specific boundaries", () => {
+  const flatten = (doc: string) => doc.replace(/\s+/g, " ");
+
+  test("monitoring-only copy names every disabled control", () => {
+    const doc = flatten(quickstart);
+    expect(doc).not.toMatch(/Focus and Send are the only things you lose/i);
+    expect(doc).not.toMatch(/You lose Focus and Send and nothing else/i);
+    expect(doc).not.toMatch(/what Focus and Send need/i);
+    expect(doc).toMatch(/Focus, Send, and Interrupt (?:stay off|are disabled)/i);
+  });
+
+  test("Focus documentation distinguishes cwd fallback from exact-only collectors", () => {
+    const doc = flatten(parity);
+    expect(doc).toMatch(/unique-(?:cwd|working-directory)[^.]*Focus|Focus[^.]*unique-(?:cwd|working-directory)/i);
+    for (const collector of ["Gemini CLI", "OpenCode", "Pi", "Kilo", "Kimi Code"]) {
+      expect(doc, `PARITY omitted the exact-only ${collector} exception`).toContain(collector);
+    }
+    expect(doc).toMatch(/exact identity[^.]*Focus|Focus[^.]*exact identity/i);
+  });
+
+  test("absence is scoped to enumerated roots rather than the tool's entire history", () => {
+    const doc = flatten(quickstart);
+    expect(doc).not.toMatch(/this never ran here/i);
+    expect(doc).not.toMatch(/no session can be hiding behind it/i);
+    expect(doc).toMatch(/enumerated roots|roots Formic checked/i);
+    expect(doc).toMatch(/historical|custom|unadvertised/i);
+  });
+
+  test("Settings names exactly the collector kinds whose alternate homes are wired", () => {
+    const kinds = SUPPORTED_ALTERNATE_HOME_KINDS.map((kind) => `\`${kind}\``).join(", ");
+    expect(quickstart).toContain(kinds);
+    expect(architecture).toContain(kinds);
+  });
+
+  test("OpenCode documents every root selector the collector implements", () => {
+    for (const [name, doc] of [["QUICKSTART", quickstart], ["ARCHITECTURE", architecture]] as const) {
+      for (const selector of ["$XDG_DATA_HOME/opencode", "OPENCODE_DB", ":memory:"]) {
+        expect(doc, `${name} omitted OpenCode selector ${selector}`).toContain(selector);
+      }
+    }
+  });
+
+  test("the catalog table credits Pi and Kimi without inventing OpenCode or Kilo windows", () => {
+    const row = (provider: string) => parity.match(new RegExp(`^\\| ${provider} \\|.*$`, "m"))?.[0] ?? "";
+    expect(read("src/server/pi.ts")).toContain("claudeContextWindow(");
+    expect(read("src/server/kimi.ts")).toContain("claudeContextWindow(");
+    expect(read("src/server/opencode.ts")).not.toContain("claudeContextWindow(");
+    expect(read("src/server/kilo.ts")).not.toContain("claudeContextWindow(");
+    expect(row("pi")).toMatch(/catalog-only after a compatible source-model match/i);
+    expect(row("kimi")).toMatch(/catalog-only after a compatible source-model match/i);
+    expect(row("opencode")).not.toMatch(/catalog-only|supported-model match/i);
+    expect(row("kilo")).not.toMatch(/catalog-only|supported-model match/i);
+  });
+
+  test("the canonical label table records Kilo's deliberate provider and harness split", () => {
+    expect(parity).toMatch(/^\| `kilo` \| Kilo \| Kilo Code \|$/m);
+    expect(flatten(parity)).toMatch(/provider label[^.]*Kilo[^.]*harness label[^.]*Kilo Code/i);
+  });
+
+  test("PARITY documents source-admission and local safety limits from code", () => {
+    function sourceInteger(source: string, name: string, stack: readonly string[] = []): number {
+      if (stack.includes(name)) throw new Error(`cyclic source constant ${[...stack, name].join(" -> ")}`);
+      const expression = source.match(new RegExp(`\\bconst\\s+${name}\\s*=\\s*([^;]+);`))?.[1]?.trim();
+      if (!expression) throw new Error(`could not derive ${name} from source`);
+      return expression.split("*").reduce((product, rawFactor) => {
+        const factor = rawFactor.trim();
+        if (/^[0-9][0-9_]*$/.test(factor)) return product * Number(factor.replaceAll("_", ""));
+        if (/^[A-Z][A-Z0-9_]*$/.test(factor)) {
+          return product * sourceInteger(source, factor, [...stack, name]);
+        }
+        throw new Error(`unsupported integer expression for ${name}: ${expression}`);
+      }, 1);
+    }
+    const objectInteger = (source: string, objectName: string, field: string): number => {
+      const body = source.match(new RegExp(`\\bconst\\s+${objectName}\\s*=\\s*\\{([\\s\\S]*?)\\}\\s*as const;`))?.[1];
+      const literal = body?.match(new RegExp(`\\b${field}:\\s*([0-9][0-9_]*)`))?.[1];
+      if (!literal) throw new Error(`could not derive ${objectName}.${field} from source`);
+      return Number(literal.replaceAll("_", ""));
+    };
+    const formatted = (value: number): string => value.toLocaleString("en-US");
+
+    const gemini = read("src/server/gemini.ts");
+    const opencode = read("src/server/opencode.ts");
+    const pi = read("src/server/pi.ts");
+    const kilo = read("src/server/kilo-store.ts");
+    const kimi = read("src/server/kimi.ts");
+    const antigravity = read("src/server/antigravity.ts");
+    const limits = {
+      geminiProjects: objectInteger(gemini, "GEMINI_DIRECTORY_LIMITS", "projects"),
+      geminiChats: objectInteger(gemini, "GEMINI_DIRECTORY_LIMITS", "chats"),
+      openCodeStores: sourceInteger(opencode, "OPENCODE_STORE_LIMIT"),
+      piProjects: sourceInteger(pi, "PI_PROJECT_DIRECTORY_LIMIT"),
+      piSessions: sourceInteger(pi, "PI_SESSION_FILE_LIMIT"),
+      kiloDirEntries: objectInteger(kilo, "KILO_STORE_LIMITS", "dataDirEntries"),
+      kiloStores: objectInteger(kilo, "KILO_STORE_LIMITS", "dataDirStores"),
+      kimiStateBytes: sourceInteger(kimi, "KIMI_STATE_BYTES"),
+      kimiIndexBytes: sourceInteger(kimi, "KIMI_INDEX_BYTES"),
+      kimiWireBytes: sourceInteger(kimi, "KIMI_WIRE_BYTES"),
+      kimiWorkdirs: sourceInteger(kimi, "KIMI_WORKDIR_ENTRY_CAP"),
+      kimiSessions: sourceInteger(kimi, "KIMI_SESSION_ENTRY_CAP"),
+      kimiChildren: sourceInteger(kimi, "KIMI_CHILD_ENTRY_CAP"),
+      antigravityBlobBytes: sourceInteger(antigravity, "BLOB_SCAN_MAX_BYTES"),
+      antigravityAggregateBytes: sourceInteger(antigravity, "GEN_METADATA_SCAN_MAX_BYTES"),
+      antigravityCandidates: sourceInteger(antigravity, "GEN_METADATA_CANDIDATE_LIMIT"),
+      antigravityLegacyCandidates: sourceInteger(antigravity, "LEGACY_METADATA_CANDIDATE_LIMIT"),
+      antigravityDirEntries: sourceInteger(antigravity, "DIRECTORY_ENTRY_LIMIT"),
+      antigravityTranscriptBytes: sourceInteger(antigravity, "TRANSCRIPT_SCAN_MAX_BYTES"),
+      antigravityConcurrency: sourceInteger(antigravity, "CONVERSATION_CONCURRENCY"),
+    };
+    expect(limits.kimiIndexBytes).toBe(limits.kimiWireBytes);
+
+    const sectionStart = parity.indexOf("## Local source admission and safety caps");
+    expect(sectionStart, "PARITY omitted the local source-admission contract").toBeGreaterThan(-1);
+    const sectionEnd = parity.indexOf("\n## ", sectionStart + 4);
+    const section = flatten(parity.slice(sectionStart, sectionEnd < 0 ? undefined : sectionEnd));
+    const contract = (provider: string, nextProvider?: string): string => {
+      const start = section.indexOf(`**${provider}.**`);
+      expect(start, `PARITY omitted the ${provider} source-admission contract`).toBeGreaterThan(-1);
+      const end = nextProvider ? section.indexOf(`**${nextProvider}.**`, start + 1) : section.length;
+      expect(end, `PARITY could not delimit the ${provider} source-admission contract`).toBeGreaterThan(start);
+      return section.slice(start, end);
+    };
+
+    const geminiDoc = contract("Gemini CLI", "OpenCode");
+    expect(geminiDoc).toContain(`at most ${formatted(limits.geminiProjects)} total project dirents`);
+    expect(geminiDoc).toContain(`at most ${formatted(limits.geminiChats)} total chat/subagent dirents per opened directory`);
+    expect(geminiDoc).toMatch(/one additional dirent[^.]*truncation witness/i);
+    expect(geminiDoc).toMatch(/irrelevant (?:entries|dirents)[^.]*consume[^.]*budget/i);
+    expect(geminiDoc).toMatch(/eligible entries[^.]*bounded iterator prefix[^.]*sorted[^.]*after[^.]*close/i);
+    expect(geminiDoc).toMatch(/truncation[^.]*source health/i);
+    expect(geminiDoc).toMatch(/not (?:a )?globally deterministic (?:order|ordering|prefix)/i);
+
+    const openCodeDoc = contract("OpenCode", "Pi");
+    expect(openCodeDoc.toLowerCase()).toContain(`at most ${formatted(limits.openCodeStores)} stores are admitted globally across data roots`);
+    expect(openCodeDoc).toMatch(/configured `OPENCODE_DB`[^.]*bypasses directory enumeration/i);
+    expect(openCodeDoc).toMatch(/canonical `opencode\.db`[^.]*prioritized only while capacity remains/i);
+    expect(openCodeDoc).toMatch(/enumerated root reads at most its remaining global capacity plus one witness dirent/i);
+    expect(openCodeDoc).toMatch(/irrelevant entries[^.]*consume[^.]*read budget/i);
+    expect(openCodeDoc).toMatch(/truncation and deadline health[^.]*root-qualified/i);
+    expect(openCodeDoc).toMatch(/session admission[^.]*limit plus one[^.]*native session-ID index/i);
+    expect(openCodeDoc).toMatch(/global recency[^.]*unproven/i);
+
+    const piDoc = contract("Pi", "Kilo Code");
+    expect(piDoc).toContain(`at most ${formatted(limits.piProjects)} total project dirents`);
+    expect(piDoc).toContain(`at most ${formatted(limits.piSessions)} total session-file dirents`);
+    expect(piDoc).toMatch(/one witness dirent[^.]*each exhausted scope/i);
+    expect(piDoc.toLowerCase()).toContain(`direct roots use the same ${formatted(limits.piSessions)} session-file limit`);
+    expect(piDoc).toMatch(/irrelevant entries[^.]*consume[^.]*budget/i);
+    expect(piDoc).toMatch(/omitted remainder[^.]*explicit source health/i);
+    const piSourceContract = flatten(parity.slice(
+      parity.indexOf("## Pi source contract"),
+      parity.indexOf("## Harness marks"),
+    ));
+    for (const retainedLimit of [
+      "64 KiB per global/project Pi `settings.json` file",
+      "8 MiB per physical record",
+      "4,096 retained entries",
+      "16 MiB retained replay state",
+    ]) {
+      expect(piSourceContract, `PARITY dropped Pi's ${retainedLimit} record/replay limit`)
+        .toContain(retainedLimit);
+    }
+
+    const kiloDoc = contract("Kilo Code", "Kimi Code");
+    expect(kiloDoc).toContain(`at most ${formatted(limits.kiloDirEntries)} total data-directory dirents`);
+    expect(kiloDoc).toContain(`at most ${formatted(limits.kiloStores)} matching regular stores`);
+    expect(kiloDoc).toMatch(/one witness dirent[^.]*detect truncation/i);
+    expect(kiloDoc).toMatch(/irrelevant entries[^.]*consume[^.]*budget/i);
+    expect(kiloDoc).toMatch(/single bounded primary scan[^.]*diagnostics/i);
+    expect(kiloDoc).toMatch(/every parser diagnostic[^.]*store-qualified provider health/i);
+    expect(kiloDoc).toMatch(/session admission[^.]*limit plus one[^.]*native session-ID index/i);
+    expect(kiloDoc).toMatch(/global recency[^.]*unproven/i);
+
+    const kimiDoc = contract("Kimi Code", "Antigravity");
+    expect(kimiDoc).toContain(`at most ${formatted(limits.kimiWorkdirs)} total workdir dirents`);
+    expect(kimiDoc).toContain(`at most ${formatted(limits.kimiSessions)} total session dirents`);
+    expect(kimiDoc).toMatch(/one witness dirent[^.]*detect truncation/i);
+    expect(kimiDoc).toMatch(/irrelevant entries[^.]*consume[^.]*admission/i);
+    expect(kimiDoc).toContain(`at most ${formatted(limits.kimiChildren)} total child-artifact dirents`);
+    expect(kimiDoc.toLowerCase()).toContain(`state is capped at ${limits.kimiStateBytes / 1024 / 1024} mib`);
+    expect(kimiDoc).toContain(`index and wire inputs at ${limits.kimiIndexBytes / 1024 / 1024} MiB`);
+    expect(kimiDoc).toMatch(/omitted remainder[^.]*explicit source health/i);
+    expect(kimiDoc).toMatch(/missing or unreadable declared-child directory[^.]*degrades the source/i);
+
+    const antigravityDoc = contract("Antigravity");
+    expect(antigravityDoc).toContain(`at most ${formatted(limits.antigravityDirEntries)} total root dirents`);
+    expect(antigravityDoc).toContain(`at most ${formatted(limits.antigravityDirEntries)} total conversation dirents`);
+    expect(antigravityDoc).toMatch(/one witness dirent[^.]*detect truncation/i);
+    expect(antigravityDoc).toContain(`${formatted(limits.antigravityTranscriptBytes)}-byte transcript budget`);
+    expect(antigravityDoc).toContain(`${formatted(limits.antigravityLegacyCandidates)}-candidate legacy metadata limit`);
+    expect(antigravityDoc).toMatch(/newest-first `gen_metadata` scan/i);
+    expect(antigravityDoc).toContain(`${formatted(limits.antigravityCandidates)}-candidate limit`);
+    expect(antigravityDoc).toContain(`${formatted(limits.antigravityAggregateBytes)}-byte aggregate admitted-blob budget`);
+    expect(antigravityDoc).toContain(`${formatted(limits.antigravityBlobBytes)}-byte per-blob decoder limit`);
+    expect(antigravityDoc).toContain(`${formatted(limits.antigravityBlobBytes + 1)}-byte projection witness`);
+    expect(antigravityDoc).toContain(`concurrency ${formatted(limits.antigravityConcurrency)}`);
+    expect(antigravityDoc).toMatch(/malformed transcript rows[^.]*unreadable present metadata tables[^.]*incomplete health/i);
+    expect(antigravityDoc).toMatch(/directory and transcript readers[^.]*recheck cancellation and deadline[^.]*after close/i);
+    expect(antigravityDoc).toMatch(/shares one provider deadline and caller signal/i);
+    expect(antigravityDoc).toMatch(/token usage is not decoded/i);
+  });
+
+  test("PARITY documents usage holes as unknown instead of stale occupancy or complete history", () => {
+    const doc = flatten(parity);
+    expect(doc).toMatch(/Gemini CLI[^.]*missing or invalid usage[^.]*withholds current occupancy[^.]*malformed or oversized physical record[^.]*invalidates older occupancy/i);
+    expect(doc).toMatch(/Pi[^.]*same physical-order rule[^.]*malformed or oversized physical record[^.]*session aggregates and call series incomplete/i);
+    expect(doc).toMatch(/Kimi Code[^.]*every started call without complete usage[^.]*newer in-flight request[^.]*withholds occupancy, session aggregates, and calls/i);
+  });
+});
 
 describe("ARCHITECTURE.md stays true to the code it maps", () => {
   test("it names every module that exists, and every module it names exists", () => {
@@ -588,17 +829,12 @@ describe("DEPLOY.md is a rulebook the scripts actually enforce", () => {
     expect(deployScript).toContain("launchctl kickstart -k");
   });
 
-  test("the lane branches it names as sources exist", () => {
-    /* Named branches rot silently — `ant-hill/luna-ops-canvas-reconciled` lost
-       its date suffix and pointed at nothing for days. A reader cannot tell a
-       renamed branch from one they lack. */
+  test("it does not name transient lane branches as deploy sources", () => {
+    /* Lane names expire after integration. A deploy rulebook that names one
+       turns a historical implementation detail into an operator instruction. */
     const branches = [...deploy.matchAll(/\(`((?:ant-hill|feat)\/[a-z0-9/-]+)`\)/g)].map((m) => m[1]);
-    expect(branches.length, "the regex stopped finding branch references").toBeGreaterThan(0);
-    const known = Bun.spawnSync(["git", "branch", "-a", "--format=%(refname:short)"], { cwd: ROOT });
-    const refs = new Set(new TextDecoder().decode(known.stdout).split("\n").map((r) => r.replace(/^origin\//, "").trim()));
-    for (const branch of branches) {
-      expect(refs.has(branch), `DEPLOY.md names branch "${branch}", which no longer exists`).toBe(true);
-    }
+    expect(branches, "DEPLOY.md names an expiring lane branch").toEqual([]);
+    expect(deploy).toContain("Development branches and lane worktrees are sources, not deploy targets");
   });
 });
 
@@ -1105,14 +1341,14 @@ describe("day one on a machine without cmux", () => {
   });
 
   test("QUICKSTART names every collector the code has, with the path it reads", () => {
-    expect(providers.length, "the Provider union changed shape; re-read the roster").toBe(11);
+    expect(providers.length, "the Provider union changed shape; re-read the roster").toBe(16);
     const table = quickstart.slice(quickstart.indexOf("| Collector |"));
     for (const provider of providers) {
       expect(table.toLowerCase(), `QUICKSTART's collector table omits "${provider}"`)
         .toContain(provider === "claude" ? "~/.claude/projects" : provider);
     }
     const collectors = read("src/server/collectors.ts");
-    for (const root of [".omp/agent/sessions", ".codex/sessions", ".claude/projects", ".factory/sessions"]) {
+    for (const root of [".omp/agent/sessions", ".codex/sessions", ".claude/projects", ".factory/sessions", ".local/share/opencode"]) {
       expect(collectors, `collectors.ts no longer reads ${root}`).toContain(root);
       expect(quickstart, `QUICKSTART's table has a stale path for ${root}`).toContain(root);
     }
@@ -1126,7 +1362,7 @@ describe("day one on a machine without cmux", () => {
     expect(quickstart, "QUICKSTART no longer names absence separately from health")
       .toMatch(/not installed/i);
     expect(quickstart, "QUICKSTART stopped telling the reader cmux is not a collector")
-      .toMatch(/cmux is not one of the (?:four|five|six|eight|ten|eleven)/i);
+      .toMatch(/cmux is not one of the (?:four|five|six|eight|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen)/i);
     /* Extra copies stay the same provider. Deleting this sentence would send
        a reader looking for a ninth collector instead of Settings. */
     expect(quickstart, "QUICKSTART stopped saying extra homes opt in under Settings")
@@ -1204,12 +1440,15 @@ describe("the safety promises the docs make on the product's behalf", () => {
     }
   });
 
-  test("both docs promise Focus stays available so there is always a way in", () => {
+  test("both docs limit cwd-only Focus to collectors that permit that fallback", () => {
     for (const [name, doc] of both()) {
-      expect(doc, `${name} stopped promising Focus survives the write gates`)
-        .toMatch(/Focus (still|stays|is exempt)/i);
-      expect(doc, `${name} dropped the line that makes the whole framing land`)
-        .toMatch(/never the reason you cannot reach an agent/i);
+      expect(doc, `${name} stopped explaining the safe cwd-only Focus path`)
+        .toMatch(/unique working-directory target[^.]*Focus|Focus[^.]*working-directory fallback/i);
+      for (const collector of ["Gemini CLI", "OpenCode", "Pi", "Kilo", "Kimi Code"]) {
+        expect(doc, `${name} omitted the exact-only ${collector} exception`).toContain(collector);
+      }
+      expect(doc, `${name} implies exact-only collectors can Focus without attestation`)
+        .toMatch(/including Focus[^.]*stay off until cmux attests|Focus stays off[^.]*until cmux attests/i);
     }
   });
 
@@ -1847,7 +2086,7 @@ describe("TODAY.md keeps the Hermes correction current", () => {
   test("it keeps cron out of the agent contract and names the remaining disclosure", () => {
     const t = today();
     expect(t, "the summary stopped saying health can remain green")
-      .toMatch(/Health can still read `11 of 11 collectors healthy`/i);
+      .toContain(`Health can still read \`${PROVIDERS.length} of ${PROVIDERS.length} collectors healthy\``);
     expect(t, "the summary made cron look controllable as an agent")
       .toMatch(/A cron job has no Focus, Send, lifecycle, or Board row/i);
     expect(t, "the summary stopped naming the billed-provider disclosure")
@@ -1959,7 +2198,7 @@ describe("ANT-GUIDE teaches the provider blind spot as a check, not a complaint"
   });
 });
 
-/* The procedure a reader runs on their OWN board. The four collectors are
+/* The procedure a reader runs on their OWN board. The collector roster is
    universal; the billed set is not, so a list we wrote is ours and useless to
    them. Pinned to the code that makes each step true, and to the two boundaries
    that stop it being oversold: the window must be widened first, and the check
@@ -1970,13 +2209,41 @@ describe("ANT-GUIDE tells a reader how to find their own blind spot", () => {
   test("the collectors it tells them to compare against are the real ones", () => {
     const union = read("src/shared/types.ts").match(/export type Provider = ([^;]+);/)?.[1] ?? "";
     const names = [...union.matchAll(/"([a-z]+)"/g)].map((m) => m[1]);
-    expect(names.length, "the Provider union changed shape").toBe(11);
+    expect(names.length, "the Provider union changed shape").toBe(16);
+    const labels = {
+      claude: "Claude Code",
+      codex: "Codex",
+      cursor: "Cursor",
+      omp: "OMP",
+      factory: "Factory",
+      prime: "Prime",
+      grok: "Grok Build",
+      hermes: "Hermes",
+      muse: "Muse Code",
+      antigravity: "Antigravity",
+      copilot: "Copilot CLI",
+      gemini: "Gemini CLI",
+      opencode: "OpenCode",
+      pi: "Pi",
+      kilo: "Kilo",
+      kimi: "Kimi Code",
+    } as const;
+    expect(Object.keys(labels).sort(), "the reader-facing roster stopped covering the Provider union")
+      .toEqual([...names].sort());
+    const roster = Object.values(labels);
+    const sentence = `${roster.slice(0, -1).join(", ")}, and ${roster.at(-1)}`;
     const g = guide();
-    /* The guide names them in reader-facing form, so check the mapping rather
-       than the identifiers. */
-    for (const shown of ["Claude Code", "Codex", "Cursor", "OMP", "Factory", "Prime", "Grok", "Hermes", "Muse", "Antigravity", "Copilot"]) {
-      expect(g, `the guide stopped listing ${shown} among the collectors to compare against`)
-        .toContain(shown);
+    expect(g, "the blind-spot procedure stopped naming the canonical collector roster")
+      .toContain(`against the sixteen collectors: **${sentence}**`);
+    expect(g, "the spend boundary stopped naming the canonical collector roster")
+      .toContain(`The board reads ${sentence}.`);
+    expect(g, "the Mix card stopped naming the canonical collector roster")
+      .toContain(`per provider (${sentence})`);
+
+    const quickstart = read("QUICKSTART.md");
+    for (const shown of roster) {
+      expect(quickstart, `the Quickstart table stopped using canonical label ${shown}`)
+        .toContain(`| **${shown}** |`);
     }
   });
 

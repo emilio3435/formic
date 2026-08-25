@@ -15,10 +15,10 @@ const shippedPath = join(import.meta.dir, "../config/models.json");
 describe("model knowledge config", () => {
   test("the shipped file preserves the compiled behavior", () => {
     const config = loadModelConfig(shippedPath);
-
-    expect(config).toMatchObject(DEFAULT_MODEL_CONFIG);
-    expect(config.modelDisplayLabels).toEqual({
+    const expectedLabels = {
       "claude-fable-5": "fable 5",
+      "claude-haiku-4-5": "haiku 4.5",
+      "claude-opus-4-7": "opus 4.7",
       "claude-opus-4-8": "opus 4.8",
       "claude-opus-5": "opus 5",
       "claude-sonnet-5": "sonnet 5",
@@ -34,7 +34,27 @@ describe("model knowledge config", () => {
       "grok-4.6": "grok 4.6",
       "spark-1.2": "spark 1.2",
       "muse-spark-1.2": "spark 1.2",
-    });
+    };
+
+    expect(config).toMatchObject(DEFAULT_MODEL_CONFIG);
+    expect(config.modelDisplayLabels).toEqual(expectedLabels);
+    expect(DEFAULT_MODEL_CONFIG.modelDisplayLabels).toEqual(expectedLabels);
+    expect(config.modelFamilyAliases["claude-sonnet-5"]).toEqual([
+      "claude-sonnet-5", "sonnet-5",
+    ]);
+    expect(DEFAULT_MODEL_CONFIG.modelFamilyAliases["claude-sonnet-5"]).toEqual([
+      "claude-sonnet-5", "sonnet-5",
+    ]);
+    expect(config.modelFamilyAliases["claude-haiku-4-5"]).toEqual([
+      "claude-haiku-4-5", "haiku-4-5",
+    ]);
+    expect(DEFAULT_MODEL_CONFIG.modelFamilyAliases["claude-haiku-4-5"]).toEqual([
+      "claude-haiku-4-5", "haiku-4-5",
+    ]);
+    expect(modelFamily("claude-sonnet-5-high", config)).toBe("claude-sonnet-5");
+    expect(modelFamily("sonnet-5-high", config)).toBe("claude-sonnet-5");
+    expect(modelFamily("anthropic/claude-haiku-4-5-20251001", config)).toBe("claude-haiku-4-5");
+    expect(modelFamily("haiku-4-5-high", config)).toBe("claude-haiku-4-5");
     expect(modelFamily("cursor/grok-4.5-fast", config)).toBe("grok-4.5");
     expect(modelFamily("cursor-grok-4.6-high", config)).toBe("grok-4.6");
     expect(modelFamily("grok-build", config)).toBe("grok-4.6");
@@ -60,7 +80,7 @@ describe("model knowledge config", () => {
         cacheCreation?: unknown;
       }>;
     };
-    expect(shipped.pricingVersion).toBe("2026-08-17");
+    expect(shipped.pricingVersion).toBe("2026-08-21");
     const opus = shipped.modelPricingUsdPerMillionTokens?.["claude-opus-4-8"];
     expect(opus?.aliases).toContain("claude-opus-4-8");
     for (const amount of [opus?.input, opus?.output, opus?.cacheRead, opus?.cacheCreation]) {
@@ -84,24 +104,44 @@ describe("model knowledge config", () => {
     expect(shipped.modelPricingUsdPerMillionTokens?.["gpt-5.6-luna"]).toMatchObject({
       providers: ["OpenAI API"], input: 0.2, output: 1.2, cacheRead: 0.02, cacheCreation: 0.25,
     });
+    const haiku = shipped.modelPricingUsdPerMillionTokens?.["claude-haiku-4-5"];
+    expect(haiku?.aliases).toContain("claude-haiku-4-5");
+    expect(haiku).toMatchObject({
+      providers: ["Anthropic API"], input: 1, output: 5, cacheRead: 0.1, cacheCreation: 1.25,
+    });
     expect(shipped.claudeContextWindows).toMatchObject({
+      "haiku-4-5": 200_000,
+      "haiku 4.5": 200_000,
       sol: 258_400,
+      terra: 258_400,
       luna: 258_400,
       "gpt-5.6-sol": 258_400,
+      "gpt-5.6-terra": 258_400,
       "gpt-5.6-luna": 258_400,
       "gemini-3.7-flash": 1_048_576,
       "gemini-3.6-flash": 1_048_576,
       "gemini-3.1-pro": 1_048_576,
     });
-    expect(shipped.claudeContextWindows).not.toHaveProperty("terra");
-    expect(shipped.claudeContextWindows).not.toHaveProperty("gpt-5.6-terra");
+    expect(DEFAULT_MODEL_CONFIG.claudeContextWindows).toMatchObject({
+      "haiku-4-5": 200_000,
+      "haiku 4.5": 200_000,
+      terra: 258_400,
+      "gpt-5.6-terra": 258_400,
+    });
+    expect(shipped.claudeContextWindows?.terra).toBe(258_400);
+    expect(shipped.claudeContextWindows?.["gpt-5.6-terra"]).toBe(258_400);
+    expect(shipped.claudeContextWindows).not.toHaveProperty("prime");
+    expect(DEFAULT_MODEL_CONFIG.claudeContextWindows).not.toHaveProperty("prime");
     expect(claudeContextWindow("muse-spark-1.2")).toBe(1_000_000);
     expect(claudeContextWindow("GPT-5.6 Sol")).toBe(258_400);
     expect(claudeContextWindow("Claude Opus 5")).toBe(1_000_000);
+    expect(claudeContextWindow("Claude Haiku 4.5")).toBe(200_000);
+    expect(claudeContextWindow("claude-haiku-4-5-20251001")).toBe(200_000);
     expect(claudeContextWindow("gemini-3.7-flash")).toBe(1_048_576);
     expect(claudeContextWindow("Gemini 3.6 Flash")).toBe(1_048_576);
     expect(claudeContextWindow("gemini-3.1-pro-preview")).toBe(1_048_576);
-    expect(claudeContextWindow("gpt-5.6-terra")).toBeUndefined();
+    expect(claudeContextWindow("terra")).toBe(258_400);
+    expect(claudeContextWindow("GPT-5.6 Terra")).toBe(258_400);
     expect(claudeContextWindow("mystery-model")).toBeUndefined();
   });
 

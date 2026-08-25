@@ -284,7 +284,7 @@
         "sourceSessionId": "dad9736f-1111-2222-3333-444455556666",
         "originCwd": "/Users/ant/Developer/the-mountain-main"
       },
-      "expect": { "name": "Claude · the-mountain-main", "base": "Claude · the-mountain-main", "source": "origin-cwd" }
+      "expect": { "name": "Claude Code · the-mountain-main", "base": "Claude Code · the-mountain-main", "source": "origin-cwd" }
     },
     {
       "name": "a session started in the home directory is named Home, not after the operator",
@@ -295,7 +295,7 @@
         "sourceSessionId": "dad9736f-1111-2222-3333-444455556666",
         "originCwd": "/Users/ant"
       },
-      "expect": { "name": "Claude · Home", "base": "Claude · Home", "source": "origin-cwd" }
+      "expect": { "name": "Claude Code · Home", "base": "Claude Code · Home", "source": "origin-cwd" }
     },
     {
       "name": "a trailing slash does not make a different directory",
@@ -306,7 +306,7 @@
         "sourceSessionId": "dad9736f-1111-2222-3333-444455556666",
         "originCwd": "/Users/ant/"
       },
-      "expect": { "name": "Claude · Home", "base": "Claude · Home", "source": "origin-cwd" }
+      "expect": { "name": "Claude Code · Home", "base": "Claude Code · Home", "source": "origin-cwd" }
     },
     {
       "name": "the origin directory outranks the task line",
@@ -344,7 +344,7 @@
         "sourceSessionId": "dad9736f-1111-2222-3333-444455556666",
         "taskName": "<file name=\"report.md\">"
       },
-      "expect": { "name": "Claude session", "base": "Claude session", "source": "provider-fallback" }
+      "expect": { "name": "Claude Code session", "base": "Claude Code session", "source": "provider-fallback" }
     },
     {
       "name": "a session with no evidence at all still gets its provider's name",
@@ -406,9 +406,9 @@
           "evidence": { "provider": "claude", "sourceSessionId": "9a1e0224-aaaa-bbbb-cccc-1111deadbeef", "originCwd": "/Users/ant/Developer/the-mountain-main" }
         }
       ],
-      "expect": ["Claude · the-mountain-main #55556666", "Claude · the-mountain-main #deadbeef"],
+      "expect": ["Claude Code · the-mountain-main #55556666", "Claude Code · the-mountain-main #deadbeef"],
       "removeAgentIds": ["claude:9a1e0224-aaaa-bbbb-cccc-1111deadbeef"],
-      "expectAfterRemoval": ["Claude · the-mountain-main #55556666"]
+      "expectAfterRemoval": ["Claude Code · the-mountain-main #55556666"]
     },
     {
       "name": "a name nobody else has is left alone",
@@ -467,11 +467,11 @@
         }
       ],
       "expect": [
-        "Claude · the-mountain-main #1111-shared99",
-        "Claude · the-mountain-main #2222-shared99"
+        "Claude Code · the-mountain-main #1111-shared99",
+        "Claude Code · the-mountain-main #2222-shared99"
       ],
       "removeAgentIds": ["claude:2222-shared99"],
-      "expectAfterRemoval": ["Claude · the-mountain-main #1111-shared99"]
+      "expectAfterRemoval": ["Claude Code · the-mountain-main #1111-shared99"]
     },
     {
       "name": "an operator alias survives disambiguation untagged when it is already unique",
@@ -486,7 +486,7 @@
           "evidence": { "provider": "claude", "sourceSessionId": "bbbb2222-0000-0000-0000-00000000bbb2", "originCwd": "/Users/ant/Developer/the-mountain-main" }
         }
       ],
-      "expect": ["Naming lane", "Claude · the-mountain-main"]
+      "expect": ["Naming lane", "Claude Code · the-mountain-main"]
     },
     {
       "name": "a sticky tag survives when a third collision joins later",

@@ -98,7 +98,7 @@ test("shutdown with an unknown model observes tokens and leaves the window unset
   expect(agent?.tokens).not.toHaveProperty("contextWindow");
 });
 
-test("Copilot display names match catalog needles without inventing a Terra window", () => {
+test("Copilot display names match the catalog's Sol and Terra windows", () => {
   const sol = parseCopilotSession(CLOSED, `${JSON.stringify({
     type: "session.model_change",
     timestamp: "2026-08-17T12:00:00.000Z",
@@ -125,7 +125,7 @@ test("Copilot display names match catalog needles without inventing a Terra wind
     },
   })}\n`);
   expect(terra?.tokens.provenance).toBe("observed");
-  expect(terra?.tokens).not.toHaveProperty("contextWindow");
+  expect(terra?.tokens.contextWindow).toBe(258_400);
 });
 
 test("parseCopilotSession ignores unknown event types and does not invent last-close text", () => {

@@ -1,0 +1,30 @@
+{
+  "id": "session_01234567-89ab-4cde-8f01-23456789abcd",
+  "version": 2,
+  "title": "Kimi public fixture contract",
+  "titleKind": "custom",
+  "isCustomTitle": true,
+  "lastPrompt": "Verify the public Kimi fixture evidence.",
+  "createdAt": 1787324400000,
+  "updatedAt": 1787324408000,
+  "archived": false,
+  "cwd": "/tmp/formic-kimi-fixture/project",
+  "agents": {
+    "main": {
+      "homedir": "/tmp/formic-kimi-fixture/home",
+      "type": "main",
+      "labels": ["public-fixture"]
+    },
+    "agent-0": {
+      "homedir": "/tmp/formic-kimi-fixture/home",
+      "type": "subagent",
+      "parentAgentId": "main",
+      "labels": ["public-child"]
+    }
+  },
+  "custom": {
+    "parent_session_id": "session_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    "child_session_kind": "child"
+  },
+  "lastTurnReason": "completed"
+}
