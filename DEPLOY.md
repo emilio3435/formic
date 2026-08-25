@@ -80,9 +80,9 @@ production worktree and deploy again. Do not move the production checkout behind
 
 ## Do NOT deploy a lane over `main`
 
-`main` is the integration target; other agents land multiple lanes into it. The
-canonical FE lane (`ant-hill/luna-ops-canvas-reconciled-20260722`) and BE lane
-(`feat/vitals-collectors-be`) are *sources*, not deploy targets — pointing :4701
+`main` is the integration target; other agents land multiple lanes into it. Lane
+branches — for example the harness-parity lane (`feat/harness-parity-files-ultra`)
+— are *sources*, not deploy targets — pointing :4701
 at a lane can regress work that was landed into `main` from elsewhere. Always
 land INTO `main`.
 
