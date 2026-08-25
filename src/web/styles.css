@@ -6642,17 +6642,33 @@ a.artifact-path:hover { text-decoration: underline; }
 @keyframes alert-edge-sweep {
   to { --alert-sweep: 360deg; }
 }
-/* Retro C1's composite. The alert ring occupies the box-shadow slot, so the
-   focus rule has to restate the keyboard ring rather than assume it.
+/* Retro C1's composite — and box-shadow is winner-takes-all, so a composite
+   here has to name every layer the row is meant to be wearing. Three of them.
 
    The shimmer's `animation: none` leaves with the shimmer: nothing animates
    this rule's box-shadow any more, so there is no running animation left to
    out-rank a normal declaration in that slot. What does have to stand down is
    the comet — left running it crawls around the edge of the focused row,
-   competing with the one cue that says "you are here". */
+   competing with the one cue that says "you are here".
+
+   Which opens the inverse trap, and it is why the alert ink is restated here
+   rather than left to the base rule. This declaration REPLACES that ring, and
+   the line below has just hidden the comet — so a focus rule carrying only the
+   interactive ring leaves an alerting row looking exactly like a calm one for
+   as long as an operator holds it focused. That is the row they were sent to
+   deal with: the one moment the mark is least affordable to lose is the moment
+   it would have gone.
+
+   Ink outermost. Inset shadows paint first-listed on top, so the 1px alert
+   ring holds the edge and the 3px interactive spread shows through beneath it
+   as a 2px band — the same 2px ring every other focused row wears, moved in by
+   a hairline to make room. Both stay INSET: this mark never paints outside the
+   row's own border box, focused or not, which is the whole point of the
+   change. */
 .agent-row.is-alert-hot:focus-visible {
   box-shadow:
-    inset 0 0 0 2px var(--color-interactive),
+    inset 0 0 0 1px color-mix(in srgb, var(--alert-ink) 85%, transparent),
+    inset 0 0 0 3px var(--color-interactive),
     var(--color-focus-ring);
 }
 .agent-row.is-alert-hot:focus-visible::after { display: none; }

@@ -3806,11 +3806,22 @@ describe("B9 the alert outline: repo ink, not a second status hue", () => {
 
        (3) NEW with the sweep: the comet would otherwise keep crawling around
        the focused row's edge, competing with the one cue that says "you are
-       here". It is hidden outright while the row holds focus. */
+       here". It is hidden outright while the row holds focus.
+
+       And the inverse hazard, which the ring must not swallow either: this
+       composite REPLACES the base rule's inset ring, and (3) has just hidden
+       the comet — so a focus rule that names only the interactive ring leaves
+       an alert row looking exactly like a calm one for as long as an operator
+       has it focused. Which is the row they were sent to deal with. All three
+       layers are therefore named here, ink outermost: inset shadows paint
+       first-listed on top, so the 1px alert ring holds the edge and the 3px
+       interactive spread reads as a 2px band beneath it. */
     const focusRules = [...styles.matchAll(/\.agent-row\.is-alert-hot:focus-visible \{[^}]*\}/g)].map((m) => m[0]);
     for (const rule of focusRules) {
       expect(rule).toContain("var(--color-focus-ring)");
-      expect(rule).toContain("inset 0 0 0 2px var(--color-interactive)");
+      expect(rule).toContain("inset 0 0 0 1px color-mix(in srgb, var(--alert-ink) 85%, transparent)");
+      expect(rule).toContain("inset 0 0 0 3px var(--color-interactive)");
+      expect(rule.indexOf("var(--alert-ink)")).toBeLessThan(rule.indexOf("var(--color-interactive)"));
     }
     const base = styles.match(/\.agent-row\.is-alert-hot \{[^}]*\}/)?.[0] ?? "";
     expect(base).not.toContain("animation");

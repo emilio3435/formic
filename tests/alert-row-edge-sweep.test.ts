@@ -127,16 +127,31 @@ describe("the sweep stands down where motion is unwelcome", () => {
     );
   });
 
-  test("keyboard focus keeps its ring, and the sweep gets out of its way", () => {
-    /* Two ways this row could swallow the focus ring. The box-shadow slot is
-       occupied by the alert ring, so the focus rule restates the ring in a
-       composite — and the ::after comet would otherwise keep crawling around
-       the focused row's edge, competing with the very cue that says "you are
-       here". It is hidden outright while the row holds focus. */
+  test("keyboard focus keeps BOTH rings, and the sweep gets out of its way", () => {
+    /* The box-shadow slot is occupied by the alert ring, so the focus rule has
+       to restate everything it wants in one composite — and "everything" is
+       three layers, not two. Dropping the alert ink here is the defect this
+       assertion closes: the base rule's inset ring is overridden by this rule
+       and the comet is hidden below, so an alert-ink layer that is merely
+       implied is an alert row that looks exactly like a calm one for as long
+       as an operator has it focused — on the row they most likely arrived at
+       by keyboard, i.e. the one they were sent to deal with.
+
+       Order matters and is asserted as ink-outermost: inset shadows paint
+       first-listed on top, so the 1px alert ring holds the edge and the 3px
+       interactive spread shows through beneath it as a 2px band. Reverse them
+       and the interactive ring covers the alert ink completely. */
     const focusRule = styles.match(/\.agent-row\.is-alert-hot:focus-visible \{[^}]*\}/)?.[0] ?? "";
     expect(focusRule).not.toBe("");
     expect(focusRule).toContain("var(--color-focus-ring)");
-    expect(focusRule).toContain("inset 0 0 0 2px var(--color-interactive)");
+    expect(focusRule).toContain("inset 0 0 0 1px color-mix(in srgb, var(--alert-ink) 85%, transparent)");
+    expect(focusRule).toContain("inset 0 0 0 3px var(--color-interactive)");
+    expect(focusRule.indexOf("var(--alert-ink)")).toBeLessThan(focusRule.indexOf("var(--color-interactive)"));
+    /* Both rings stay INSET — the whole point of the change is that this mark
+       never paints outside the row's own border box, focused or not. The
+       lookbehind is load-bearing: without it the space inside `inset 0 0 0 1px`
+       satisfies a leading `[\s,]` and every inset layer reads as a violation. */
+    expect(focusRule).not.toMatch(/(?<!inset )0 0 0 \d+px/);
     const focusSweep = styles.match(/\.agent-row\.is-alert-hot:focus-visible::after \{[^}]*\}/)?.[0] ?? "";
     expect(focusSweep).not.toBe("");
     expect(focusSweep).toMatch(/display: none|opacity: 0/);
