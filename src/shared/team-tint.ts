@@ -18,10 +18,14 @@ export function isOperatorTeam(
   name: string,
   groupId: string,
   provenanceIds: ReadonlySet<string>,
+  repoIdentityKeys: ReadonlySet<string> = new Set(),
 ): boolean {
   if (provenanceIds.has(groupId)) return false;
-  if (GROUP_N.test(name.trim())) return false;
-  return name.trim().length > 0;
+  const trimmed = name.trim();
+  if (!trimmed) return false;
+  if (GROUP_N.test(trimmed)) return false;
+  if (repoIdentityKeys.has(trimmed.toLowerCase())) return false;
+  return true;
 }
 
 export function assignTeamHex(
@@ -91,6 +95,7 @@ export function resolveOperatorTeams(
   provenanceIds: ReadonlySet<string>,
   settings: TeamTintSettings,
   expectEcho: ReadonlyMap<string, string> = new Map(),
+  repoIdentityKeys: ReadonlySet<string> = new Set(),
 ): { teams: CmuxTeam[]; ingested: TeamColorIngest[] } {
   const taken = new Set<string>();
   const teams: CmuxTeam[] = [];
@@ -98,7 +103,7 @@ export function resolveOperatorTeams(
   for (const window of windows) {
     for (const group of window.groups) {
       const name = group.name ?? "";
-      if (!isOperatorTeam(name, group.id, provenanceIds)) continue;
+      if (!isOperatorTeam(name, group.id, provenanceIds, repoIdentityKeys)) continue;
       const liveHex = normalizeHex(group.customColor);
       const diskHex = normalizeHex(settings.assignments[group.id]?.hex);
       const expected = normalizeHex(expectEcho.get(group.id));
@@ -127,6 +132,7 @@ export function buildOperatorTeams(
   provenanceIds: ReadonlySet<string>,
   settings: TeamTintSettings,
   expectEcho?: ReadonlyMap<string, string>,
+  repoIdentityKeys?: ReadonlySet<string>,
 ): CmuxTeam[] {
-  return resolveOperatorTeams(windows, provenanceIds, settings, expectEcho).teams;
+  return resolveOperatorTeams(windows, provenanceIds, settings, expectEcho, repoIdentityKeys).teams;
 }

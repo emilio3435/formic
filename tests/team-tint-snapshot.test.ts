@@ -284,6 +284,23 @@ test("live cmux wins over a cmux-source disk row", () => {
   expect(teams[0]?.hex).toBe("#2e66a8");
 });
 
+test("buildOperatorTeams drops leftover folders named like a known repo", () => {
+  const teams = buildOperatorTeams(
+    [{
+      windowId: "w",
+      groups: [
+        { id: "orphan", name: "the-ant-hill", memberWorkspaceIds: ["ws-repo"] },
+        { id: "g1", name: "ANT · probe", customColor: "#5F7F2A", memberWorkspaceIds: ["ws-a"] },
+      ],
+    }],
+    new Set(),
+    { assignments: {} },
+    new Map(),
+    new Set(["the-ant-hill"]),
+  );
+  expect(teams.map((team) => team.id)).toEqual(["g1"]);
+});
+
 test("buildOperatorTeams drops provenance folders and Group N titles", () => {
   const teams = buildOperatorTeams(
     [{

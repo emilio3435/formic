@@ -31,7 +31,10 @@ export interface TeamGroupDependencies {
   runner: CommandRunner;
   executable?: string;
   provenanceIds: () => ReadonlySet<string>;
+  repoIdentityKeys?: () => ReadonlySet<string>;
   setGroupColor?: (groupId: string, hex: string, reason: string) => Promise<boolean>;
+  setWorkspaceColor?: (workspaceId: string, hex: string, reason: string) => Promise<boolean>;
+  persistTeamColor?: (groupId: string, hex: string) => Promise<void>;
 }
 
 function json(value: unknown, status = 200): Response {
@@ -100,12 +103,17 @@ async function rpc(
   return result.stdout;
 }
 
-function operatorName(name: unknown, groupId: string, provenanceIds: ReadonlySet<string>): string {
+function operatorName(
+  name: unknown,
+  groupId: string,
+  provenanceIds: ReadonlySet<string>,
+  repoIdentityKeys: ReadonlySet<string> = new Set(),
+): string {
   if (typeof name !== "string") {
     throw new TeamGroupError(400, "INVALID_NAME", "name must be a non-empty operator team title, not Group N.");
   }
   const trimmed = name.trim();
-  if (!isOperatorTeam(trimmed, groupId, provenanceIds)) {
+  if (!isOperatorTeam(trimmed, groupId, provenanceIds, repoIdentityKeys)) {
     throw new TeamGroupError(400, "INVALID_NAME", "name must be a non-empty operator team title, not Group N.");
   }
   return trimmed;
@@ -180,8 +188,9 @@ async function findLiveGroup(
 function requireOperatorGroup(
   group: CmuxGroup,
   provenanceIds: ReadonlySet<string>,
+  repoIdentityKeys: ReadonlySet<string> = new Set(),
 ): void {
-  if (provenanceIds.has(group.id)) {
+  if (!isOperatorTeam(group.name ?? "", group.id, provenanceIds, repoIdentityKeys)) {
     throw new TeamGroupError(404, "NOT_FOUND", "That group is not a live operator team.");
   }
 }
@@ -210,6 +219,10 @@ async function resolveWindowForWorkspaces(
   return matches[0] ?? "";
 }
 
+function identityKeys(deps: TeamGroupDependencies): ReadonlySet<string> {
+  return deps.repoIdentityKeys?.() ?? new Set();
+}
+
 export async function createOperatorTeam(input: {
   windowId?: string;
   workspaceIds: string[];
@@ -217,7 +230,7 @@ export async function createOperatorTeam(input: {
   hex?: string;
 }, deps: TeamGroupDependencies): Promise<{ team: CmuxTeam }> {
   const provenanceIds = deps.provenanceIds();
-  const name = operatorName(input.name, "", provenanceIds);
+  const name = operatorName(input.name, "", provenanceIds, identityKeys(deps));
   const requested = typeof input.windowId === "string" ? input.windowId.trim() : "";
   if (!Array.isArray(input.workspaceIds) || input.workspaceIds.some((id) => typeof id !== "string" || !id.trim())) {
     throw new TeamGroupError(400, "INVALID_BODY", "workspaceIds must be a list of workspace ids.");
@@ -263,8 +276,13 @@ export async function createOperatorTeam(input: {
   await rpc(deps, "workspace.group.rename", { group_id: created.id, name });
   if (hex) {
     const written = await deps.setGroupColor?.(created.id, hex, "board team create");
-    if (!written) {
+    if (written === false) {
       throw new TeamGroupError(502, "CMUX_FAILED", "The group color write did not land.");
+    }
+    await deps.persistTeamColor?.(created.id, hex);
+    for (const workspaceId of created.memberWorkspaceIds) {
+      if (workspaceId === created.anchorWorkspaceId) continue;
+      await deps.setWorkspaceColor?.(workspaceId, hex, "board team create");
     }
   }
 
@@ -285,9 +303,10 @@ export async function renameOperatorTeam(
   deps: TeamGroupDependencies,
 ): Promise<void> {
   const provenanceIds = deps.provenanceIds();
+  const keys = identityKeys(deps);
   const { group } = await findLiveGroup(deps, groupId);
-  requireOperatorGroup(group, provenanceIds);
-  const next = operatorName(name, group.id, provenanceIds);
+  requireOperatorGroup(group, provenanceIds, keys);
+  const next = operatorName(name, group.id, provenanceIds, keys);
   await rpc(deps, "workspace.group.rename", { group_id: group.id, name: next });
 }
 
@@ -300,7 +319,7 @@ export async function addOperatorMember(
   if (!id) throw new TeamGroupError(400, "INVALID_BODY", "workspaceId is required.");
   const provenanceIds = deps.provenanceIds();
   const { windowId, group } = await findLiveGroup(deps, groupId);
-  requireOperatorGroup(group, provenanceIds);
+  requireOperatorGroup(group, provenanceIds, identityKeys(deps));
   const groups = await listWindowGroups(deps, windowId);
   const live = groups.find((entry) => entry.id === group.id) ?? group;
   requireNotAnchor(live, id, groups);
@@ -314,6 +333,8 @@ export async function addOperatorMember(
     throw new TeamGroupError(409, "FOREIGN_GROUP", "A workspace already belongs to another group.");
   }
   await rpc(deps, "workspace.group.add", { group_id: live.id, workspace_id: id });
+  const hex = normalizeHex(live.customColor);
+  if (hex) await deps.setWorkspaceColor?.(id, hex, "board team add");
 }
 
 export async function removeOperatorMember(
@@ -325,7 +346,7 @@ export async function removeOperatorMember(
   if (!id) throw new TeamGroupError(400, "INVALID_BODY", "workspaceId is required.");
   const provenanceIds = deps.provenanceIds();
   const { windowId, group } = await findLiveGroup(deps, groupId);
-  requireOperatorGroup(group, provenanceIds);
+  requireOperatorGroup(group, provenanceIds, identityKeys(deps));
   const groups = await listWindowGroups(deps, windowId);
   const live = groups.find((entry) => entry.id === group.id) ?? group;
   if (live.anchorWorkspaceId === id) {
@@ -343,7 +364,7 @@ export async function ungroupOperatorTeam(
 ): Promise<void> {
   const provenanceIds = deps.provenanceIds();
   const { group } = await findLiveGroup(deps, groupId);
-  requireOperatorGroup(group, provenanceIds);
+  requireOperatorGroup(group, provenanceIds, identityKeys(deps));
   await rpc(deps, "workspace.group.ungroup", { group_id: group.id });
 }
 

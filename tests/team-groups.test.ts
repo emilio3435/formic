@@ -373,6 +373,49 @@ test("add and remove refuse an anchor workspace", async () => {
   expect(cmux.methodCalls("workspace.group.remove")).toEqual([]);
 });
 
+test("create with hex paints each non-anchor member and persists", async () => {
+  const painted: Array<{ workspaceId: string; hex: string; reason: string }> = [];
+  const persisted: Array<{ groupId: string; hex: string }> = [];
+  const { deps } = subject({ "WINDOW-A": ["ws-a", "ws-b"] });
+  const { team } = await createOperatorTeam({
+    windowId: "WINDOW-A",
+    workspaceIds: ["ws-a", "ws-b"],
+    name: "ANT · probe",
+    hex: "#5f7f2a",
+  }, {
+    ...deps,
+    setWorkspaceColor: async (workspaceId, hex, reason) => {
+      painted.push({ workspaceId, hex, reason });
+      return true;
+    },
+    persistTeamColor: async (groupId, hex) => {
+      persisted.push({ groupId, hex });
+    },
+  });
+  expect(new Set(painted.map((row) => row.workspaceId))).toEqual(new Set(["ws-a", "ws-b"]));
+  expect(painted.every((row) => row.hex === "#5f7f2a" && row.reason === "board team create")).toBe(true);
+  expect(persisted).toEqual([{ groupId: team.id, hex: "#5f7f2a" }]);
+});
+
+test("add paints the new member with the live group hex", async () => {
+  const painted: Array<{ workspaceId: string; hex: string; reason: string }> = [];
+  const { cmux, deps } = subject({ "WINDOW-A": ["ws-a", "ws-b"] });
+  cmux.seedGroup("g1", {
+    windowId: "WINDOW-A",
+    name: "ANT · probe",
+    customColor: "#5f7f2a",
+    members: ["ws-a"],
+  });
+  await addOperatorMember("g1", "ws-b", {
+    ...deps,
+    setWorkspaceColor: async (workspaceId, hex, reason) => {
+      painted.push({ workspaceId, hex, reason });
+      return true;
+    },
+  });
+  expect(painted).toEqual([{ workspaceId: "ws-b", hex: "#5f7f2a", reason: "board team add" }]);
+});
+
 test("optional hex is written after the rename lands", async () => {
   const colors: Array<{ groupId: string; hex: string; reason: string }> = [];
   const { cmux, deps } = subject({ "WINDOW-A": ["ws-a"] }, { colors });

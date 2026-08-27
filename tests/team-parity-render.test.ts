@@ -294,7 +294,6 @@ beforeEach(() => {
   M.setRepoColors({}, { assignments: {} });
   M.state.liveRepoKeys = [];
   M.state.repoColorSettings = null;
-  M.state.teamColors = [];
   M.state.settingsPanelOpen = false;
   if (M.state.paintSig) {
     M.state.paintSig.settings = "";
