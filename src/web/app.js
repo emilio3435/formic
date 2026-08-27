@@ -238,10 +238,6 @@ bindSettingsPanel({
   paintUnchanged,
   postSettings,
   setNeedsYouDisplay,
-  fetchRepoColors,
-  fetchTeamColors,
-  paintRepoColorSettings,
-  paintTeamColorSettings,
   render,
 });
 
@@ -1669,7 +1665,6 @@ globalThis.TheAntHill = {
      them — exported so the treatments are assertable as functions rather than
      as substrings of this file. */
   setRepoColors, repoTintFor, repoTintOfProgram, tintOfProgram, normalizeRepoHex, fetchRepoColors,
-  fetchTeamColors, renderTeamColorSettings, paintTeamColorSettings,
   liveRepoSig, maybeRefreshRepoColors, openSettingsPanel, closeSettingsPanel,
   renderRepoSection, repoShellSig, stripRowOpts, renderStripGroupHead,
   // The shelf's governor. Exported because the lookback clause inside it is the
@@ -1680,6 +1675,7 @@ globalThis.TheAntHill = {
   currentFilter, passesReviewVisibility, reviewWorkerCount, emptyListMessage, hiddenByLookback, renderTabs, filterChip, renderFilterBar, renderScopeNote, renderLabelForm, renderTriage, renderUsagePanel,
   setGrouping, toggleSelectMode, defaultGroupingName, groupingWorkspaceIds,
   groupingSharedWindowId, createGroupingTeam, startTeamRename, submitTeamRename, ungroupTeam,
+  nextGroupingHex, repoBandPicker, teamBandPicker,
   /* The two-layer model's own seam. `workingSet` is the population every count
      on the page is taken over, and the menus are the surfaces that report it —
      both are reachable so "a lens never moves the tab number" can be asserted
@@ -3827,71 +3823,6 @@ function renderSettingsPanel() {
   paintSettingsForm();
 }
 
-/* TINT-F. Which repository wears which colour, and the override.
-
-   A repository the operator picks a colour for stops being "auto" and frees its
-   palette slot server-side, so the next repository to appear takes a real hue
-   instead of overflow clay — which is why a second click on a yours-swatch
-   clears the override rather than only offering a global wipe.
-
-   Assignment keys are origin/band names (`the-ant-hill`). Rows with no live
-   session stay pickable and are marked not on the board. The list paints into
-   `#repo-colors-host` so a colour GET cannot rebuild the Settings form. */
-function paintRepoColorSettings() {
-  const host = $("repo-colors-host");
-  if (!host) return;
-  const sig = JSON.stringify(state.repoColorSettings) + "\u001f" + (state.liveRepoKeys || []).join(",");
-  /* An empty host after a form rebuild must still fill, even when the colour
-     payload has not moved — otherwise Save-pending would leave the list blank. */
-  if (paintUnchanged("repo-colors", sig) && host.childElementCount) return;
-  host.textContent = "";
-  host.append(renderRepoColorSettings());
-}
-
-function renderRepoColorSettings(settings = state.repoColorSettings) {
-  const assignments = (settings && settings.assignments) || {};
-  const live = new Set((state.liveRepoKeys || []).map((key) => String(key).toLowerCase()));
-  const keys = Object.keys(assignments);
-  const ranked = keys.sort((left, right) => {
-    const leftLive = live.has(left.toLowerCase()) ? 0 : 1;
-    const rightLive = live.has(right.toLowerCase()) ? 0 : 1;
-    return leftLive - rightLive || left.localeCompare(right);
-  });
-  if (!ranked.length) {
-    return el("div", { class: "repos" },
-      el("p", {
-        class: "repo-colors-empty",
-        text: "No repository has a colour assigned yet.",
-      }));
-  }
-  return el("div", { class: "repos" }, ...ranked.map((key) => {
-    const assignment = assignments[key] || {};
-    const hex = normalizeRepoHex(assignment.hex) || "";
-    const onBoard = live.has(key.toLowerCase());
-    const user = assignment.source === "user";
-    const picker = el("input", {
-      type: "color",
-      class: "visually-hidden",
-      tabindex: "-1",
-      value: hex || "#888888",
-      "aria-label": "Colour for " + key + (onBoard ? "" : ", not on the board"),
-      dataset: { fkey: "repo-color:" + key },
-      onchange: (event) => { void putRepoColor(key, event.currentTarget.value); },
-    });
-    const repo = el("button", {
-      type: "button",
-      class: "repo" + (user ? " is-yours" : "") + (onBoard ? "" : " is-absent"),
-      onclick: () => {
-        if (user) return putRepoColor(key, null);
-        if (typeof picker.click === "function") picker.click();
-      },
-    },
-      el("span", { class: "swatch" }),
-      el("b", { text: key }));
-    return el("div", {}, paintRepoTint(repo, hex, "has-repo-tint"), picker);
-  }));
-}
-
 /* One write, both verbs: a hex sets an override, null clears it. Re-fetches
    rather than patching local state, because the server's answer also carries
    whatever the clear re-assigned the repository to. */
@@ -3940,10 +3871,8 @@ async function putTeamColor(groupId, hex) {
       throw new Error(body && body.error ? body.error : "Save failed (HTTP " + res.status + ")");
     }
     const stored = body.settings && body.settings.assignments && body.settings.assignments[groupId];
-    if (Array.isArray(body.teams)) state.teamColors = body.teams;
     paintLiveTeamHex(groupId, normalizeRepoHex(stored && stored.hex) || normalized);
     render();
-    paintTeamColorSettings();
   } catch (err) {
     toast(err && err.message ? err.message : "Colour save failed", "warn");
   }
@@ -4006,7 +3935,13 @@ function defaultGroupingName() {
 }
 
 function nextGroupingHex() {
-  const taken = new Set((state.teamColors || []).map((team) => normalizeRepoHex(team.hex)));
+  const taken = new Set();
+  for (const program of (state.snap && state.snap.programs) || []) {
+    for (const agent of program.agents || []) {
+      const hex = normalizeRepoHex(agent && agent.team && agent.team.hex);
+      if (hex) taken.add(hex);
+    }
+  }
   return TEAM_PALETTE.find((hex) => !taken.has(hex)) || "#64707c";
 }
 
@@ -4156,7 +4091,6 @@ async function createGroupingTeam() {
     state.selectMode = false;
     toast("Grouped as " + body.team.name, "ok");
     void fetchSnapshot();
-    void fetchTeamColors();
   } catch (err) {
     toast(err && err.message ? err.message : "Group failed", "warn");
   } finally {
@@ -4194,7 +4128,6 @@ async function submitTeamRename(groupId) {
     state.teamRenaming = null;
     toast("Team renamed to " + name, "ok");
     void fetchSnapshot();
-    void fetchTeamColors();
   } catch (err) {
     state.teamRenameError = err && err.message ? err.message : "Rename failed";
     toast(state.teamRenameError, "warn");
@@ -4220,7 +4153,6 @@ async function ungroupTeam(groupId, name) {
     }
     toast("Ungrouped " + (name || "team"), "ok");
     void fetchSnapshot();
-    void fetchTeamColors();
   } catch (err) {
     toast(err && err.message ? err.message : "Ungroup failed", "warn");
   } finally {
@@ -4235,66 +4167,6 @@ function paintLiveTeamHex(groupId, hex) {
     for (const agent of program.agents || []) {
       if (agent.team && agent.team.id === groupId) agent.team = { ...agent.team, hex };
     }
-  }
-}
-
-function paintTeamColorSettings() {
-  if (typeof document === "undefined") return;
-  const host = $("team-colors-host");
-  if (!host) return;
-  const sig = JSON.stringify(state.teamColors || []);
-  if (paintUnchanged("team-colors", sig) && host.childElementCount) return;
-  host.textContent = "";
-  host.append(renderTeamColorSettings());
-}
-
-function renderTeamColorSettings(teams = state.teamColors) {
-  const list = Array.isArray(teams) ? teams.slice() : [];
-  if (!list.length) {
-    return el("div", { class: "repos" },
-      el("p", {
-        class: "repo-colors-empty",
-        text: "No operator groups.",
-      }));
-  }
-  list.sort((left, right) => String(left.name || left.id).localeCompare(String(right.name || right.id)));
-  return el("div", { class: "repos" }, ...list.map((team) => {
-    const id = String(team.id || "");
-    const name = String(team.name || id);
-    const hex = normalizeRepoHex(team.hex) || "";
-    const picker = el("input", {
-      type: "color",
-      class: "visually-hidden",
-      tabindex: "-1",
-      value: hex || "#888888",
-      "aria-label": "Colour for " + name,
-      dataset: { fkey: "team-color:" + id },
-      onchange: (event) => putTeamColor(id, event.currentTarget.value),
-    });
-    const row = el("button", {
-      type: "button",
-      class: "repo",
-      onclick: () => {
-        if (typeof picker.click === "function") picker.click();
-      },
-    },
-      el("span", { class: "swatch" }),
-      el("b", { text: name }));
-    return el("div", {}, paintRepoTint(row, hex, "has-repo-tint"), picker);
-  }));
-}
-
-async function fetchTeamColors() {
-  const generation = bootGeneration;
-  try {
-    const res = await apiFetch("/api/team-colors", { headers: { accept: "application/json" } }, API_READ_TIMEOUT_MS);
-    const body = await res.json();
-    if (!res.ok || !body || !Array.isArray(body.teams)) throw new Error("bad team-colour response");
-    if (generation !== bootGeneration) return;
-    state.teamColors = body.teams;
-    paintTeamColorSettings();
-  } catch (err) {
-    console.warn("team colour fetch failed:", err);
   }
 }
 
@@ -7527,6 +7399,7 @@ function repoOf(program) {
    silently, while CSSOM property writes are untouched by it (the inspector's
    --inspector-visible-top already rides this path). */
 const repoColors = new Map();   // lowercased repo name -> "#rrggbb"
+const repoColorRecords = new Map(); // lowercased printed name -> { hex, repoKey, source }
 let repoColorsVersion = 0;      // bumped on every load; paint signatures read it
 
 /* The join is TWO hops, and collapsing it to one is how this shipped broken
@@ -7543,11 +7416,19 @@ let repoColorsVersion = 0;      // bumped on every load; paint signatures read i
    `name === key` is never a safe shortcut. */
 function setRepoColors(repoNames, settings) {
   repoColors.clear();
+  repoColorRecords.clear();
   const assignments = (settings && settings.assignments) || {};
   for (const [name, repoKey] of Object.entries(repoNames || {})) {
     const assignment = assignments[repoKey];
     const hex = normalizeRepoHex(assignment && assignment.hex);
-    if (hex) repoColors.set(String(name).toLowerCase(), hex);
+    if (!hex) continue;
+    const record = {
+      hex,
+      repoKey: String(repoKey),
+      source: assignment && assignment.source === "user" ? "user" : "auto",
+    };
+    repoColors.set(String(name).toLowerCase(), hex);
+    repoColorRecords.set(String(name).toLowerCase(), record);
   }
   repoColorsVersion += 1;
 }
@@ -7932,6 +7813,37 @@ function pullRequestLabel(url) {
   return number ? "PR " + number : "PR";
 }
 
+function repoBandPicker(group, tint) {
+  const record = repoColorRecords.get(String(group.name || "").toLowerCase());
+  if (!record || !tint) return null;
+  const picker = el("input", {
+    type: "color",
+    class: "visually-hidden",
+    tabindex: "-1",
+    value: tint || "#888888",
+    "aria-label": "Colour for " + group.name,
+    dataset: { fkey: "repo-color:" + record.repoKey },
+    onchange: (event) => putRepoColor(record.repoKey, event.currentTarget.value),
+  });
+  const yours = record.source === "user";
+  const swatch = el("button", {
+    type: "button",
+    class: "repo-tint-picker swatch" + (yours ? " is-yours" : ""),
+    "aria-label": "Colour for " + group.name,
+    title: yours
+      ? "Colour for " + group.name + ". Shift-click to restore automatic."
+      : "Colour for " + group.name,
+    onclick: (event) => {
+      if (event.shiftKey && yours) {
+        event.preventDefault();
+        return putRepoColor(record.repoKey, null);
+      }
+      if (typeof picker.click === "function") picker.click();
+    },
+  });
+  return el("span", {}, paintRepoTint(swatch, tint, "has-repo-tint"), picker);
+}
+
 function teamBandPicker(group, tint) {
   const picker = el("input", {
     type: "color",
@@ -7940,7 +7852,7 @@ function teamBandPicker(group, tint) {
     value: tint || "#888888",
     "aria-label": "Colour for " + group.name,
     dataset: { fkey: "team-color:" + group.key },
-    onchange: (event) => { void putTeamColor(group.key, event.currentTarget.value); },
+    onchange: (event) => putTeamColor(group.key, event.currentTarget.value),
   });
   const swatch = el("button", {
     type: "button",
@@ -7974,12 +7886,11 @@ function renderRepoSection(group, ui = state) {
       dataset: { fkey: "repo:" + group.key },
       onclick: () => toggleRepo(group),
     }, icon("caret")),
-    /* Whisper's mark on the head. A repo band keeps the decorative 7px dot.
-       A team band uses the Settings swatch so the operator can retint the
-       group — same PUT as the Teams plate, never the repo-colour endpoint. */
-    ...(group.kind === "team" ? [teamBandPicker(group, tint)] : [
-      tint ? el("span", { class: "repo-dot", "aria-hidden": "true" }) : null,
-    ]),
+    /* Whisper's mark on the head is the colour swatch. Team and repo bands
+       both pick colour on the stripe — Settings is not a palette. */
+    ...(group.kind === "team"
+      ? [teamBandPicker(group, tint)]
+      : [repoBandPicker(group, tint)].filter(Boolean)),
     group.kind === "team"
       ? el("button", {
         type: "button",
@@ -15552,8 +15463,7 @@ Object.assign(globalThis.TheAntHill, {
   settingsPreview, settingsPreviewText, SETTINGS_PRESETS, renderSettingsPanel,
   requestCloseSettingsPanel,
   // TINT-F: the repo-colour region and its one write.
-  renderRepoColorSettings, paintRepoColorSettings, putRepoColor, putTeamColor,
-  fetchTeamColors, renderTeamColorSettings, paintTeamColorSettings,
+  putRepoColor, putTeamColor,
   passesLookback, isUnverified,
   // `const`s, so they would be a TDZ error in the hoisted block above.
   STRIP_ID, SECTION_HEADS,
@@ -15583,6 +15493,7 @@ Object.assign(globalThis.TheAntHill, {
   fetchLabels, submitRename, startRename,
   setGrouping, toggleSelectMode, defaultGroupingName, groupingWorkspaceIds,
   groupingSharedWindowId, createGroupingTeam, startTeamRename, submitTeamRename, ungroupTeam,
+  nextGroupingHex, repoBandPicker, teamBandPicker,
   // SYNC-RF: the cmux workspace rename path, driven end to end against a fake
   // fetch — the gate, the editor, the POST, and the refusal vocabulary.
   renameableWorkspace, renderWorkspaceRename,

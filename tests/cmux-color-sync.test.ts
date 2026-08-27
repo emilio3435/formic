@@ -903,6 +903,19 @@ describe("reconcile — an operator-team member is never forced back to the repo
     expect(result.decisions[0]?.outcome).toBe("reassert");
     expect(spy.writes[0]?.hex).toBe("#d70ae6");
   });
+
+  test("overlay member with no repo assignment still team-reasserts", async () => {
+    const spy = funnelSpy();
+    const result = await reconcileWorkspaceColors({
+      observations: [observation("ws-a", "#111111")],
+      surfaces: [],
+      settings: { assignments: {}, mirrorGroups: true, syncFromCmux: true },
+      runtime: runtimeWith(spy.funnel),
+      teamByWorkspaceId: new Map([["ws-a", { id: "g1", hex: "#5f7f2a", hexSource: "user" }]]),
+    });
+    expect(result.decisions[0]).toMatchObject({ outcome: "reassert", hex: "#5f7f2a" });
+    expect(spy.writes).toEqual([{ workspaceId: "ws-a", hex: "#5f7f2a", reason: "team-reassert" }]);
+  });
 });
 
 describe("repoColorsSettingsFrom — reading TINT-F's settings without owning them", () => {
@@ -917,6 +930,14 @@ describe("repoColorsSettingsFrom — reading TINT-F's settings without owning th
   test("an explicit false is honored; a missing flag is not read as off", () => {
     expect(repoColorsSettingsFrom({ repoColors: { syncFromCmux: false } }).syncFromCmux).toBe(false);
     expect(repoColorsSettingsFrom({ repoColors: {} }).syncFromCmux).toBe(true);
+  });
+
+  test("a HubSettings-shaped object does not smuggle assignments", () => {
+    expect(repoColorsSettingsFrom({
+      version: 1,
+      activityFreshMinutes: 3,
+      scanWindowHours: 36,
+    }).assignments).toEqual({});
   });
 });
 

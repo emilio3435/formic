@@ -17,7 +17,7 @@ import {
 import type { RepoGroupProvenanceStore } from "./cmux-groups";
 import type { JsonTeamColorsStore } from "./team-colors";
 import { attachTeams, indexTeamsByWorkspace, resolveOperatorTeams, type CmuxTeam } from "../shared/team-tint";
-import { normalizeHex } from "../shared/repo-color";
+import { normalizeHex, type RepoColorsSettings } from "../shared/repo-color";
 /* TINT-S */ import { syncCmuxColors } from "./cmux-color-sync";
 import {
   CmuxEventsSupervisor,
@@ -346,6 +346,7 @@ export interface HubStateOptions {
   bootId?: string;
   teamColorsStore?: Pick<JsonTeamColorsStore, "get" | "setCmuxColor" | "expectedEchoes" | "clearExpectedEcho">;
   repoGroupProvenance?: Pick<RepoGroupProvenanceStore, "list">;
+  repoColorsReader?: () => RepoColorsSettings;
 }
 
 export class HubState {
@@ -434,6 +435,7 @@ export class HubState {
   private readonly alertSinceStore: AlertSinceStore;
   private readonly teamColorsStore?: Pick<JsonTeamColorsStore, "get" | "setCmuxColor" | "expectedEchoes" | "clearExpectedEcho">;
   private readonly repoGroupProvenance?: Pick<RepoGroupProvenanceStore, "list">;
+  private readonly repoColorsReader?: () => RepoColorsSettings;
 
   constructor(
     private readonly runner: CommandRunner,
@@ -465,6 +467,7 @@ export class HubState {
     this.alertSinceStore = options.alertSinceStore ?? new MemoryAlertSinceStore();
     this.teamColorsStore = options.teamColorsStore;
     this.repoGroupProvenance = options.repoGroupProvenance;
+    this.repoColorsReader = options.repoColorsReader;
     this.#bootId = options.bootId ?? currentBootId(uptime(), Date.now());
     this.#pulse = new PulseTracker(this.burnReader);
     const bootSettings = this.settingsReader?.();
@@ -1605,11 +1608,21 @@ export class HubState {
             }
           }
         }
+        const repoIdentityKeys = new Set<string>(
+          Object.keys(this.repoColorsReader?.().assignments ?? {}).map((key) => key.toLowerCase()),
+        );
+        for (const program of this.#snapshot.programs) {
+          for (const agent of program.agents) {
+            const name = agent.repo?.repoName?.trim().toLowerCase();
+            if (name) repoIdentityKeys.add(name);
+          }
+        }
         const resolved = resolveOperatorTeams(
           groups.value,
           new Set((this.repoGroupProvenance?.list() ?? []).map((record) => record.groupId)),
           teamSettings,
           this.teamColorsStore?.expectedEchoes() ?? new Map(),
+          repoIdentityKeys,
         );
         this.#operatorTeams = resolved.teams;
         if (this.teamColorsStore) {
@@ -1649,7 +1662,7 @@ export class HubState {
           runner: this.runner,
           executable: this.cmuxExecutable,
           surfaces: this.#surfaces,
-          settings,
+          settings: { repoColors: this.repoColorsReader?.() },
           teamByWorkspaceId,
         });
       }

@@ -449,6 +449,21 @@ export function resetRepoKeyCache(): void {
   repoKeyByWorktree.clear();
 }
 
+export function repoIdentityKeysFrom(
+  assignments: Record<string, unknown> | undefined,
+  snapshot: HubSnapshot,
+): Set<string> {
+  const keys = new Set<string>();
+  for (const key of Object.keys(assignments ?? {})) keys.add(key.toLowerCase());
+  for (const program of snapshot.programs) {
+    for (const agent of program.agents) {
+      const name = agent.repo?.repoName?.trim().toLowerCase();
+      if (name) keys.add(name);
+    }
+  }
+  return keys;
+}
+
 /* Workspaces come from the collector's own resolved bindings — an agent's
    `target.workspaceId` — and from nowhere else. That is what keeps GROUP ANCHOR
    workspaces out of the fan-out once mirrorGroups is on: `workspace.group.create`
@@ -1387,24 +1402,39 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
       return handleRepoColorsRequest(request, await repoColorsStore, {
         discover: () => discoverRepoColors(dependencies.state.get()),
         fanOut: dependencies.repoColorFanOut ?? fanOutRepoColors,
+        skipWorkspaceIds: () => new Set(
+          (dependencies.state.teams?.() ?? []).flatMap((team) => team.memberWorkspaceIds),
+        ),
       });
     }
     if (url.pathname === "/api/team-colors" || url.pathname.startsWith("/api/team-colors/")) {
       const provenance = await repoGroupProvenance;
-      return handleTeamColorsRequest(request, await teamColorsStore, {
+      const store = await teamColorsStore;
+      return handleTeamColorsRequest(request, store, {
         teams: () => dependencies.state.teams?.() ?? [],
         provenanceIds: () => new Set(provenance.list().map((record) => record.groupId)),
+        repoIdentityKeys: () => repoIdentityKeysFrom(
+          repoColorsForGroups?.get().assignments,
+          dependencies.state.get(),
+        ),
         setGroupColor: dependencies.teamColorWrites?.setGroupColor ?? setGroupColor,
         setWorkspaceColor: dependencies.teamColorWrites?.setWorkspaceColor ?? setWorkspaceColor,
       });
     }
     if (url.pathname === "/api/teams" || url.pathname.startsWith("/api/teams/")) {
       const provenance = await repoGroupProvenance;
+      const store = await teamColorsStore;
       return handleTeamGroupsRequest(request, {
         runner: dependencies.runner,
         executable: dependencies.cmuxExecutable,
         provenanceIds: () => new Set(provenance.list().map((record) => record.groupId)),
+        repoIdentityKeys: () => repoIdentityKeysFrom(
+          repoColorsForGroups?.get().assignments,
+          dependencies.state.get(),
+        ),
         setGroupColor: dependencies.teamColorWrites?.setGroupColor ?? setGroupColor,
+        setWorkspaceColor: dependencies.teamColorWrites?.setWorkspaceColor ?? setWorkspaceColor,
+        persistTeamColor: async (groupId, hex) => { await store.setUserColor(groupId, hex); },
       });
     }
     /* end TINT-F routes */

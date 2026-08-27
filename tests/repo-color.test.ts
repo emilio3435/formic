@@ -707,6 +707,36 @@ describe("/api/repo-colors", () => {
     expect(body.settings.assignments["cooper-scheduler"]).toBeTruthy(); // persisted, not live
   });
 
+  test("GET/PUT skip overlay team members", async () => {
+    const writes: { workspaceId: string; hex: string }[] = [];
+    const store = await JsonRepoColorsStore.open("colors.json", memorySettingsFiles());
+    const handle = (request: Request) => handleRepoColorsRequest(request, store, {
+      discover: () => discovery,
+      fanOut: (batch) => { writes.push(...batch); },
+      skipWorkspaceIds: () => new Set(["WS-1"]),
+    });
+
+    writes.length = 0;
+    await handle(new Request(`${ORIGIN}/api/repo-colors`));
+    expect(writes.map((write) => write.workspaceId).sort()).toEqual(["WS-2"]);
+
+    writes.length = 0;
+    await handle(new Request(`${ORIGIN}/api/repo-colors/the-mountain`, {
+      method: "PUT",
+      headers: { origin: ORIGIN, "content-type": "application/json" },
+      body: JSON.stringify({ hex: "#123456" }),
+    }));
+    expect(writes.map((write) => write.workspaceId)).toEqual([]);
+
+    writes.length = 0;
+    await handle(new Request(`${ORIGIN}/api/repo-colors/formic`, {
+      method: "PUT",
+      headers: { origin: ORIGIN, "content-type": "application/json" },
+      body: JSON.stringify({ hex: "#abcdef" }),
+    }));
+    expect(writes.map((write) => write.workspaceId)).toEqual(["WS-2"]);
+  });
+
   test("GET fans out to repo-MAPPED workspaces only", async () => {
     const writes: { workspaceId: string; hex: string }[] = [];
     const handle = await subject((batch) => { writes.push(...batch); });

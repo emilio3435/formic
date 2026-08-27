@@ -1,10 +1,10 @@
 /* The Settings desk.
 
-   One modal. Span first, then homes / plates / horizon, then clay Save time.
-   Collectors and colours apply immediately; Save posts the six fleet scalars.
-   app.js opens, closes, and re-exports the test seam. Functions that still
-   live in app.js arrive through bindSettingsPanel so this file does not
-   import the entry point. */
+   One modal. Span first, then homes / Needs-you / horizon, then clay Save time.
+   Collectors apply immediately; Save posts the six fleet scalars. Colour lives
+   on the board stripe, not here. app.js opens, closes, and re-exports the test
+   seam. Functions that still live in app.js arrive through bindSettingsPanel
+   so this file does not import the entry point. */
 
 import { state } from "./client-state.js";
 import { $, el, icon } from "./dom-primitives.js";
@@ -16,20 +16,12 @@ import { fetchCollectorInstances, renderCollectorsBlock } from "./settings-colle
 let paintUnchanged;
 let postSettings;
 let setNeedsYouDisplay;
-let fetchRepoColors;
-let fetchTeamColors;
-let paintRepoColorSettings;
-let paintTeamColorSettings;
 let render;
 
 export function bindSettingsPanel(deps) {
   paintUnchanged = deps.paintUnchanged;
   postSettings = deps.postSettings;
   setNeedsYouDisplay = deps.setNeedsYouDisplay;
-  fetchRepoColors = deps.fetchRepoColors;
-  fetchTeamColors = deps.fetchTeamColors;
-  paintRepoColorSettings = deps.paintRepoColorSettings;
-  paintTeamColorSettings = deps.paintTeamColorSettings;
   render = deps.render;
 }
 
@@ -318,8 +310,6 @@ function paintNeedsYouPlates() {
 function openSettingsPanel() {
   state.settingsPanelOpen = true;
   renderSettingsPanel();
-  void fetchRepoColors();
-  void fetchTeamColors();
   void fetchCollectorInstances();
 }
 
@@ -405,12 +395,10 @@ function renderSettingsPanel() {
   ].join("\u001f");
   if (paintUnchanged("settings", sig)) {
     /* Counts follow the snapshot; the verdict is time-boxed. Neither should
-       remount the rail inputs. Plates and colours paint into their own hosts. */
+       remount the rail inputs. Needs-you paints into its own host. */
     renderSettingsCounts();
     renderSettingsVerdict();
     paintNeedsYouPlates();
-    paintRepoColorSettings();
-    paintTeamColorSettings();
     return;
   }
   // textContent = "" is this client's clear idiom; replaceChildren is not part
@@ -462,14 +450,7 @@ function renderSettingsPanel() {
           ...SETTINGS_PRESETS.map((preset) => postureButton(preset, fresh, quiet)))),
       el("div", { id: "settings-homes", class: "homes" },
         renderCollectorsBlock()),
-      el("div", { class: "split" },
-        el("div", { id: "settings-needs-you", class: "plate" }),
-        el("section", { class: "plate", "aria-label": "Repository colours" },
-          el("h3", { text: "Repo colours" }),
-          el("div", { id: "repo-colors-host", class: "repo-colors-host" })),
-        el("section", { class: "plate", "aria-label": "Teams" },
-          el("h3", { text: "Teams" }),
-          el("div", { id: "team-colors-host", class: "team-colors-host" }))),
+      el("div", { id: "settings-needs-you", class: "plate" }),
       el("section", { class: "horizon", "aria-label": "Horizon" },
         el("h3", { text: "Horizon" }),
         el("div", { class: "meters" },
@@ -516,8 +497,6 @@ function renderSettingsPanel() {
   renderSettingsCounts();
   renderSettingsVerdict();
   paintNeedsYouPlates();
-  paintRepoColorSettings();
-  paintTeamColorSettings();
 }
 
 export {

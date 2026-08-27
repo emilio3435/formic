@@ -88,9 +88,6 @@ export const state = {
   collectorImportNote: "",
   repoColorSettings: null,
   liveRepoKeys: [],
-  /* Live operator teams for Settings → Teams. Filled by GET /api/team-colors
-     when the panel opens; the board itself still paints from snapshot hex. */
-  teamColors: [],
   /* The attention panel's disclosure state. A panel the operator opened stays
      open across the four-second repaint — closing it under them would make the
      board unreadable while anything is actually waiting. */
