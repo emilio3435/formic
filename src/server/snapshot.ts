@@ -563,7 +563,7 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
     /* `callSizes` is server-side evidence, not board content. Stripped HERE, at
        the one point a CollectedAgent becomes an AgentSnapshot, so there is a
        single boundary to test rather than a rule to remember: the snapshot is
-       2.65MB against a 2MB SSE backlog budget (measured 2026-08-03, replacing a
+       2.65MB against an 8 MiB SSE backlog budget (measured 2026-08-03, replacing a
        stale 2.23MB), and the largest session on this machine has 1,575 calls.
        It is served on demand from
        /api/debug/session-calls, where the cost is paid by whoever asks. */

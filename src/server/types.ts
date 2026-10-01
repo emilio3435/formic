@@ -39,7 +39,7 @@ export interface CollectedAgent {
      Deliberately NOT published in the snapshot: it is stripped where a
      CollectedAgent becomes an AgentSnapshot, and served on demand from
      /api/debug/session-calls instead. A live snapshot is already 2.23MB against
-     a 2MB SSE backlog budget, and the median session has 7 calls while the
+     an 8 MiB SSE backlog budget, and the median session has 7 calls while the
      largest on this machine has 1,575 — putting the tail on the wire for every
      agent on every update would spend the board's freshness on a series nothing
      renders.

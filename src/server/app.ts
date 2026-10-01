@@ -90,26 +90,17 @@ export const PUBLISH_CACHE_MS = 30_000;
 export const MAX_SSE_CLIENTS = 16;
 /* Under the 30s most proxies and browsers use to declare an idle stream dead. */
 export const SSE_HEARTBEAT_MS = 25_000;
-/* A client's stream is dropped once its unread backlog exceeds this. The number
-   has to be read against the payload it must carry: every client's FIRST event
-   is a whole snapshot, enqueued directly and deliberately unchecked, because a
-   delta is meaningless without the base it applies to.
+/* A client's stream is dropped once its unread backlog exceeds this. Every
+   frame, including the opening snapshot, goes through that same check. The
+   opening snapshot is still the first event — a delta is meaningless without
+   the base it applies to — and it is queued only while the unread backlog is
+   still inside this budget.
 
-   At 2MB it had been overtaken. A live snapshot measured 2,334,323 bytes — 11%
-   OVER the entire budget — so from the moment of connection every client sat at
-   a negative desiredSize until it finished draining, and the next delta to
-   arrive in that window closed its stream. The guard meant to tolerate a slow
-   client and drop only a stuck one had no slack left to tolerate anything: one
-   byte behind and ten megabytes behind were the same verdict.
-
-   Measured, it was not yet biting — the drain takes 2.2ms on loopback against a
-   delta roughly every 3.8s, so the exposure is about 0.06% per update. But it
-   grows on both axes at once as the fleet does: a bigger board takes longer to
-   drain AND changes more often. 8MB is a little over three snapshots at today's
-   size, which is what a BACKLOG budget should mean — a client may fall a few
+   8 MiB is a little over three snapshots at a measured live size of 2,334,323
+   bytes, which is what a backlog budget should mean: a client may fall a few
    updates behind before it is given up on. Worst case it bounds memory at
-   MAX_SSE_CLIENTS x this, and `sseBacklogDrops` on /api/health says whether the
-   headroom is actually being used. */
+   MAX_SSE_CLIENTS times this, and `sseBacklogDrops` on /api/health says whether
+   the headroom is actually being used. */
 export const MAX_SSE_BACKLOG_BYTES = 8 * 1024 * 1024;
 export const MAX_HEALTH_SNAPSHOT_AGE_MS = 60_000;
 export const ACTION_LOG_RETENTION_MS = 7 * 24 * 60 * 60 * 1_000;
@@ -1273,7 +1264,8 @@ export function createMountainFetch(dependencies: MountainAppDependencies): Moun
         start(controller) {
           client = controller;
           clients.add(controller);
-          controller.enqueue(currentSnapshotEvent);
+          enqueueClient(controller, currentSnapshotEvent);
+          if (!clients.has(controller)) return;
           heartbeatTimers.set(
             controller,
             setInterval(() => {
