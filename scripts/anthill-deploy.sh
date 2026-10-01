@@ -12,7 +12,8 @@
 #   - refuses if HEAD has diverged from, or is ahead of, origin/main
 #   - verifies launchd points back at this exact checkout
 #   - installs the lockfile, then BLOCKS on a red typecheck or test suite
-#   - restarts the launchd service and health-checks :4701 (~45s)
+#   - restarts the launchd service and health-checks :4701 (~45s). HTTP 200 is
+#     not enough: the body must say data.complete is true.
 #   - leaves the checkout unchanged and points to safe recovery if unhealthy
 #
 # A green GitHub merge is not a deploy. :4701 serves the local files of
@@ -148,10 +149,16 @@ launchctl kickstart -k "gui/$(id -u)/$LABEL"
 
 echo "-> health check :$PROD_PORT"
 HEALTH_TRIES="${ANTHILL_DEPLOY_HEALTH_TRIES:-45}"
+# /api/health stays 200 while the process is live even when the pass is not
+# finished (data.complete false: a failed collector, unreachable cmux, or
+# operator state that failed to load). Healthy means 200 and data.complete true.
+last_health="down"
 for _ in $(seq 1 "$HEALTH_TRIES"); do
   sleep 1
-  code="$(curl -sS --max-time 2 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PROD_PORT/api/health" || true)"
-  if [ "$code" = "200" ]; then
+  health_body="$(mktemp "${TMPDIR:-/tmp}/anthill-health.XXXXXX")"
+  code="$(curl -sS --max-time 2 -o "$health_body" -w '%{http_code}' "http://127.0.0.1:$PROD_PORT/api/health" || true)"
+  if [ "$code" = "200" ] && jq -e '.data.complete == true' "$health_body" >/dev/null 2>&1; then
+    rm -f "$health_body"
     echo "HEALTHY: :$PROD_PORT answered after restart requested at $HEAD_SHA."
     echo "LIVE: $HEAD_SHA on :$PROD_PORT (a green GitHub merge is not a deploy)."
     BUST="$(awk 'match($0, /ah-t[0-9]+/) { print substr($0, RSTART, RLENGTH); exit }' "$ROOT/src/web/index.html" 2>/dev/null || true)"
@@ -160,9 +167,19 @@ for _ in $(seq 1 "$HEALTH_TRIES"); do
     fi
     exit 0
   fi
+  if [ "$code" = "200" ]; then
+    last_health="incomplete"
+  else
+    last_health="down"
+  fi
+  rm -f "$health_body"
 done
 
-echo "UNHEALTHY: :$PROD_PORT did not report a fresh snapshot after restart." >&2
+if [ "$last_health" = "incomplete" ]; then
+  echo "UNHEALTHY: :$PROD_PORT returned 200 but data.complete is not true." >&2
+else
+  echo "UNHEALTHY: :$PROD_PORT did not report a fresh snapshot after restart." >&2
+fi
 echo "Recovery: revert the unhealthy change through GitHub main, then fast-forward and deploy again." >&2
 echo "Inspect the service log first:" >&2
 echo "  tail -n 100 \"$HOME/Library/Logs/$LABEL.err.log\"" >&2
