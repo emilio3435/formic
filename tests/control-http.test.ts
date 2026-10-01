@@ -5,6 +5,8 @@ import {
   MAX_CONTROL_BODY_BYTES,
   MAX_CONTROL_SNAPSHOT_AGE_MS,
 } from "../src/server/http";
+// @ts-expect-error The browser freshness module has no declaration file.
+import { CONTROL_SNAPSHOT_AGE_MS } from "../src/web/feed-freshness.js";
 import type {
   AgentSnapshot,
   ControlAction,
@@ -594,6 +596,10 @@ describe("same-origin loopback control HTTP boundary", () => {
       },
     });
     expect(runner.commands).toHaveLength(0);
+  });
+
+  test("the board holds send at the same age the server refuses", () => {
+    expect(CONTROL_SNAPSHOT_AGE_MS).toBe(MAX_CONTROL_SNAPSHOT_AGE_MS);
   });
 
   test("archive remains available when routing evidence is stale because it does not target cmux", async () => {

@@ -161,6 +161,12 @@ export interface SnapshotInput {
    * reporting `unverified` instead of inventing endings.
    */
   processRosterComplete?: boolean;
+  /** This publication is an incomplete collector pass. */
+  partial?: boolean;
+  /** generatedAt of the last complete pass. Kept when `partial` is set. */
+  previousGeneratedAt?: string;
+  /** Healthy duration of the configured provider wait. Freshness treats ages inside it as fresh. */
+  passBudgetMs?: number;
 }
 
 type SnapshotControlRefusal = Omit<TransmitRefusal, "message">;
@@ -891,9 +897,21 @@ export function buildSnapshot(input: SnapshotInput): FormicHubSnapshot {
      the table still listed every key. Absence is a category on that set. */
   const sourceTotal = knownCollectors;
   const scanWindowHours = input.scanWindowHours;
+  /* A partial pass keeps the last complete generatedAt and sets `partial`.
+     Freshness reads that flag. Moving the clock here would publish an
+     unfinished pass as a new reading. */
+  const retainedGeneratedAt = input.partial === true ? input.previousGeneratedAt : undefined;
+  const retainedMs = retainedGeneratedAt ? Date.parse(retainedGeneratedAt) : NaN;
+  const generatedAt = Number.isFinite(retainedMs) && retainedGeneratedAt
+    ? retainedGeneratedAt
+    : now.toISOString();
   const snapshot: FormicHubSnapshot = {
     schemaVersion: 1,
-    generatedAt: now.toISOString(),
+    generatedAt,
+    ...(input.partial === true ? { partial: true } : {}),
+    ...(typeof input.passBudgetMs === "number" && Number.isFinite(input.passBudgetMs)
+      ? { passBudgetMs: input.passBudgetMs }
+      : {}),
     modelConfig: {
       displayLabels: MODEL_CONFIG.modelDisplayLabels,
     },

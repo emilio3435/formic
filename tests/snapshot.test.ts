@@ -536,6 +536,34 @@ describe("snapshot control safety and SSE deduplication", () => {
     expect(laterSnapshot.controlHealth.lastCheckedAt).toBe(cmuxAttempt);
   });
 
+  test("a partial pass keeps the previous freshness clock and publishes the flag", () => {
+    const previous = "2026-07-21T23:00:00.000Z";
+    const partial = buildSnapshot({
+      agents: [collected()],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+      partial: true,
+      previousGeneratedAt: previous,
+      passBudgetMs: 20_000,
+    });
+    expect(partial.partial).toBe(true);
+    expect(partial.generatedAt).toBe(previous);
+    expect(partial.passBudgetMs).toBe(20_000);
+
+    const complete = buildSnapshot({
+      agents: [collected()],
+      surfaces: [],
+      archiveStore,
+      now: new Date("2026-07-21T23:00:30.000Z"),
+      previousGeneratedAt: previous,
+      passBudgetMs: 20_000,
+    });
+    expect(complete.partial).toBeUndefined();
+    expect(complete.generatedAt).toBe("2026-07-21T23:00:30.000Z");
+    expect(complete.passBudgetMs).toBe(20_000);
+  });
+
   test("snapshot exposes the additive summary field and preserves explicit absence", () => {
     const withMessage = buildSnapshot({
       agents: [collected({ lastHumanMessage: "Readable provider prose." })],

@@ -23,18 +23,39 @@ import { fmtElapsed } from "./text-formatters.js";
    heartbeats every 25s from a timer that knows nothing about the collector, so a
    heartbeat proves only that the socket is open — it must never be able to make
    a 91-hour-old snapshot read as "Live". Age is measured against
-   snapshot.generatedAt, which the server already sends. The collector refreshes
-   every 4s, so anything past SNAPSHOT_FRESH_MS is already behind; past
-   SNAPSHOT_STALE_MS the board is not showing "now" in any useful sense. */
+   snapshot.generatedAt. Fresh means the snapshot is still inside the pass
+   budget the operator configured (published as passBudgetMs). The default
+   wait is a 15s healthy pass, so that budget is the fallback. Past
+   SNAPSHOT_STALE_MS the board is not showing "now" in any useful sense.
+
+   A partial pass does not get to look fresh by moving generatedAt. The
+   snapshot carries `partial`, and that flag is what this function reads. */
 export const SNAPSHOT_FRESH_MS = 15_000;
 
 export const SNAPSHOT_STALE_MS = 60_000;
 
-export function snapshotFreshness(generatedAt, now = Date.now()) {
+/* Server refuses focus, instruct, and interrupt past this age
+   (MAX_CONTROL_SNAPSHOT_AGE_MS in src/server/http.ts). Send on the board
+   stops at the same instant. The 60s stale band stays put. */
+export const CONTROL_SNAPSHOT_AGE_MS = 30_000;
+
+function freshnessSnap(generatedAt, snap) {
+  if (snap && typeof snap === "object") return snap;
+  const live = state.snap;
+  if (live && live.generatedAt === generatedAt) return live;
+  return null;
+}
+
+export function snapshotFreshness(generatedAt, now = Date.now(), snap) {
   const at = generatedAt ? Date.parse(generatedAt) : NaN;
   if (!Number.isFinite(at)) return { state: "unknown", ageMs: null };
   const ageMs = Math.max(0, now - at);
-  if (ageMs <= SNAPSHOT_FRESH_MS) return { state: "fresh", ageMs };
+  const source = freshnessSnap(generatedAt, snap);
+  const partial = Boolean(source && source.partial === true);
+  const freshMs = source && Number.isFinite(source.passBudgetMs)
+    ? source.passBudgetMs
+    : SNAPSHOT_FRESH_MS;
+  if (!partial && ageMs <= freshMs) return { state: "fresh", ageMs };
   return { state: ageMs > SNAPSHOT_STALE_MS ? "stale" : "lagging", ageMs };
 }
 
@@ -71,8 +92,20 @@ export function feedAlarm(conn, generatedAt, now = Date.now()) {
     };
   }
   const fresh = snapshotFreshness(generatedAt, now);
-  if (fresh.state !== "stale") return null;
+  /* Stale (60s) freezes the board. The server's control age (30s) holds Send
+     sooner, while the snapshot is still only lagging. Exactly 30s is still
+     allowed: the server refuses only once age is greater than that. */
+  const pastControlAge = fresh.ageMs !== null && fresh.ageMs > CONTROL_SNAPSHOT_AGE_MS;
+  if (fresh.state !== "stale" && !pastControlAge) return null;
   const age = fmtElapsed(fresh.ageMs);
+  if (fresh.state !== "stale") {
+    return {
+      kind: "held",
+      headline: "Send held — snapshot is " + age + " old",
+      detail: "Focus, Send and Interrupt wait for a newer snapshot. The server refuses routing evidence older than 30s.",
+      ageMs: fresh.ageMs,
+    };
+  }
   return {
     kind: "frozen",
     headline: "Feed frozen — last snapshot " + age + " ago",
