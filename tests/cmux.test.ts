@@ -8,11 +8,15 @@ import {
   collectCmuxNotificationSummaries,
   collectCmuxNotifications,
   collectCmuxSidebar,
+  collectCmuxWorkspaceEnvs,
   DEFAULT_CMUX_EXECUTABLE,
   JsonAttentionStore,
+  MAX_ATTENTION_RECORDS,
+  MAX_WORKSPACE_ENV_CACHE,
   MemoryAttentionStore,
   parseCmuxSidebarSnapshot,
   parseCmuxTerminals,
+  pruneWorkspaceEnvEntries,
   runtimeCmuxExecutable,
 } from "../src/server/cmux";
 import type { CommandRunner } from "../src/server/types";
@@ -180,6 +184,25 @@ describe("persisted notification attention state", () => {
     expect(store.get("SURFACE-500")).toBeDefined();
   });
 
+  test("latest notifications stay capped at the same bound as attention records", async () => {
+    const now = Date.parse("2026-07-28T09:01:00.000Z");
+    const store = new MemoryAttentionStore(() => now);
+    const notifications = Array.from({ length: MAX_ATTENTION_RECORDS + 1 }, (_, index) => ({
+      id: `notice-${index}`,
+      surfaceId: `SURFACE-${index}`,
+      createdAt: new Date(now + index).toISOString(),
+    }));
+    store.observe(notifications);
+
+    await expect(store.apply("SURFACE-0", "acknowledge")).rejects.toThrow(/no observed unread/);
+    await store.apply(`SURFACE-${MAX_ATTENTION_RECORDS}`, "acknowledge");
+    expect(store.get(`SURFACE-${MAX_ATTENTION_RECORDS}`)?.notificationId).toBe(`notice-${MAX_ATTENTION_RECORDS}`);
+
+    store.observe([notifications[0]!]);
+    await store.apply("SURFACE-0", "acknowledge");
+    await expect(store.apply("SURFACE-1", "acknowledge")).rejects.toThrow(/no observed unread/);
+  });
+
   test("attention records survive reopen and corrupt state degrades loudly to empty", async () => {
     const directory = await mkdtemp(join(tmpdir(), "anthill-attention-"));
     const path = join(directory, "attention.json");
@@ -218,6 +241,44 @@ describe("persisted notification attention state", () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe("workspace env cache", () => {
+  test("expired entries are deleted and the map stays inside its cap", () => {
+    const expired = new Map<string, { expiresAt: number }>();
+    for (let index = 0; index < MAX_WORKSPACE_ENV_CACHE; index += 1) {
+      expired.set(`stale-${index}`, { expiresAt: 1_000 });
+    }
+    expired.set("fresh", { expiresAt: 5_000 });
+    pruneWorkspaceEnvEntries(expired, 1_000);
+    expect([...expired.keys()]).toEqual(["fresh"]);
+
+    const bounded = new Map<string, { expiresAt: number }>();
+    for (let index = 0; index < MAX_WORKSPACE_ENV_CACHE + 3; index += 1) {
+      bounded.set(`ws-${index}`, { expiresAt: 9_000 });
+      pruneWorkspaceEnvEntries(bounded, 0);
+    }
+    expect(bounded.size).toBe(MAX_WORKSPACE_ENV_CACHE);
+    expect(bounded.has("ws-0")).toBe(false);
+    expect(bounded.has(`ws-${MAX_WORKSPACE_ENV_CACHE + 2}`)).toBe(true);
+  });
+
+  test("a workspace env past its TTL is fetched again", async () => {
+    let now = Date.now();
+    const commands: string[][] = [];
+    const runner: CommandRunner = {
+      run: async (command) => {
+        commands.push([...command]);
+        return { exitCode: 0, stdout: "{}", stderr: "", timedOut: false };
+      },
+    };
+    const workspaceId = "WORKSPACE-TTL-PRUNE";
+    await collectCmuxWorkspaceEnvs(runner, [workspaceId], "cmux", () => now);
+    await collectCmuxWorkspaceEnvs(runner, [workspaceId], "cmux", () => now);
+    now += 60_000;
+    await collectCmuxWorkspaceEnvs(runner, [workspaceId], "cmux", () => now);
+    expect(commands).toHaveLength(2);
   });
 });
 

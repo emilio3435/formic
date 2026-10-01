@@ -28,6 +28,10 @@ export interface HookSessionRecord {
   updatedAt: number;
 }
 
+/* One file per provider keeps every session a hook ever wrote. The map is what
+   a scan holds in memory, so it keeps the most recently updated records. */
+export const MAX_HOOK_SESSION_RECORDS = 4_096;
+
 let recordsBySession = new Map<string, HookSessionRecord>();
 
 function nonEmptyString(value: unknown): value is string {
@@ -102,8 +106,20 @@ function readStore(root: string, provider: HookProvider): HookSessionRecord[] {
   }
 }
 
+function capHookSessionRecords(records: HookSessionRecord[]): HookSessionRecord[] {
+  if (records.length <= MAX_HOOK_SESSION_RECORDS) return records;
+  const keep = new Set(
+    records
+      .map((record, index) => ({ index, updatedAt: record.updatedAt }))
+      .sort((left, right) => right.updatedAt - left.updatedAt || right.index - left.index)
+      .slice(0, MAX_HOOK_SESSION_RECORDS)
+      .map(({ index }) => index),
+  );
+  return records.filter((_, index) => keep.has(index));
+}
+
 export function readHookSessionStores(root = join(homedir(), ".cmuxterm")): HookSessionRecord[] {
-  const records = HOOK_PROVIDERS.flatMap((provider) => readStore(root, provider));
+  const records = capHookSessionRecords(HOOK_PROVIDERS.flatMap((provider) => readStore(root, provider)));
   recordsBySession = new Map(
     records.map((record) => [
       `${record.provider}:${normalizeIdentityValue(record.provider, record.sessionId)}`,
