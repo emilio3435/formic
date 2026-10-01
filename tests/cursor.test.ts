@@ -11,6 +11,7 @@ import {
   parseCursorChildSession,
   parseCursorSession,
   readCursorStoreEvidence,
+  setCursorComposerReadTestOverride,
 } from "../src/server/cursor";
 import {
   enrichCmuxIdentity,
@@ -34,6 +35,7 @@ const fixture = (name: string): Promise<string> =>
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
+  setCursorComposerReadTestOverride(undefined);
   await Promise.all(temporaryDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
@@ -1118,6 +1120,34 @@ describe("Cursor Agent persisted session truth", () => {
     // The session is still collected — a damaged model record must not delete
     // the agent from the board.
     expect(result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`)).toBeDefined();
+  });
+
+  test("a composerData read that misses its budget degrades Cursor and does not freeze Bun", async () => {
+    const home = await setupGuiComposerHome({
+      composerData: {
+        modelName: "claude-opus-4-8-thinking-high",
+        parameters: [{ id: "effort", value: "xhigh" }],
+      },
+      trackingModel: "grok-4.5",
+    });
+    setCursorComposerReadTestOverride({ budgetMs: 200, delayMs: 30_000 });
+    let ticks = 0;
+    const timer = setInterval(() => { ticks += 1; }, 20);
+    try {
+      const started = Date.now();
+      const result = await collectCursorSessions(home, 1784692000000);
+      expect(Date.now() - started).toBeLessThan(1_500);
+      expect(ticks).toBeGreaterThan(0);
+      expect(result.errors.join(" ")).toContain("composerData");
+      expect(result.errors.join(" ")).toContain("exceeded");
+      const agent = result.value.find(({ id }) => id === `cursor:${GUI_SESSION_ID}`);
+      expect(agent).toBeDefined();
+      expect(agent?.model).toBe("grok-4.5");
+      expect(agent?.effort).toBeUndefined();
+    } finally {
+      clearInterval(timer);
+      setCursorComposerReadTestOverride(undefined);
+    }
   });
 
   test("a session that never wrote composerData stays silent", async () => {

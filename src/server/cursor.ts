@@ -30,10 +30,23 @@ import { contentHasPartType, observeTranscriptMessage, ThreadClock } from "./thr
 import { DEFAULT_LIFECYCLE_THRESHOLDS, type LifecycleThresholds } from "./lifecycle";
 import { instanceIdFor } from "./collector-instances";
 import {
+  asRecord,
+  composerModelForSession,
+  nonEmptyString,
+} from "./cursor-composer-model";
+import {
+  cursorComposerDataFailure,
+  readCursorComposerData,
+  setCursorComposerReadTestOverride,
+  type CursorComposerDataEntry,
+} from "./cursor-composer-read";
+import {
   foreignSqliteFailureMessage,
   readForeignSqlite,
   verifyForeignSqlite,
 } from "./foreign-sqlite";
+
+export { setCursorComposerReadTestOverride };
 
 export const DEFAULT_CURSOR_SESSION_WINDOW_MS = 36 * 60 * 60 * 1_000;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -48,6 +61,9 @@ interface CursorStateCache {
   sessionCwds: Map<string, string>;
   hasComposerData: boolean;
   composerData: Map<string, string | Uint8Array>;
+  composerFailures?: Map<string, string>;
+  composerMisses?: Set<string>;
+  composerReadFailed?: boolean;
   occupancyPct: Map<string, number>;
   composers: Map<string, CursorStoreEvidence>;
 }
@@ -474,16 +490,6 @@ function decodeHexJson(value: unknown): Record<string, unknown> | undefined {
   }
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function nonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function syncFileFingerprint(path: string): string | undefined {
   try {
     const details = statSync(path);
@@ -713,6 +719,10 @@ async function cursorStateEvidence(
   if (fingerprint && cached?.fingerprint === fingerprint) {
     try {
       verifyForeignSqlite(path);
+      /* A budget miss sticks only for the scan that hit it. The store
+         fingerprint did not change, but the next scan has to be allowed to
+         try the bounded read again. */
+      cached.composerReadFailed = false;
       return cached;
     } catch (error) {
       cursorStateCaches.delete(path);
@@ -729,21 +739,14 @@ async function cursorStateEvidence(
       const hasComposerData = database
         .query("select name from sqlite_master where type = 'table' and name = 'cursorDiskKV'")
         .get() !== null;
+      /* Presence only. Loading every composerData blob here was unbounded —
+         `select key, value ... like 'composerData:%'` plus `.all()` — and it
+         ran synchronously on the Bun thread. Values are read later, one
+         session id at a time, and a miss abandons that read. */
       const composerData = new Map<string, string | Uint8Array>();
-      if (hasComposerData) {
-        const rows = database
-          .query("select key, value from cursorDiskKV where key like 'composerData:%'")
-          .all() as Array<{ key?: string; value?: string | Uint8Array | null }>;
-        for (const row of rows) {
-          if (typeof row.key !== "string" || row.value === undefined || row.value === null) continue;
-          composerData.set(
-            row.key.slice("composerData:".length),
-            typeof row.value === "string" ? row.value : new Uint8Array(row.value),
-          );
-        }
-      }
-      // Read in the SAME pass as ItemTable and cursorDiskKV: a second open would
-      // be a second read-only snapshot of a database Cursor is still writing.
+      // Headers stay in this pass: a second open would be a second snapshot of
+      // a database Cursor is still writing. Composer values are the exception,
+      // because that scan is what froze the process.
       const hasHeaderTable = database
         .query("select name from sqlite_master where type = 'table' and name = 'composerHeaders'")
         .get() !== null;
@@ -813,6 +816,9 @@ async function cursorStateEvidence(
       ...rest,
       occupancyPct,
       composers: new Map(),
+      composerFailures: new Map(),
+      composerMisses: new Set(),
+      composerReadFailed: false,
     };
     cursorStateCaches.set(path, next);
     return next;
@@ -854,49 +860,62 @@ function cursorTrackingModels(path: string): Map<string, string> {
   return models;
 }
 
-// modelConfig.selectedModels[0].parameters is an [{id,value}] list carrying the
-// effort/fast tier a GUI agent was configured with (e.g. {id:"effort",value:"xhigh"}).
-function composerEffort(selectedModels: unknown): string | undefined {
-  if (!Array.isArray(selectedModels)) return undefined;
-  const parameters = asRecord(selectedModels[0])?.parameters;
-  if (!Array.isArray(parameters)) return undefined;
-  for (const parameter of parameters) {
-    const record = asRecord(parameter);
-    if (record?.id === "effort") return nonEmptyString(record.value);
+function compactComposerRecord(evidence: CursorStoreEvidence): string {
+  const modelConfig: Record<string, unknown> = {};
+  if (evidence.model) modelConfig.modelName = evidence.model;
+  if (evidence.effort) {
+    modelConfig.selectedModels = [{ parameters: [{ id: "effort", value: evidence.effort }] }];
   }
-  return undefined;
+  return JSON.stringify({ modelConfig });
 }
 
-// Shared model source keyed purely by session id: composerData:<sessionId>.modelConfig
-// covers every family incl. Composer variants and exists for EVERY Cursor session id
-// (roots and subagents alike). "default" means "no explicit model", so it is treated as
-// unreported. The state.vscdb is a live WAL database; callers open it read-only and may
-// lack the cursorDiskKV table on older installs, so the query is guarded.
-/* Returning {} for a failed read made it identical to a session that simply
-   has no composerData, and an absent model renders as the model policy
-   "unreported" — whose summary tells the operator "Cursor did not expose an
-   authoritative model for this session". That is a confident claim about
-   Cursor's behaviour made from a local failure to read Cursor's database, and
-   the two have opposite remedies. Absence still returns {}; a failure now
-   throws, so the caller records it against the cursor source instead. */
-function composerModelForSession(value: string | Uint8Array | undefined, sessionId: string): CursorStoreEvidence {
-  // No row is a real answer: this session never wrote composerData.
-  if (value === undefined) return {};
-  let parsed: unknown;
-  try {
-    const json = typeof value === "string" ? value : Buffer.from(value).toString("utf8");
-    parsed = JSON.parse(json);
-  } catch (error) {
-    throw new Error(
-      `composerData for ${sessionId} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
-    );
+function rememberComposerEntry(state: CursorStateCache, entry: CursorComposerDataEntry): void {
+  if (entry.error) {
+    (state.composerFailures ??= new Map()).set(entry.id, entry.error);
+    state.composerData.set(entry.id, "");
+    return;
   }
-  const modelConfig = asRecord(asRecord(parsed)?.modelConfig);
-  const modelName = nonEmptyString(modelConfig?.modelName);
-  return {
-    model: modelName === "default" ? undefined : modelName,
-    effort: composerEffort(modelConfig?.selectedModels),
-  };
+  const evidence: CursorStoreEvidence = {};
+  if (entry.model) evidence.model = entry.model;
+  if (entry.effort) evidence.effort = entry.effort;
+  state.composers.set(entry.id, evidence);
+  state.composerData.set(entry.id, compactComposerRecord(evidence));
+}
+
+/* Ask only for the session ids this scan will publish. Each id is one primary
+   key lookup (`composerData:<id>`), not a scan of every historical blob. The
+   lookup runs off the Bun thread; if it misses its budget the provider is
+   degraded and the sessions already collected stay on the board. */
+async function ensureComposerData(
+  state: CursorStateCache | undefined,
+  sessionIds: readonly string[],
+  errors: string[],
+): Promise<void> {
+  if (!state?.hasComposerData || state.composerReadFailed) return;
+  const missing: string[] = [];
+  for (const sessionId of sessionIds) {
+    if (!UUID_PATTERN.test(sessionId) || missing.includes(sessionId)) continue;
+    if (state.composerData.has(sessionId) || state.composers.has(sessionId)) continue;
+    if (state.composerFailures?.has(sessionId) || state.composerMisses?.has(sessionId)) continue;
+    missing.push(sessionId);
+  }
+  if (missing.length === 0) return;
+  try {
+    const result = await readCursorComposerData(state.path, missing);
+    for (const entry of result.entries) rememberComposerEntry(state, entry);
+    for (const sessionId of result.absent) {
+      if (!state.composerData.has(sessionId) && !state.composers.has(sessionId)) {
+        (state.composerMisses ??= new Set()).add(sessionId);
+      }
+    }
+    if (!result.ok) {
+      state.composerReadFailed = true;
+      if (result.message) errors.push(result.message);
+    }
+  } catch (error) {
+    state.composerReadFailed = true;
+    errors.push(cursorComposerDataFailure(error instanceof Error ? error.message : String(error)));
+  }
 }
 
 // One composer's occupancy reading, validated identically no matter which
@@ -988,8 +1007,11 @@ function cachedComposerModel(
   sessionId: string,
 ): CursorStoreEvidence {
   if (!state?.hasComposerData) return {};
+  const failure = state.composerFailures?.get(sessionId);
+  if (failure) throw new Error(failure);
   const cached = state.composers.get(sessionId);
   if (cached) return cached;
+  if (state.composerMisses?.has(sessionId) || state.composerReadFailed) return {};
   const evidence = composerModelForSession(state.composerData.get(sessionId), sessionId);
   state.composers.set(sessionId, evidence);
   return evidence;
@@ -1133,6 +1155,11 @@ async function collectCursorGuiSessions(
     const rows = readForeignSqlite(conversationPath, (database) => database.query(
       "select id, title, updated_at, is_archived from conversations where source = 'local' and updated_at >= ? order by updated_at desc",
     ).all(nowMs - windowMs) as CursorConversationRow[]);
+    await ensureComposerData(
+      state,
+      rows.flatMap((row) => typeof row.id === "string" ? [row.id] : []),
+      errors,
+    );
     for (const row of rows) {
       if (typeof row.id !== "string" || !UUID_PATTERN.test(row.id)) continue;
       const cwd = state?.sessionCwds.get(row.id);
@@ -1206,6 +1233,7 @@ async function fillMissingCursorModels(
 ): Promise<void> {
   const missing = agents.filter((agent) => !agent.model);
   if (missing.length === 0 || !state?.hasComposerData) return;
+  await ensureComposerData(state, missing.map((agent) => agent.sourceSessionId), errors);
   // Per-session isolation: one unreadable record must not stop the remaining
   // sessions from being filled, and each failure is named on its own.
   for (const agent of missing) {
@@ -1437,6 +1465,12 @@ export async function collectCursorSessions(
     }
     for (const sessionId of cache.composers.keys()) {
       if (!currentSessionIds.has(sessionId)) cache.composers.delete(sessionId);
+    }
+    for (const sessionId of cache.composerFailures?.keys() ?? []) {
+      if (!currentSessionIds.has(sessionId)) cache.composerFailures?.delete(sessionId);
+    }
+    for (const sessionId of cache.composerMisses?.keys() ?? []) {
+      if (!currentSessionIds.has(sessionId)) cache.composerMisses?.delete(sessionId);
     }
     // A reduced composerData map is complete only for this scan. Force the next
     // scan to reread an unchanged store so a wider time window can restore a
