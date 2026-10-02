@@ -1,5 +1,37 @@
+import { readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 export const DEFAULT_CMUX_EVENTS_CURSOR_FILE = "~/.anthill/events.cursor";
 const CMUX_EVENTS_RESTART_DELAY_MS = 1_000;
+const CMUX_EVENTS_ABSENT_DELAY_MAX_MS = 30_000;
+
+function cmuxStateDir(): string {
+  const stateHome = process.env.XDG_STATE_HOME?.trim() || join(homedir(), ".local", "state");
+  return join(stateHome, "cmux");
+}
+
+function pathIsSocket(path: string): boolean {
+  try {
+    return statSync(path).isSocket();
+  } catch {
+    return false;
+  }
+}
+
+/** True when a cmux control socket is on disk. A missing socket means cmux is not running. */
+export function cmuxControlSocketPresent(): boolean {
+  const override = process.env.CMUX_SOCKET_PATH?.trim();
+  if (override) return pathIsSocket(override);
+  const dir = cmuxStateDir();
+  if (pathIsSocket(join(dir, "cmux.sock"))) return true;
+  try {
+    const recorded = readFileSync(join(dir, "last-socket-path"), "utf8").trim();
+    return recorded ? pathIsSocket(recorded) : false;
+  } catch {
+    return false;
+  }
+}
 
 export type CmuxEventFrame =
   | { type: "ack"; bootId: string; resumeGap: boolean }
@@ -162,6 +194,8 @@ export interface CmuxEventsSupervisorOptions {
   onError(error: Error): void;
   spawn?: SpawnCmuxEvents;
   scheduleRestart?: ScheduleCmuxEventsRestart;
+  /** Defaults to the real control socket. A custom `spawn` with no probe is treated as present. */
+  socketPresent?: () => boolean;
 }
 
 export class CmuxEventsSupervisor {
@@ -170,10 +204,13 @@ export class CmuxEventsSupervisor {
   readonly #onError: (error: Error) => void;
   readonly #spawn: SpawnCmuxEvents;
   readonly #scheduleRestart: ScheduleCmuxEventsRestart;
+  readonly #socketPresent: () => boolean;
   #child?: CmuxEventsChild;
   #restart?: CmuxEventsRestartHandle;
   #generation = 0;
   #running = false;
+  #absentAttempts = 0;
+  #reportedSocketAbsent = false;
 
   constructor(options: CmuxEventsSupervisorOptions) {
     this.#command = [...options.command];
@@ -181,6 +218,9 @@ export class CmuxEventsSupervisor {
     this.#onError = options.onError;
     this.#spawn = options.spawn ?? spawnCmuxEvents;
     this.#scheduleRestart = options.scheduleRestart ?? scheduleCmuxEventsRestart;
+    // Fixtures inject `spawn` and own the child. Production stats the socket.
+    this.#socketPresent = options.socketPresent
+      ?? (options.spawn ? () => true : cmuxControlSocketPresent);
   }
 
   start(): void {
@@ -193,6 +233,8 @@ export class CmuxEventsSupervisor {
     if (!this.#running) return;
     this.#running = false;
     this.#generation += 1;
+    this.#absentAttempts = 0;
+    this.#reportedSocketAbsent = false;
     this.#restart?.cancel();
     this.#restart = undefined;
     const child = this.#child;
@@ -209,16 +251,39 @@ export class CmuxEventsSupervisor {
     this.#onError(error instanceof Error ? error : new Error(String(error)));
   }
 
+  #nextDelayMs(): number {
+    if (this.#socketPresent()) {
+      this.#absentAttempts = 0;
+      return CMUX_EVENTS_RESTART_DELAY_MS;
+    }
+    const exponent = Math.min(this.#absentAttempts, 5);
+    this.#absentAttempts += 1;
+    return Math.min(
+      CMUX_EVENTS_ABSENT_DELAY_MAX_MS,
+      CMUX_EVENTS_RESTART_DELAY_MS * 2 ** exponent,
+    );
+  }
+
   #schedule(): void {
     if (!this.#running || this.#restart) return;
     this.#restart = this.#scheduleRestart(() => {
       this.#restart = undefined;
       if (this.#running) this.#launch();
-    }, CMUX_EVENTS_RESTART_DELAY_MS);
+    }, this.#nextDelayMs());
   }
 
   #launch(): void {
     if (!this.#running) return;
+    if (!this.#socketPresent()) {
+      if (!this.#reportedSocketAbsent) {
+        this.#reportedSocketAbsent = true;
+        this.#report(new Error("cmux socket is absent"));
+      }
+      this.#schedule();
+      return;
+    }
+    this.#absentAttempts = 0;
+    this.#reportedSocketAbsent = false;
     let child: CmuxEventsChild;
     try {
       child = this.#spawn(this.#command);

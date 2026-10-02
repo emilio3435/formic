@@ -832,6 +832,10 @@ export interface AttentionCoverageSummary {
 export interface HubSnapshot {
   schemaVersion: 1;
   generatedAt: string;
+  /** Present when the collector pass that published this snapshot did not finish. Freshness reads this flag. */
+  partial?: boolean;
+  /** Healthy duration of the configured provider wait, including the publish tail. Ages inside it are fresh. */
+  passBudgetMs?: number;
   modelConfig?: {
     displayLabels: Record<string, string>;
   };

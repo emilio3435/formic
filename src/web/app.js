@@ -8303,22 +8303,44 @@ function stripSig(rows) {
   return rows.map(({ agent, program }) => agent.id + "@" + program.id).join(",");
 }
 
-function renderNeedsYouStrip(rows) {
+/* A non-empty controlHealth.errors list means a collector failed. The empty
+   strip's check is a claim that every session was seen; a fault can hide the
+   one that is asking, so that claim is not available while the list is open. */
+function controlErrorsOpen(snap) {
+  const errors = snap && snap.controlHealth && snap.controlHealth.errors;
+  return Array.isArray(errors) && errors.length > 0;
+}
+
+/* Painted only for the empty pane strip. The row projection in programsPaintSig
+   does not carry controlHealth, so without this token a fault arriving on a
+   quiet fleet leaves the cached clear node on screen. */
+function needsYouEmptyClaim(visible, ui) {
+  if (!ui || ui.view !== "board" || needsYouDisplayOf(ui) !== "pane" || !visible || !visible.length) return "";
+  if (needsYouStrip(visible).length) return "";
+  return controlErrorsOpen(ui.snap) ? "\u001funconfirmed" : "\u001fclear";
+}
+
+function renderNeedsYouStrip(rows, ui = state) {
   /* The strip is here even when it is empty, and that is the point. The board
      used to LAND on an attention tab, so "nothing needs you" was said by the
      view being empty; one scrolling board has no such moment, and an operator
      scanning past a busy fleet has no way to tell "I checked and nothing is
      asking" from "I have not looked yet".
 
-     It says it about SESSIONS and nothing else. "Nothing needs you" over an
-     open collector fault is the false all-clear this codebase has a scar for —
-     the rail beside it was counting the fault at the time — so the sentence
-     names its own population and leaves the verdict on the fleet's health to
-     the surface that computes it. */
+     The check is that claim, and it is only true when the collectors reported
+     no errors. "No session is asking" over a non-empty controlHealth.errors
+     list is the false all-clear: a fault can hide the session that is asking.
+     The strip stays, and it withholds the check. */
   if (!rows.length) {
     // No body to reconcile rows into. Drop the stale one or the next paint
     // would reconcile strip rows into a node that is no longer in the document.
     programBodies.delete(STRIP_ID);
+    if (controlErrorsOpen(ui && ui.snap)) {
+      return el("section", { class: "needs-strip", "aria-label": "Needs you" },
+        el("div", { class: "needs-strip-head" },
+          el("span", { class: "needs-strip-title", text: "Session asks may be missing" }),
+          el("span", { class: "needs-strip-note", text: "collector problems are open" })));
+    }
     return el("section", { class: "needs-strip is-clear", "aria-label": "Needs you" },
       el("div", { class: "needs-strip-head" },
         el("span", { class: "needs-strip-mark", "aria-hidden": "true" }, icon("check")),
@@ -8569,7 +8591,7 @@ function programsPaintSig(visible, ui) {
        rows are therefore missing from their program group, so a change to it
        repaints two things at once — and neither of them is derivable from the
        per-agent projection below. */
-    stripSig(needsYouStrip(visible)),
+    stripSig(needsYouStrip(visible)) + needsYouEmptyClaim(visible, ui),
     ui.renaming || "",
     ui.renamePending ? "1" : "0",
     ui.renameError || "",
@@ -8655,8 +8677,8 @@ function syncProgramList(root, visible, ui = state) {
   if (ui.view === "board" && visible.length && needsYouDisplayOf(ui) === "pane") {
     sections.push({
       key: STRIP_ID,
-      sig: "strip\u001f" + (strip.length ? stripSig(strip) : "clear"),
-      build: () => renderNeedsYouStrip(strip),
+      sig: "strip\u001f" + (strip.length ? stripSig(strip) : (controlErrorsOpen(ui.snap) ? "unconfirmed" : "clear")),
+      build: () => renderNeedsYouStrip(strip, ui),
     });
   }
   /* Three levels now, not two: repo bands, the worktree subsections inside

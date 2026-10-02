@@ -17,23 +17,31 @@ describe("model knowledge config", () => {
     const config = loadModelConfig(shippedPath);
     const expectedLabels = {
       "claude-fable-5": "fable 5",
+      "claude-fable-5-1": "fable 5.1",
       "claude-haiku-4-5": "haiku 4.5",
       "claude-opus-4-7": "opus 4.7",
       "claude-opus-4-8": "opus 4.8",
       "claude-opus-5": "opus 5",
+      "claude-opus-5-5": "opus 5.5",
       "claude-sonnet-5": "sonnet 5",
+      "claude-sonnet-5-5": "sonnet 5.5",
       "composer-2": "composer 2",
       "composer-2.5": "composer 2.5",
       "gemini-3.1-pro": "gemini 3.1 pro",
       "gemini-3.6-flash": "gemini 3.6 flash",
       "gemini-3.7-flash": "gemini 3.7 flash",
+      "gemini-3.8": "gemini 3.8",
       "gpt-5.6-luna": "luna 5.6",
       "gpt-5.6-sol": "sol 5.6",
       "gpt-5.6-terra": "terra 5.6",
+      "gpt-6-luna": "luna 6",
+      "gpt-6.1-sol": "sol 6.1",
       "grok-4.5": "grok 4.5",
       "grok-4.6": "grok 4.6",
+      "grok-4.7": "grok 4.7",
       "spark-1.2": "spark 1.2",
       "muse-spark-1.2": "spark 1.2",
+      "muse-spark-1.3": "spark 1.3",
     };
 
     expect(config).toMatchObject(DEFAULT_MODEL_CONFIG);

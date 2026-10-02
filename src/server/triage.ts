@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type {
   AgentSnapshot,
@@ -300,6 +300,7 @@ export class JsonTriageQueueStore extends MemoryTriageQueueStore {
   static async open(path: string, now: () => number = Date.now): Promise<JsonTriageQueueStore> {
     const store = new JsonTriageQueueStore(path, now);
     let recovered = false;
+    let loaded = false;
     try {
       const parsed = JSON.parse(await readFile(path, "utf8"));
       if (!Array.isArray(parsed)) throw new Error("triage queue must be an array");
@@ -325,6 +326,7 @@ export class JsonTriageQueueStore extends MemoryTriageQueueStore {
         for (const item of retained) store.items.set(item.issueId, item);
         recovered = true;
       }
+      loaded = true;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         store.items.clear();
@@ -339,7 +341,10 @@ export class JsonTriageQueueStore extends MemoryTriageQueueStore {
         console.error(`[JsonTriageQueueStore] ${store.lastLoadError}`);
       }
     }
+    /* `loaded` is set only after a queue file parsed. A missing file and a
+       corrupt file both leave it false, so neither one deletes notes. */
     if (recovered) await store.persist(store.list());
+    else if (loaded) await pruneInvestigationNotes(path, store.list());
     return store;
   }
 
@@ -348,7 +353,44 @@ export class JsonTriageQueueStore extends MemoryTriageQueueStore {
     const temporary = `${this.path}.${process.pid}.tmp`;
     await writeFile(temporary, `${JSON.stringify(items, null, 2)}\n`, "utf8");
     await rename(temporary, this.path);
+    await pruneInvestigationNotes(this.path, items);
   }
+}
+
+function retainedInvestigationRunIds(items: readonly TriageQueueItem[]): Set<string> {
+  return new Set(items.flatMap((item) => item.runId ? [item.runId] : []));
+}
+
+/* Notes live beside the queue, one `${runId}.md` per launch. The queue cap
+   drops items and a re-run replaces `runId`, and neither of those used to
+   unlink the file. Anything in that directory that the retained queue does
+   not name is an orphan. */
+async function pruneInvestigationNotes(queuePath: string, items: readonly TriageQueueItem[]): Promise<void> {
+  const directory = join(dirname(queuePath), "investigations");
+  let names: string[];
+  try {
+    names = await readdir(directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    console.error(
+      `[JsonTriageQueueStore] could not read investigation notes: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return;
+  }
+  const retained = retainedInvestigationRunIds(items);
+  await Promise.all(names.map(async (name) => {
+    if (!name.endsWith(".md")) return;
+    const runId = name.slice(0, -".md".length);
+    if (!runId || retained.has(runId)) return;
+    try {
+      await unlink(join(directory, name));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      console.error(
+        `[JsonTriageQueueStore] could not remove investigation note ${name}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }));
 }
 
 function isRetainedTriageItem(item: TriageQueueItem, nowMs: number): boolean {

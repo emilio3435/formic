@@ -6877,6 +6877,25 @@ describe("FE-A: snapshot freshness drives the connection verdict", () => {
     }
   });
 
+  test("fresh means the configured pass, and a partial flag is what freshness reads", () => {
+    const slow = ago(16_000);
+    expect(M.snapshotFreshness(slow, NOW).state).toBe("lagging");
+    expect(M.snapshotFreshness(slow, NOW, { generatedAt: slow, passBudgetMs: 20_000 }).state).toBe("fresh");
+    const atBudget = ago(20_000);
+    expect(M.snapshotFreshness(atBudget, NOW, { generatedAt: atBudget, passBudgetMs: 20_000 }).state).toBe("fresh");
+    const pastBudget = ago(20_001);
+    expect(M.snapshotFreshness(pastBudget, NOW, { generatedAt: pastBudget, passBudgetMs: 20_000 }).state).toBe("lagging");
+    const recent = ago(1_000);
+    expect(M.snapshotFreshness(recent, NOW, { generatedAt: recent, partial: true, passBudgetMs: 20_000 }).state).toBe("lagging");
+    const previous = M.state.snap;
+    M.state.snap = { generatedAt: recent, partial: true };
+    try {
+      expect(M.snapshotFreshness(recent, NOW).state).toBe("lagging");
+    } finally {
+      M.state.snap = previous;
+    }
+  });
+
   /* THE regression. Production served a 91-hour-old snapshot under a green
      "Live" badge because the only staleness check read the heartbeat clock, and
      the server heartbeats every 25s under a 60s threshold — so a heartbeat that
@@ -11676,8 +11695,15 @@ describe("FE-C: a frozen feed is announced, not merely available on inspection",
   test("(1) it does not cry wolf: a merely lagging snapshot is not an alarm", () => {
     const now = FROZEN_NOW;
     // 30s > SNAPSHOT_FRESH_MS but <= SNAPSHOT_STALE_MS: "lagging", not stale.
+    // The server still accepts a control at exactly 30s, so Send stays offered.
     expect(M.snapshotFreshness(new Date(now - 30_000).toISOString(), now).state).toBe("lagging");
     expect(M.feedAlarm("live", new Date(now - 30_000).toISOString(), now)).toBeNull();
+    // One millisecond later the server refuses. Send is held while the feed is still only lagging.
+    const heldAtServerAge = M.feedAlarm("live", new Date(now - 30_001).toISOString(), now);
+    expect(M.snapshotFreshness(new Date(now - 30_001).toISOString(), now).state).toBe("lagging");
+    expect(heldAtServerAge).not.toBeNull();
+    expect(heldAtServerAge.kind).toBe("held");
+    expect(M.staleControlNote(heldAtServerAge)).toContain("Send held");
     // Nothing collected yet is not evidence of staleness — never invent one.
     expect(M.feedAlarm("connecting", null, now)).toBeNull();
     expect(M.feedAlarm("live", "not-a-date", now)).toBeNull();

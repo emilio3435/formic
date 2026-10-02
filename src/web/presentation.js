@@ -1012,9 +1012,13 @@ export function sourceAgentName(agent) {
    forbidden to echo — this is about the feed, not about routing. */
 export function staleControlNote(alarm) {
   if (!alarm) return "";
-  return alarm.kind === "offline"
-    ? "Snapshot unavailable · Controls held — the server is unreachable. Waiting for a fresh snapshot before sending."
-    : "Snapshot stale · Controls held — the board is " + fmtElapsed(alarm.ageMs) + " out of date. Waiting for a fresh snapshot before sending.";
+  if (alarm.kind === "offline") {
+    return "Snapshot unavailable · Controls held — the server is unreachable. Waiting for a fresh snapshot before sending.";
+  }
+  if (alarm.kind === "held") {
+    return "Send held · the snapshot is " + fmtElapsed(alarm.ageMs) + " old. Waiting for a fresh snapshot before sending.";
+  }
+  return "Snapshot stale · Controls held — the board is " + fmtElapsed(alarm.ageMs) + " out of date. Waiting for a fresh snapshot before sending.";
 }
 
 state.aliases = state.labels;

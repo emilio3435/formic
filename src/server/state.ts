@@ -135,6 +135,14 @@ const MIN_CONTROL_AGGREGATE_TIMEOUT_MS = 10_000;
    completed provider truth reach persistence after a 10-second cutoff. */
 const PUBLISHING_TAIL_TIMEOUT_MS = 5_000;
 
+/* Freshness calls a snapshot fresh for this long: the control budget for the
+   configured provider wait, plus the publish tail a healthy pass is allowed
+   to spend. The default wait lands on the 15s ceiling. A 15s wait is a 20s
+   healthy pass, and that pass stays fresh. */
+export function configuredPassBudgetMs(providerWaitMs: number): number {
+  return Math.max(MIN_CONTROL_AGGREGATE_TIMEOUT_MS, providerWaitMs) + PUBLISHING_TAIL_TIMEOUT_MS;
+}
+
 /* Settlement reuses an in-flight or staged scan when this key matches. Extra
    Cursor GUI roots must be in it or Import's refresh keeps the previous
    cursor result. */
@@ -487,6 +495,7 @@ export class HubState {
       scanWindowHours: this.#scanWindowHours,
       thresholds: bootSettings ? lifecycleThresholds(bootSettings) : undefined,
       stalledActiveMinutes: bootSettings?.stalledActiveMinutes,
+      passBudgetMs: configuredPassBudgetMs(bootSettings?.providerWaitMs ?? DEFAULT_PROVIDER_WAIT_MS),
     })));
     this.#snapshot = withPulse(initialSnapshot, this.#pulse.report(Date.now()));
   }
@@ -1366,7 +1375,8 @@ export class HubState {
        on this pass while it was collecting, stop before the first write. */
     if (signal.aborted || this.#superseded(generation)) return this.#snapshot;
     const deadlineError = `collector aggregate exceeded ${controlTimeoutMs}ms deadline`;
-    if (controlDeadlineExpired || !aggregateSettled) {
+    const passPartial = controlDeadlineExpired || !aggregateSettled;
+    if (passPartial) {
       collectionErrors.push(deadlineError);
       console.error(`[HubState] ${deadlineError}; publishing partial snapshot`);
       /* Only on a miss. A healthy pass says nothing, so this cannot become the
@@ -1782,6 +1792,9 @@ export class HubState {
       stalledActiveMinutes: settings?.stalledActiveMinutes,
       processRosterComplete: this.#rosterComplete,
       senderTranscriptTails,
+      partial: passPartial,
+      previousGeneratedAt: this.#snapshot.generatedAt,
+      passBudgetMs: configuredPassBudgetMs(providerWaitMs),
     }));
     const teamProvenanceIds = new Set(
       (this.repoGroupProvenance?.list() ?? []).map((record) => record.groupId),

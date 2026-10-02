@@ -560,6 +560,11 @@ export function makeAgent(input: {
   };
 }
 
+/* The series is debug evidence. Past this many calls it is withheld whole
+   rather than published as a prefix that looks complete. The scalar session
+   total still counts every call. */
+export const MAX_OMP_CALL_SIZES = 4_096;
+
 function createOmpParser(): IncrementalParser {
   let session: JsonRecord | undefined;
   let title: string | undefined;
@@ -574,7 +579,7 @@ function createOmpParser(): IncrementalParser {
   let sessionTotal = 0;
   let sessionCachedInput = 0;
   let sessionProcessed = 0;
-  const callSizes: number[] = [];
+  let callSizes: number[] | undefined = [];
   /* Set when a usage record could not be read. The guard below `continue`s past
      such a record, which silently turns corruption into a believable SMALLER
      number: a session that burned more than a clean one reported exactly the
@@ -642,7 +647,10 @@ function createOmpParser(): IncrementalParser {
         sessionCachedInput += cachedInput;
         // The same rows summed cache-INCLUSIVE: BurnBar's unit, not ours.
         const callSize = input + output + cacheWrite + cachedInput;
-        callSizes.push(callSize);
+        if (callSizes) {
+          if (callSizes.length < MAX_OMP_CALL_SIZES) callSizes.push(callSize);
+          else callSizes = undefined;
+        }
         sessionProcessed += callSize;
       }
     },

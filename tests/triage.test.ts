@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, spyOn, test } from "bun:test";
@@ -14,6 +14,7 @@ import {
   buildTriageRecommendation,
   handleTriageRequest,
   JsonTriageQueueStore,
+  MAX_TRIAGE_ITEMS,
   MemoryTriageQueueStore,
   NativeLunaInvestigationRunner,
   TRIAGE_RETENTION_MS,
@@ -514,6 +515,84 @@ describe("JSON triage queue durability", () => {
       expect(JSON.parse(await readFile(path, "utf8"))).toEqual([
         expect.objectContaining({ issueId: "system:retained-at-boundary" }),
       ]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("the queue cap deletes investigation notes the retained queue does not name", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "anthill-triage-notes-"));
+    const path = join(directory, "triage-queue.json");
+    const notes = join(directory, "investigations");
+    await mkdir(notes);
+    const count = MAX_TRIAGE_ITEMS + 1;
+    const items = Array.from({ length: count }, (_, index) => {
+      const issueId = `system:note-${index}`;
+      const at = new Date(TRIAGE_NOW_MS - (count - index) * 1_000).toISOString();
+      return queueItem({
+        issueId,
+        id: `triage:${issueId}`,
+        state: "completed",
+        createdAt: at,
+        completedAt: at,
+        runId: `run-${index}`,
+      });
+    });
+    await writeFile(path, JSON.stringify(items));
+    await writeFile(join(notes, "run-0.md"), "oldest");
+    await writeFile(join(notes, `run-${count - 1}.md`), "newest");
+    await writeFile(join(notes, "orphan.md"), "orphan");
+    await writeFile(join(notes, "keep.txt"), "not a note");
+    try {
+      const store = await JsonTriageQueueStore.open(path, triageNow);
+      const names = (await readdir(notes)).sort();
+
+      expect(store.list()).toHaveLength(MAX_TRIAGE_ITEMS);
+      expect(store.get("system:note-0")).toBeUndefined();
+      expect(names).toEqual(["keep.txt", `run-${count - 1}.md`].sort());
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("an in-cap queue still deletes orphaned investigation notes", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "anthill-triage-notes-"));
+    const path = join(directory, "triage-queue.json");
+    const notes = join(directory, "investigations");
+    await mkdir(notes);
+    await writeFile(path, JSON.stringify([queueItem({ runId: "kept" })]));
+    await writeFile(join(notes, "kept.md"), "kept");
+    await writeFile(join(notes, "orphan.md"), "orphan");
+    try {
+      const store = await JsonTriageQueueStore.open(path, triageNow);
+      expect(store.list()).toHaveLength(1);
+      expect((await readdir(notes)).sort()).toEqual(["kept.md"]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("a missing or corrupt queue does not delete investigation notes", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "anthill-triage-notes-"));
+    const notes = join(directory, "investigations");
+    await mkdir(notes);
+    await writeFile(join(notes, "orphan.md"), "stay");
+    try {
+      const missing = await JsonTriageQueueStore.open(join(directory, "triage-queue.json"), triageNow);
+      expect(missing.list()).toEqual([]);
+      expect(missing.loadError()).toBeUndefined();
+      expect(await readdir(notes)).toEqual(["orphan.md"]);
+
+      await writeFile(join(directory, "triage-queue.json"), "{");
+      const logged = spyOn(console, "error").mockImplementation(() => {});
+      try {
+        const corrupt = await JsonTriageQueueStore.open(join(directory, "triage-queue.json"), triageNow);
+        expect(corrupt.list()).toEqual([]);
+        expect(corrupt.loadError() ?? "").toContain("showing empty");
+        expect(await readdir(notes)).toEqual(["orphan.md"]);
+      } finally {
+        logged.mockRestore();
+      }
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

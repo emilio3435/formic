@@ -1,3 +1,4 @@
+import { rename, unlink } from "node:fs/promises";
 import type { CollectedAgent } from "./types";
 
 /* What the board has ever witnessed about a session's process, kept across
@@ -47,10 +48,25 @@ export interface WitnessFileOperations {
   writeText(path: string, text: string): Promise<void>;
 }
 
+let witnessWriteSerial = 0;
+
 const nodeFileOperations: WitnessFileOperations = {
   readText: (path) => Bun.file(path).text(),
   writeText: async (path, text) => {
-    await Bun.write(path, text);
+    /* Temp then rename. Bun.write on the live path truncates first, so a
+       failure mid-write would destroy the previous witness file. A failed
+       temp write never renames, and the previous file stays. */
+    witnessWriteSerial += 1;
+    const temporary = `${path}.${process.pid}.${witnessWriteSerial}.tmp`;
+    try {
+      await Bun.write(temporary, text);
+      await rename(temporary, path);
+    } catch (error) {
+      await unlink(temporary).catch(() => {});
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[process-witness] could not persist witnesses to ${path}; previous file kept: ${message}`);
+      throw error;
+    }
   },
 };
 

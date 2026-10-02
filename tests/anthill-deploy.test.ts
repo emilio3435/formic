@@ -184,8 +184,26 @@ exit 0
 `);
     executable(join(fakeBin, "launchctl"), `#!/bin/bash\nprintf '%s\\n' "$*" >> "${launchLog}"\n`);
     executable(join(fakeBin, "sleep"), "#!/bin/bash\nexit 0\n");
-    /* A healthy board, so nothing downstream of the gate can be what fails. */
-    executable(join(fakeBin, "curl"), "#!/bin/bash\nprintf '200'\n");
+    /* A finished pass: HTTP 200 and data.complete true. A bare 200 is not enough. */
+    executable(join(fakeBin, "curl"), [
+      "#!/bin/bash",
+      "out=\"\"",
+      "prev=\"\"",
+      "for arg in \"$@\"; do",
+      "  if [ \"$prev\" = \"-o\" ]; then out=\"$arg\"; fi",
+      "  prev=\"$arg\"",
+      "done",
+      "if [ -n \"${CURL_LOG:-}\" ]; then printf '%s\\n' \"$*\" >> \"$CURL_LOG\"; fi",
+      "if [ -n \"$out\" ] && [ \"$out\" != \"/dev/null\" ]; then",
+      "  if [ -n \"${CURL_BODY:-}\" ]; then",
+      "    printf '%s' \"$CURL_BODY\" > \"$out\"",
+      "  else",
+      "    printf '%s' '{\"ok\":true,\"data\":{\"complete\":true}}' > \"$out\"",
+      "  fi",
+      "fi",
+      "printf '%s' \"${CURL_CODE:-200}\"",
+      "",
+    ].join("\n"));
     gitAt(root, "init", "-q", "-b", "main");
     writeFileSync(join(root, "fixture"), "fixture\n");
     gitAt(root, "add", ".");
@@ -250,6 +268,25 @@ exit 0
     const run = deploy(it, { CI_EXIT: "0", LOCAL_EXIT: "0" });
     expect(run.restarted).toBe(true);
     expect(run.output).not.toContain("OVERRIDDEN");
+  });
+
+  test("HTTP 200 with data.complete false is not a healthy deploy", () => {
+    const it = lab("incomplete-body");
+    const run = deploy(it, {
+      CI_EXIT: "0",
+      LOCAL_EXIT: "0",
+      ANTHILL_DEPLOY_HEALTH_TRIES: "1",
+      CURL_CODE: "200",
+      CURL_BODY: JSON.stringify({
+        ok: true,
+        verdict: "healthy",
+        data: { complete: false, staleSources: ["codex"] },
+      }),
+    });
+    expect(run.exitCode).toBe(1);
+    expect(run.restarted).toBe(true);
+    expect(run.output).toContain("data.complete is not true");
+    expect(run.output).not.toContain("HEALTHY: :4701 answered");
   });
 
   test("a green deploy installs the lockfile and prints the live cache-bust token", () => {

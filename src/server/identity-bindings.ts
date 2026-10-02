@@ -11,6 +11,8 @@ import {
 
 /** Bindings not reconfirmed by live evidence for this long age out. */
 export const IDENTITY_BINDING_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
+/** First-seen name tags. The map is oldest-first; inserts past this drop the front. */
+export const MAX_NAME_TAGS = 5_000;
 /** Consecutive scans that must agree before a binding moves surfaces. */
 export const REASSIGNMENT_CONFIRMATION_SCANS = 2;
 export const BINDING_BRIDGE_REASON = "Recorded binding, live evidence absent this scan.";
@@ -137,6 +139,18 @@ function isIdentityBinding(value: unknown): value is IdentityBinding {
   );
 }
 
+function retainNameTags(tags: Map<string, string>): boolean {
+  if (tags.size <= MAX_NAME_TAGS) return false;
+  let trimmed = false;
+  while (tags.size > MAX_NAME_TAGS) {
+    const oldest = tags.keys().next().value;
+    if (oldest === undefined) break;
+    tags.delete(oldest);
+    trimmed = true;
+  }
+  return trimmed;
+}
+
 function isFresh(binding: IdentityBinding, nowMs: number): boolean {
   const confirmedAtMs = Date.parse(binding.confirmedAt);
   return Number.isFinite(confirmedAtMs) && nowMs - confirmedAtMs <= IDENTITY_BINDING_TTL_MS;
@@ -160,6 +174,7 @@ export class JsonIdentityBindingStore implements IdentityBindingStore {
     now: () => number = Date.now,
   ): Promise<JsonIdentityBindingStore> {
     const store = new JsonIdentityBindingStore(path, files, now);
+    let nameTagsTrimmed = false;
     try {
       const parsed: unknown = JSON.parse(await files.readText(path));
       const bindings = Array.isArray(parsed)
@@ -188,9 +203,11 @@ export class JsonIdentityBindingStore implements IdentityBindingStore {
           store.#nameTags.set(agentId, value.trim());
         }
       }
+      nameTagsTrimmed = retainNameTags(store.#nameTags);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
+    if (nameTagsTrimmed) await store.#persist([]);
     return store;
   }
 
@@ -246,6 +263,7 @@ export class JsonIdentityBindingStore implements IdentityBindingStore {
       this.#nameTags.set(agentId, tag);
       changed = true;
     }
+    if (retainNameTags(this.#nameTags)) changed = true;
     return changed ? this.#enqueuePersist([]) : Promise.resolve();
   }
 
@@ -275,9 +293,9 @@ export class JsonIdentityBindingStore implements IdentityBindingStore {
       if (!isFresh(value, nowMs)) next.delete(key);
     }
     const persisted = [...next.values()].sort((left, right) => left.sessionId.localeCompare(right.sessionId));
-    const nameTags = Object.fromEntries(
-      [...this.#nameTags].sort(([left], [right]) => left.localeCompare(right)),
-    );
+    /* Insertion order, not alphabetical. Reload reads that order back, and
+       eviction drops the front, so the oldest tag is still the oldest tag. */
+    const nameTags = Object.fromEntries(this.#nameTags);
     const body = this.#nameTags.size > 0 ? { bindings: persisted, nameTags } : persisted;
     await this.files.makeDirectory(dirname(this.path));
     this.#writeNumber += 1;
@@ -331,6 +349,7 @@ export class MemoryIdentityBindingStore implements IdentityBindingStore {
       const tag = assignment.tag.trim();
       if (agentId && tag && !this.#nameTags.has(agentId)) this.#nameTags.set(agentId, tag);
     }
+    retainNameTags(this.#nameTags);
   }
 }
 

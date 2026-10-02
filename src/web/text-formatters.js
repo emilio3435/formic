@@ -77,11 +77,12 @@ export function rowTimeVerb(id) {
 }
 
 const MODEL_SHORT = [
-  ["fable", "fable 5"], ["sol", "sol 5.6"], ["luna", "luna 5.6"],
+  ["sol", "sol 5.6"], ["luna", "luna 5.6"],
 ];
 // Anthropic families whose transcript id carries a version we want to keep
-// (e.g. claude-opus-4-8 → "opus 4.8"), rather than collapsing to a bare label.
-const ANTHROPIC_VERSIONED = ["opus", "sonnet", "haiku"];
+// (e.g. claude-opus-4-8 → "opus 4.8", claude-fable-5-1 → "fable 5.1"), rather
+// than collapsing every fable id onto the "fable 5" badge.
+const ANTHROPIC_VERSIONED = ["opus", "sonnet", "haiku", "fable"];
 /* A placeholder is not a model name. A collector writes a bracketed marker like
    `<synthetic>` for a session it manufactured, and absence words like "unknown"
    when it has no model at all. Both used to pass through unchanged into slots
@@ -129,6 +130,12 @@ export function modelShort(m) {
     const flat = low.slice(composerAt).replace(/[-_]/g, " ");
     return flat.length > 18 ? flat.slice(0, 17) + "…" : flat;
   }
+  // Codex ids put the version in front of the family (gpt-5.6-sol → "sol 5.6",
+  // gpt-6.1-sol → "sol 6.1", gpt-6-luna → "luna 6"). A bare "sol"/"luna"
+  // still uses the 5.6 label below. Matching the family name alone forced
+  // every newer id onto that older badge.
+  const versionedCodex = low.match(/(?:^|[^a-z0-9])(\d+(?:\.\d+)*)[^a-z0-9]+(sol|luna)(?![a-z0-9])/);
+  if (versionedCodex) return versionedCodex[2] + " " + versionedCodex[1];
   for (const [key, label] of MODEL_SHORT) if (low.includes(key)) return label;
   return raw.length > 18 ? raw.slice(0, 17) + "…" : raw;
 }

@@ -7,6 +7,7 @@ import {
   bridgeAgentsWithBindings,
   IDENTITY_BINDING_TTL_MS,
   JsonIdentityBindingStore,
+  MAX_NAME_TAGS,
   MemoryIdentityBindingStore,
   updateBindingsFromScan,
   type BindingFileOperations,
@@ -807,6 +808,39 @@ describe("durable binding store", () => {
     expect(store.getForProvider("omp", SESSION_ID)).toBeUndefined();
     expect(store.get(SESSION_ID)).toBeUndefined();
     expect(store.list()).toEqual([]);
+  });
+
+  test("name tags evict the oldest insert once the cap is full", async () => {
+    const tags = Array.from({ length: MAX_NAME_TAGS + 1 }, (_, index) => ({
+      agentId: `agent-${String(index).padStart(4, "0")}`,
+      tag: `tag-${index}`,
+    }));
+    const newestId = `agent-${String(MAX_NAME_TAGS).padStart(4, "0")}`;
+    const memory = new MemoryIdentityBindingStore();
+    await memory.rememberNameTags(tags);
+    expect(memory.getNameTag("agent-0000")).toBeUndefined();
+    expect(memory.getNameTag(newestId)).toBe(`tag-${MAX_NAME_TAGS}`);
+    await memory.rememberNameTags([{ agentId: newestId, tag: "rewritten" }]);
+    expect(memory.getNameTag(newestId)).toBe(`tag-${MAX_NAME_TAGS}`);
+
+    const { files, contents } = virtualFiles();
+    const path = "/virtual/identity-bindings.json";
+    contents.set(path, JSON.stringify({
+      bindings: [],
+      nameTags: Object.fromEntries(tags.map(({ agentId, tag }) => [agentId, tag])),
+    }));
+    const store = await JsonIdentityBindingStore.open(path, files, () => Date.parse("2026-07-23T06:00:00.000Z"));
+    expect(store.getNameTag("agent-0000")).toBeUndefined();
+    expect(store.getNameTag(newestId)).toBe(`tag-${MAX_NAME_TAGS}`);
+    const persisted = JSON.parse(contents.get(path)!) as { nameTags: Record<string, string> };
+    expect(Object.keys(persisted.nameTags)).toHaveLength(MAX_NAME_TAGS);
+    expect(persisted.nameTags["agent-0000"]).toBeUndefined();
+
+    await store.rememberNameTags([{ agentId: "agent-new", tag: "fresh" }]);
+    expect(store.getNameTag("agent-0001")).toBeUndefined();
+    expect(store.getNameTag("agent-new")).toBe("fresh");
+    const afterInsert = JSON.parse(contents.get(path)!) as { nameTags: Record<string, string> };
+    expect(Object.keys(afterInsert.nameTags)).toHaveLength(MAX_NAME_TAGS);
   });
 
   test("a corrupt binding record fails open() loudly instead of half-loading", async () => {

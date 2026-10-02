@@ -8,6 +8,7 @@ import {
   distillName,
   nameSessions,
   namingPrompt,
+  sessionNamesPath,
   type NamerModel,
   type SessionNameFileOperations,
 } from "../src/server/session-names";
@@ -113,6 +114,51 @@ describe("the store survives what it will actually meet", () => {
     const store = await JsonSessionNameStore.open(PATH, files);
     await store.remember("codex:a", { name: "Something worth keeping", by: "launch-env", at: "x" });
     expect([...contents.keys()]).toEqual([PATH]);
+  });
+
+  test("4701 and a preview port persist to different files", async () => {
+    const { files, contents } = memoryFiles();
+    const production = sessionNamesPath(4701, "/virtual");
+    const preview = sessionNamesPath(4710, "/virtual");
+    expect(production).toBe("/virtual/session-names.4701.json");
+    expect(preview).toBe("/virtual/session-names.4710.json");
+    expect(production).not.toBe(preview);
+
+    const live = await JsonSessionNameStore.open(production, files);
+    const side = await JsonSessionNameStore.open(preview, files);
+    await live.remember("codex:a", { name: "Production title", by: "launch-env", at: "2026-08-04T00:00:00.000Z" });
+    await side.remember("codex:b", { name: "Preview title", by: "launch-env", at: "2026-08-04T00:00:00.000Z" });
+
+    const again = await JsonSessionNameStore.open(production, files);
+    expect(again.get("codex:a")?.name).toBe("Production title");
+    expect(again.get("codex:b")).toBeUndefined();
+    expect(contents.has("/virtual/session-names.json")).toBe(false);
+    expect(sessionNamesPath(4719, "/virtual")).not.toBe(production);
+    expect(() => sessionNamesPath(0, "/virtual")).toThrow();
+  });
+
+  test("a missing port file adopts the old shared cache without writing it back", async () => {
+    const legacy = "/virtual/session-names.json";
+    const production = sessionNamesPath(4701, "/virtual");
+    const preview = sessionNamesPath(4712, "/virtual");
+    const { files, contents } = memoryFiles({
+      [legacy]: JSON.stringify({
+        names: {
+          "codex:a": { name: "Kept from the shared file", by: "launch-env", at: "2026-08-04T00:00:00.000Z" },
+        },
+      }),
+    });
+    const store = await JsonSessionNameStore.open(production, files);
+    expect(store.get("codex:a")?.name).toBe("Kept from the shared file");
+    expect(contents.get(legacy)).toContain("Kept from the shared file");
+    expect(contents.has(production)).toBe(true);
+
+    const side = await JsonSessionNameStore.open(preview, files);
+    await side.remember("codex:b", { name: "Preview only", by: "launch-env", at: "2026-08-04T01:00:00.000Z" });
+    const live = await JsonSessionNameStore.open(production, files);
+    expect(live.get("codex:a")?.name).toBe("Kept from the shared file");
+    expect(live.get("codex:b")).toBeUndefined();
+    expect(JSON.parse(contents.get(legacy)!).names["codex:b"]).toBeUndefined();
   });
 });
 

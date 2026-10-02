@@ -15,7 +15,7 @@ import { JsonTeamColorsStore } from "./team-colors";
 import { JsonIdentityBindingStore } from "./identity-bindings";
 import { HubState, loadProgramHints } from "./state";
 import { JsonProcessWitnessStore } from "./process-witness";
-import { JsonSessionNameStore } from "./session-names";
+import { JsonSessionNameStore, sessionNamesPath } from "./session-names";
 import { JsonProgramAliasStore } from "./program-aliases";
 import { JsonCollectorInstanceStore, onboardedSessionRoots } from "./collector-instances";
 import { archiveLimits, JsonSettingsStore } from "./settings";
@@ -57,8 +57,9 @@ const triageRunner = new NativeLunaInvestigationRunner(PROJECT_ROOT, join(PROJEC
 const programHints = await loadProgramHints(join(PROJECT_ROOT, "config/programs.json"));
 /* Opened before the board so the very first snapshot already carries whatever
    titles a previous run wrote down. `open` never rejects — an unreadable cache
-   costs the names, not the boot. */
-const sessionNameStore = await JsonSessionNameStore.open();
+   costs the names, not the boot. The path includes this process's port so
+   4701 and a preview on 4710-4719 do not flush the same file. */
+const sessionNameStore = await JsonSessionNameStore.open(sessionNamesPath(configuredPort));
 const ackStore = await JsonAckStore.open(join(PROJECT_ROOT, "data/acks.json"));
 const alertSinceStore = await JsonAlertSinceStore.open(join(PROJECT_ROOT, "data/alert-since.json"));
 const teamColorsStore = await JsonTeamColorsStore.open(join(PROJECT_ROOT, "data/team-colors.json"));

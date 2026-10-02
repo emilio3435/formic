@@ -104,7 +104,19 @@ export class MemoryAttentionStore implements AttentionStore {
       const newer = !current
         || (notification.createdAt !== undefined
           && (current.createdAt === undefined || notification.createdAt > current.createdAt));
-      if (newer) this.latest.set(notification.surfaceId, notification);
+      /* Re-insert so a surface we just saw sits at the back. The cap below
+         drops from the front, and a live unread must not be what falls out. */
+      const stored = !current || newer ? notification : current;
+      this.latest.delete(notification.surfaceId);
+      this.latest.set(notification.surfaceId, stored);
+    }
+    /* Records already stop at MAX_ATTENTION_RECORDS. `latest` is the
+       notification an acknowledgement reads, and it used to keep every surface
+       ever observed. */
+    while (this.latest.size > MAX_ATTENTION_RECORDS) {
+      const oldest = this.latest.keys().next().value;
+      if (oldest === undefined) break;
+      this.latest.delete(oldest);
     }
   }
 
@@ -374,10 +386,29 @@ export async function collectCmux(
 }
 
 const WORKSPACE_ENV_CACHE_TTL_MS = 60_000;
+export const MAX_WORKSPACE_ENV_CACHE = 500;
 const workspaceEnvCache = new Map<string, {
   expiresAt: number;
   variables: CmuxWorkspaceEnvVariables;
 }>();
+
+/* A miss past the TTL used to leave the entry in the map, so every workspace
+   ever looked up stayed for the life of the process. Drop what has expired,
+   then drop the oldest insertion until the map is inside the cap. */
+export function pruneWorkspaceEnvEntries<T extends { expiresAt: number }>(
+  cache: Map<string, T>,
+  nowMs: number,
+  maxEntries = MAX_WORKSPACE_ENV_CACHE,
+): void {
+  for (const [key, entry] of cache) {
+    if (entry.expiresAt <= nowMs) cache.delete(key);
+  }
+  while (cache.size > maxEntries) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+}
 const ANTHILL_ENV_KEYS = [
   "ANTHILL_RUN",
   "ANTHILL_LANE",
@@ -422,13 +453,17 @@ export async function collectCmuxWorkspaceEnvs(
 ): Promise<CollectionResult<CmuxWorkspaceEnv[]>> {
   const errors: string[] = [];
   const uniqueWorkspaceIds = [...new Set(workspaceIds.filter(Boolean))];
+  pruneWorkspaceEnvEntries(workspaceEnvCache, now());
   const values = await Promise.all(uniqueWorkspaceIds.map(async (workspaceId): Promise<CmuxWorkspaceEnv | undefined> => {
     const cacheKey = `${executable}\u001f${workspaceId}`;
-    const cached = workspaceEnvCache.get(cacheKey);
     const nowMs = now();
+    const cached = workspaceEnvCache.get(cacheKey);
     if (cached && cached.expiresAt > nowMs) {
+      workspaceEnvCache.delete(cacheKey);
+      workspaceEnvCache.set(cacheKey, cached);
       return { workspaceId, variables: cached.variables };
     }
+    if (cached) workspaceEnvCache.delete(cacheKey);
     const result = await runner.run(cmuxCommand(executable, [
       "workspace",
       "env",
@@ -451,10 +486,12 @@ export async function collectCmuxWorkspaceEnvs(
     }
     try {
       const variables = parseCmuxWorkspaceEnv(result.stdout);
+      workspaceEnvCache.delete(cacheKey);
       workspaceEnvCache.set(cacheKey, {
         expiresAt: nowMs + WORKSPACE_ENV_CACHE_TTL_MS,
         variables,
       });
+      pruneWorkspaceEnvEntries(workspaceEnvCache, nowMs);
       return { workspaceId, variables };
     } catch (error) {
       errors.push(

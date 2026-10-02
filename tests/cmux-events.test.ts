@@ -130,20 +130,25 @@ describe("cmux event child supervision", () => {
     supervisor.stop();
   });
 
-  test("restarts an exited child and stop terminates the replacement without another spawn", async () => {
+  test("backs off while the socket is absent, then restarts an exited child once it returns", async () => {
     const first = controlledChild();
     const second = controlledChild();
     const children = [first, second];
     const commands: string[][] = [];
+    const delays: number[] = [];
+    const errors: string[] = [];
     let scheduledRestart: (() => void) | undefined;
     let restartCancelled = false;
+    let socketPresent = false;
     const scheduleRestart: ScheduleCmuxEventsRestart = (restart, delayMs) => {
-      expect(delayMs).toBe(1_000);
+      delays.push(delayMs);
       scheduledRestart = restart;
+      restartCancelled = false;
       return { cancel: () => { restartCancelled = true; } };
     };
     const supervisor = new CmuxEventsSupervisor({
       command: ["cmux", "events"],
+      socketPresent: () => socketPresent,
       spawn: (command) => {
         commands.push([...command]);
         const next = children[commands.length - 1];
@@ -152,14 +157,26 @@ describe("cmux event child supervision", () => {
       },
       scheduleRestart,
       onFrame: () => {},
-      onError: () => {},
+      onError: (error) => errors.push(error.message),
     });
 
     supervisor.start();
     supervisor.start();
+    expect(commands).toHaveLength(0);
+    expect(delays).toEqual([1_000]);
+    expect(errors).toEqual(["cmux socket is absent"]);
+    for (const delay of [2_000, 4_000, 8_000, 16_000, 30_000, 30_000]) {
+      scheduledRestart?.();
+      expect(delays.at(-1)).toBe(delay);
+    }
+    expect(commands).toHaveLength(0);
+    expect(errors).toEqual(["cmux socket is absent"]);
+
+    socketPresent = true;
+    scheduledRestart?.();
     expect(commands).toHaveLength(1);
     first.finish(9);
-    await eventually(() => expect(scheduledRestart).toBeFunction());
+    await eventually(() => expect(delays.at(-1)).toBe(1_000));
     scheduledRestart?.();
     await eventually(() => expect(commands).toHaveLength(2));
 

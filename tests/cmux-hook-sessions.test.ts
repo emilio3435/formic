@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   hookRecordFor,
+  MAX_HOOK_SESSION_RECORDS,
   readHookSessionStores,
 } from "../src/server/cmux-hook-sessions";
 import type { Provider } from "../src/shared/types";
@@ -147,6 +148,31 @@ describe("cmux hook-session stores", () => {
     }));
 
     expect(readHookSessionStores(root)).toEqual([]);
+  });
+
+  test("keeps the newest hook records and drops the rest", () => {
+    const sessions: Record<string, unknown> = {};
+    const total = MAX_HOOK_SESSION_RECORDS + 1;
+    for (let index = 0; index < total; index += 1) {
+      const sessionId = `session-${index}`;
+      sessions[sessionId] = {
+        sessionId,
+        surfaceId: `surface-${index}`,
+        workspaceId: "workspace",
+        cwd: "/tmp/formic",
+        pid: 4242,
+        agentLifecycle: "running",
+        updatedAt: index,
+      };
+    }
+    const root = storeRoot(JSON.stringify({ sessions }));
+    const records = readHookSessionStores(root);
+
+    expect(records).toHaveLength(MAX_HOOK_SESSION_RECORDS);
+    expect(records[0]?.sessionId).toBe("session-1");
+    expect(records.at(-1)?.sessionId).toBe(`session-${total - 1}`);
+    expect(hookRecordFor("claude", "session-0")).toBeUndefined();
+    expect(hookRecordFor("claude", `session-${total - 1}`)?.sessionId).toBe(`session-${total - 1}`);
   });
 });
 

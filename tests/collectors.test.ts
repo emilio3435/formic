@@ -19,6 +19,7 @@ import {
   collectSessions,
   DEFAULT_SESSION_WINDOW_MS,
   finalizeSessionProviders,
+  MAX_OMP_CALL_SIZES,
   parseClaudeJsonl,
   parseCodexJsonl,
   parseOmpJsonl,
@@ -349,6 +350,30 @@ describe("collector identity and usage truth", () => {
 
     expect(completed?.transcriptEndedCleanly).toBeTrue();
     expect(continued?.transcriptEndedCleanly).toBeUndefined();
+  });
+
+  test("OMP withholds a call series that would grow past the cap and still counts every call", () => {
+    const session = JSON.stringify({
+      type: "session",
+      id: "019f86c4-1558-7000-aeb8-26e2cfd0e8ec",
+      timestamp: "2026-07-21T22:20:25.304Z",
+    });
+    const call = JSON.stringify({
+      type: "message",
+      timestamp: "2026-07-21T22:20:26.000Z",
+      message: {
+        role: "assistant",
+        content: "ok",
+        usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 1 },
+      },
+    });
+    const atCap = parseOmpJsonl([session, ...Array.from({ length: MAX_OMP_CALL_SIZES }, () => call)].join("\n"));
+    expect(atCap?.callSizes).toHaveLength(MAX_OMP_CALL_SIZES);
+    expect(atCap?.tokens.sessionProcessed).toBe(MAX_OMP_CALL_SIZES);
+
+    const over = parseOmpJsonl([session, ...Array.from({ length: MAX_OMP_CALL_SIZES + 1 }, () => call)].join("\n"));
+    expect(over?.callSizes).toBeUndefined();
+    expect(over?.tokens.sessionProcessed).toBe(MAX_OMP_CALL_SIZES + 1);
   });
 
   test("OMP leaves token usage unknown when no assistant usage record exists", () => {

@@ -1,4 +1,4 @@
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { MAX_NAME_LENGTH } from "./naming";
@@ -31,7 +31,60 @@ import type { AuthoredNameSource } from "../shared/types";
    DEGRADING. Model, then heuristic, then the derived name that was already
    there. Every layer can fail and the board still renders. */
 
-export const SESSION_NAMES_PATH = join(homedir(), ".anthill", "session-names.json");
+/* One file per listening port. 4701 and a preview on 4710-4719 used to share
+   ~/.anthill/session-names.json and flush it with a pid temp plus rename and
+   no cross-process lock, so one board could replace the other's names. A port
+   can be bound once, so each process writes only its own file. */
+export function sessionNamesPath(port: number, directory = join(homedir(), ".anthill")): string {
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error("session names port must be an integer between 1 and 65535");
+  }
+  return join(directory, `session-names.${port}.json`);
+}
+
+const LEGACY_SHARED_NAME = "session-names.json";
+
+/* The pre-partition cache. Read once when a port file is absent so a board
+   keeps titles it already wrote, then the next flush lands on the port file
+   and never writes this shared path back. */
+function legacySharedPath(portPath: string): string | undefined {
+  if (!/^session-names\.\d+\.json$/.test(basename(portPath))) return undefined;
+  return join(dirname(portPath), LEGACY_SHARED_NAME);
+}
+
+type SessionNameRead =
+  | { status: "missing" }
+  | { status: "error"; source: string; message: string }
+  | { status: "ok"; source: string; text: string; fromLegacy: boolean };
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isMissingFile(error: unknown): boolean {
+  return (error as { code?: string })?.code === "ENOENT";
+}
+
+/* Port file first. A missing port file may adopt the old shared cache, and
+   that read is the last time this process touches the shared path. */
+async function readSessionNameText(
+  path: string,
+  files: SessionNameFileOperations,
+): Promise<SessionNameRead> {
+  try {
+    return { status: "ok", source: path, text: await files.readText(path), fromLegacy: false };
+  } catch (error) {
+    if (!isMissingFile(error)) return { status: "error", source: path, message: errorMessage(error) };
+  }
+  const legacy = legacySharedPath(path);
+  if (!legacy) return { status: "missing" };
+  try {
+    return { status: "ok", source: legacy, text: await files.readText(legacy), fromLegacy: true };
+  } catch (error) {
+    if (isMissingFile(error)) return { status: "missing" };
+    return { status: "error", source: legacy, message: errorMessage(error) };
+  }
+}
 
 /* Enough to cover the scan window several times over without letting a file the
    board rewrites on every naming pass grow without bound. */
@@ -85,37 +138,49 @@ export class JsonSessionNameStore {
      is worse in every case than a board that starts having forgotten some
      names — the names are an improvement on a fallback that still works. */
   static async open(
-    path: string = SESSION_NAMES_PATH,
+    path: string,
     files: SessionNameFileOperations = nodeFiles,
   ): Promise<JsonSessionNameStore> {
     const store = new JsonSessionNameStore(path, files);
-    try {
-      const parsed: unknown = JSON.parse(await files.readText(path));
-      const entries = (parsed as { names?: unknown })?.names;
-      if (entries && typeof entries === "object") {
-        for (const [key, value] of Object.entries(entries as Record<string, unknown>)) {
-          const record = value as Partial<SessionNameRecord>;
-          const loaded = typeof record?.name === "string" ? capped(record.name) : "";
-          if (loaded) {
-            store.#names.set(key, {
-              name: loaded,
-              by: (record.by as AuthoredNameSource) ?? "launch-env",
-              at: typeof record.at === "string" ? record.at : new Date(0).toISOString(),
-            });
-          }
-        }
-      }
-    } catch (error) {
-      const code = (error as { code?: string })?.code;
-      // A file that does not exist yet is the normal first run, not a fault.
-      if (code !== "ENOENT") {
-        store.#loadError = error instanceof Error ? error.message : String(error);
-        console.error(
-          `[SessionNames] ${path} could not be read, so sessions keep their derived names: ${store.#loadError}`,
-        );
-      }
+    const loaded = await readSessionNameText(path, files);
+    if (loaded.status === "missing") return store;
+    if (loaded.status === "error") {
+      store.#recordLoadError(loaded.source, loaded.message);
+      return store;
     }
+    try {
+      store.#ingest(loaded.text);
+    } catch (error) {
+      store.#recordLoadError(loaded.source, errorMessage(error));
+      return store;
+    }
+    /* Copy the adopted shared cache onto this port's file once. Later flushes
+       stay on that file, so another port cannot rename over these names. */
+    if (loaded.fromLegacy && store.#names.size > 0) await store.#flush();
     return store;
+  }
+
+  #recordLoadError(source: string, message: string): void {
+    this.#loadError = message;
+    console.error(
+      `[SessionNames] ${source} could not be read, so sessions keep their derived names: ${message}`,
+    );
+  }
+
+  #ingest(text: string): void {
+    const parsed: unknown = JSON.parse(text);
+    const entries = (parsed as { names?: unknown })?.names;
+    if (!entries || typeof entries !== "object") return;
+    for (const [key, value] of Object.entries(entries as Record<string, unknown>)) {
+      const record = value as Partial<SessionNameRecord>;
+      const loaded = typeof record?.name === "string" ? capped(record.name) : "";
+      if (!loaded) continue;
+      this.#names.set(key, {
+        name: loaded,
+        by: (record.by as AuthoredNameSource) ?? "launch-env",
+        at: typeof record.at === "string" ? record.at : new Date(0).toISOString(),
+      });
+    }
   }
 
   loadError(): string | undefined {
@@ -146,8 +211,9 @@ export class JsonSessionNameStore {
   }
 
   #flush(): Promise<void> {
-    /* Serialized through one queue so two naming passes finishing together
-       cannot interleave a read-modify-write and lose one of the two names. */
+    /* Serialized through one queue so two naming passes in this process
+       cannot interleave a read-modify-write and lose one of the two names.
+       Another port is a different file, so it cannot rename over this one. */
     this.#writeQueue = this.#writeQueue.then(async () => {
       try {
         if (this.#names.size > MAX_REMEMBERED) {

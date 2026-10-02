@@ -4,7 +4,7 @@ import { MemoryArchiveStore } from "../src/server/archive";
 import { handleBroadcastRequest } from "../src/server/broadcast";
 import { collectCmuxWorkspaceEnvs } from "../src/server/cmux";
 import { handleControlRequest } from "../src/server/http";
-import { HubState, type HubCollectors } from "../src/server/state";
+import { configuredPassBudgetMs, HubState, type HubCollectors } from "../src/server/state";
 import { MemoryIdentityBindingStore, type IdentityBindingStore } from "../src/server/identity-bindings";
 import { normalizeSettings } from "../src/server/settings";
 import type {
@@ -1056,8 +1056,12 @@ describe("cmux collection time truth", () => {
       { collectors, refreshAggregateTimeoutMs: 5 },
     );
 
+    const before = state.get().generatedAt;
     const snapshot = await state.refresh({ cmux: true });
 
+    expect(snapshot.partial).toBe(true);
+    expect(snapshot.generatedAt).toBe(before);
+    expect(snapshot.passBudgetMs).toBe(configuredPassBudgetMs(7_500));
     expect(snapshot.programs.flatMap(({ agents }) => agents).map(({ id }) => id)).toEqual([source.id]);
     expect(snapshot.controlHealth.cmuxReachable).toBeTrue();
     expect(snapshot.controlHealth.errors).toEqual(expect.arrayContaining([
