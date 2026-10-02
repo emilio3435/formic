@@ -398,20 +398,6 @@ export async function reconcileWorkspaceColors(input: ReconcileInput): Promise<R
       if (hex) workspaces[workspaceId] = { hex, repoKey };
     };
 
-    /* Unmapped — including a repo we know but have not assigned a color. cmux
-       is authoritative here and this branch never writes. */
-    if (!assignment) {
-      if (observed) record("ingest", observed, "unmapped workspace; cmux color ingested");
-      else record("ignore", null, "unmapped workspace with no cmux color");
-      continue;
-    }
-
-    const assigned = normalizeHex(assignment.hex);
-    if (!assigned) {
-      errors.push(`repo ${assignment.repoKey} has an unusable assigned color ${assignment.hex}`);
-      record("ignore", observed, "assigned color is not a usable hex");
-      continue;
-    }
     const team = input.teamByWorkspaceId?.get(workspaceId);
     if (team) {
       const teamHex = normalizeHex(team.hex);
@@ -419,8 +405,8 @@ export async function reconcileWorkspaceColors(input: ReconcileInput): Promise<R
         record("ignore", teamHex, "operator team color already matches");
         continue;
       }
-      const assigned = team.hexSource === "user" || team.hexSource === "cmux";
-      if (teamHex && observed && observed !== teamHex && !assigned) {
+      const teamAssigned = team.hexSource === "user" || team.hexSource === "cmux";
+      if (teamHex && observed && observed !== teamHex && !teamAssigned) {
         record("ingest", observed, "operator member color kept; team hex is auto");
         continue;
       }
@@ -443,6 +429,21 @@ export async function reconcileWorkspaceColors(input: ReconcileInput): Promise<R
         record("reassert", teamHex, "operator team hex written");
         continue;
       }
+    }
+
+    /* Unmapped — including a repo we know but have not assigned a color. cmux
+       is authoritative here and this branch never writes. */
+    if (!assignment) {
+      if (observed) record("ingest", observed, "unmapped workspace; cmux color ingested");
+      else record("ignore", null, "unmapped workspace with no cmux color");
+      continue;
+    }
+
+    const assigned = normalizeHex(assignment.hex);
+    if (!assigned) {
+      errors.push(`repo ${assignment.repoKey} has an unusable assigned color ${assignment.hex}`);
+      record("ignore", observed, "assigned color is not a usable hex");
+      continue;
     }
     if (observed === assigned) {
       record("ignore", assigned, "cmux color already matches the assignment");

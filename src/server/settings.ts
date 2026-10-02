@@ -651,6 +651,8 @@ export interface RepoColorsRequestOptions {
   /** Fan out the assignments to cmux. Repo-MAPPED workspaces only — writing to
    *  an unmapped workspace is cmux's own colour being overwritten (rule 2). */
   fanOut?: (writes: readonly { workspaceId: string; hex: string }[]) => void | Promise<void>;
+  /** Overlay team members. Repo fan-out must not paint them. */
+  skipWorkspaceIds?: () => ReadonlySet<string>;
 }
 
 function repoColorsPayload(
@@ -682,6 +684,14 @@ const REPO_KEY_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/;
  *  function for both mutating verbs, so a later verb cannot quietly skip it —
  *  which is exactly how DELETE came to return a restored colour it never
  *  wrote. */
+function withoutSkipped(
+  writes: readonly { workspaceId: string; hex: string }[],
+  options: RepoColorsRequestOptions,
+): { workspaceId: string; hex: string }[] {
+  const skip = options.skipWorkspaceIds?.() ?? new Set<string>();
+  return writes.filter((write) => !skip.has(write.workspaceId));
+}
+
 async function fanOutFor(
   repoKey: string,
   settings: RepoColorsSettings,
@@ -690,8 +700,11 @@ async function fanOutFor(
 ): Promise<void> {
   const assignment = settings.assignments[repoKey];
   if (!assignment) return;
-  const writes = Object.entries(discovery.workspaces).flatMap(([workspaceId, key]) =>
-    key === repoKey ? [{ workspaceId, hex: assignment.hex }] : []);
+  const writes = withoutSkipped(
+    Object.entries(discovery.workspaces).flatMap(([workspaceId, key]) =>
+      key === repoKey ? [{ workspaceId, hex: assignment.hex }] : []),
+    options,
+  );
   if (writes.length) await options.fanOut?.(writes);
 }
 
@@ -709,10 +722,13 @@ export async function handleRepoColorsRequest(
     if (tail) return requestError(404, "NOT_FOUND", "Read every repository's colour from /api/repo-colors.");
     const discovery = await (options.discover?.() ?? { repoKeys: [], liveKeys: [], names: {}, workspaces: {}, aliases: [] });
     const settings = await store.ensure(discovery.repoKeys, discovery.aliases ?? []);
-    const writes = Object.entries(discovery.workspaces).flatMap(([workspaceId, repoKey]) => {
-      const assignment = settings.assignments[repoKey];
-      return assignment ? [{ workspaceId, hex: assignment.hex }] : [];
-    });
+    const writes = withoutSkipped(
+      Object.entries(discovery.workspaces).flatMap(([workspaceId, repoKey]) => {
+        const assignment = settings.assignments[repoKey];
+        return assignment ? [{ workspaceId, hex: assignment.hex }] : [];
+      }),
+      options,
+    );
     if (writes.length) await options.fanOut?.(writes);
     return json(repoColorsPayload(settings, discovery));
   }

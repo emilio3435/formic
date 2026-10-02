@@ -22,6 +22,18 @@ test("cooper-scheduler in provenance is not a team even if the name looks like a
   expect(isOperatorTeam("cooper-scheduler", "prov-1", new Set(["prov-1"]))).toBe(false);
 });
 
+test("a leftover folder named like a known repo is not a team", () => {
+  expect(isOperatorTeam("the-ant-hill", "orphan-id", new Set(), new Set(["the-ant-hill"]))).toBe(false);
+});
+
+test("ANT · probe stays a team next to a known repo key", () => {
+  expect(isOperatorTeam("ANT · probe", "abc", new Set(), new Set(["the-ant-hill"]))).toBe(true);
+});
+
+test("omitted repoIdentityKeys keeps today's provenance-only behaviour", () => {
+  expect(isOperatorTeam("the-ant-hill", "orphan-id", new Set())).toBe(true);
+});
+
 test("four teams get four palette hexes, not one repo hex", () => {
   const settings = { assignments: {} };
   const taken = new Set<string>();

@@ -18,7 +18,7 @@ import { JsonProcessWitnessStore } from "./process-witness";
 import { JsonSessionNameStore, sessionNamesPath } from "./session-names";
 import { JsonProgramAliasStore } from "./program-aliases";
 import { JsonCollectorInstanceStore, onboardedSessionRoots } from "./collector-instances";
-import { archiveLimits, JsonSettingsStore } from "./settings";
+import { archiveLimits, JsonRepoColorsStore, JsonSettingsStore } from "./settings";
 import { JsonTriageQueueStore, NativeLunaInvestigationRunner } from "./triage";
 
 const PROJECT_ROOT = join(import.meta.dir, "../..");
@@ -63,12 +63,14 @@ const sessionNameStore = await JsonSessionNameStore.open(sessionNamesPath(config
 const ackStore = await JsonAckStore.open(join(PROJECT_ROOT, "data/acks.json"));
 const alertSinceStore = await JsonAlertSinceStore.open(join(PROJECT_ROOT, "data/alert-since.json"));
 const teamColorsStore = await JsonTeamColorsStore.open(join(PROJECT_ROOT, "data/team-colors.json"));
+const repoColorsStore = await JsonRepoColorsStore.open(join(PROJECT_ROOT, "data/repo-colors.json"));
 const repoGroupProvenance = await JsonRepoGroupProvenanceStore.open(
   join(PROJECT_ROOT, "data/repo-group-provenance.json"),
 );
 
 const state = new HubState(runner, archiveStore, programHints, {
   settingsReader: () => settingsStore.get(),
+  repoColorsReader: () => repoColorsStore.get(),
   guiRootsReader: () => onboardedSessionRoots(collectorInstanceStore).extraCursorGuiRoots,
   botRootsReader: () => onboardedSessionRoots(collectorInstanceStore).extraGrokBotRoots,
   grokCliRootsReader: () => onboardedSessionRoots(collectorInstanceStore).extraGrokCliRoots,
@@ -100,6 +102,7 @@ const mountainFetch = createMountainFetch({
   settingsStore,
   collectorInstances: collectorInstanceStore,
   teamColorsStore,
+  repoColorsStore,
   repoGroupProvenance,
   cleanupProposer: createWorkerCleanupProposer(PROJECT_ROOT),
   cleanupLauncher: createNativeCleanupLauncher({

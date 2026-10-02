@@ -209,7 +209,6 @@ beforeEach(() => {
   M.setRepoColors({}, { assignments: {} });
   M.state.liveRepoKeys = [];
   M.state.repoColorSettings = null;
-  M.state.teamColors = [];
   M.state.settingsPanelOpen = false;
   if (M.state.paintSig) {
     M.state.paintSig.settings = "";
@@ -569,38 +568,33 @@ describe("team band-head picker", () => {
   });
 });
 
-describe("Settings Teams plate", () => {
-  test("Settings mounts #team-colors-host next to Repo colours", () => {
+describe("Settings has no colour plates", () => {
+  test("Settings does not mount colour hosts or colour headings", () => {
     withDom(() => {
       M.state.settingsPanelOpen = true;
       M.renderSettingsPanel();
-      expect(document.getElementById("team-colors-host")).toBeTruthy();
-      const panel = byId.get("settings-panel")!;
-      expect(panel.textContent).toContain("Teams");
-      expect(panel.textContent).toContain("Repo colours");
+      expect(document.getElementById("team-colors-host")).toBeNull();
+      expect(document.getElementById("repo-colors-host")).toBeNull();
+      const text = byId.get("settings-panel")!.textContent;
+      expect(text).not.toContain("Repo colours");
+      expect(text).not.toContain("Teams");
+      expect(text).not.toContain("Identity");
+      expect(text).not.toContain("Cmux groups");
     });
   });
 
-  test("the Teams plate says No operator groups when none are live", () => {
-    const region = withDom(() => M.renderTeamColorSettings([])) as unknown as FakeNode;
-    expect(region.textContent).toBe("No operator groups.");
-  });
-
-  test("opening Settings GETs /api/team-colors so the plate lists live groups", async () => {
+  test("opening Settings does not GET team-colors or repo-colors", async () => {
     const urls: string[] = [];
     const realFetch = (globalThis as { fetch?: unknown }).fetch;
     (globalThis as unknown as { fetch: unknown }).fetch = async (url: string) => {
       urls.push(String(url));
-      /* Incomplete on purpose: a success body would paint after withDom
-         tears the document down. The assertion is that the GET is issued. */
-      return new Response(JSON.stringify({ ok: false }), {
-        status: 200, headers: { "content-type": "application/json" },
-      });
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
     };
     try {
       M.state.settingsPanelOpen = false;
       withDom(() => { void M.openSettingsPanel(); });
-      expect(urls.some((url) => url === "/api/team-colors" || url.startsWith("/api/team-colors?"))).toBe(true);
+      expect(urls.some((url) => url.includes("/api/team-colors"))).toBe(false);
+      expect(urls.some((url) => url.includes("/api/repo-colors"))).toBe(false);
       try { M.closeSettingsPanel(); } catch { /* render() needs the board document */ }
     } finally {
       (globalThis as unknown as { fetch: unknown }).fetch = realFetch;
@@ -622,16 +616,14 @@ describe("Settings Teams plate", () => {
     };
     try {
       await withDom(() => {
-        const region = M.renderTeamColorSettings([
-          { id: "g1", name: "ANT · probe", hex: MOSS, windowId: "w", memberWorkspaceIds: [] },
-        ]) as unknown as FakeNode;
-        expect(byClass(region, "swatch").length).toBeGreaterThan(0);
-        expect(region.textContent).toContain("ANT · probe");
-        const picker = walk(region, (node) => node.dataset.fkey === "team-color:g1")[0];
+        const section = M.renderRepoSection(teamBand(), ui()) as unknown as FakeNode;
+        expect(byClass(section, "swatch").length).toBeGreaterThan(0);
+        expect(section.textContent).toContain("ANT · probe");
+        const picker = walk(section, (node) => node.dataset.fkey === "team-color:g1")[0];
         expect(picker).toBeTruthy();
         picker!.value = STORM;
         return picker!.listeners.change?.[0]?.({ currentTarget: picker });
-      }).catch(() => {});
+      })?.catch?.(() => {});
     } finally {
       (globalThis as unknown as { fetch: unknown }).fetch = realFetch;
     }
@@ -640,6 +632,23 @@ describe("Settings Teams plate", () => {
       method: "PUT",
       body: JSON.stringify({ hex: STORM }),
     });
+  });
+
+  test("nextGroupingHex skips hexes already on snapshot teams, not state.teamColors", () => {
+    const previous = M.state.snap;
+    M.state.teamColors = undefined;
+    M.state.snap = {
+      programs: [{
+        agents: [{ team: { id: "g1", name: "A", hex: "#5f7f2a", windowId: "w" } }],
+      }],
+    };
+    try {
+      expect(M.nextGroupingHex()).not.toBe("#5f7f2a");
+      expect(M.nextGroupingHex()).toBe("#2e66a8");
+    } finally {
+      M.state.snap = previous;
+      delete M.state.teamColors;
+    }
   });
 });
 

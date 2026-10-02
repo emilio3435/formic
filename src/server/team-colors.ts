@@ -158,6 +158,7 @@ export class JsonTeamColorsStore {
 export interface TeamColorsRequestOptions {
   teams?: () => readonly CmuxTeam[];
   provenanceIds?: () => ReadonlySet<string>;
+  repoIdentityKeys?: () => ReadonlySet<string>;
   setGroupColor?: (groupId: string, hex: string, reason: string) => Promise<boolean>;
   setWorkspaceColor?: (workspaceId: string, hex: string, reason: string) => Promise<boolean>;
 }
@@ -167,8 +168,9 @@ function liveOperatorTeam(
   options: TeamColorsRequestOptions,
 ): CmuxTeam | undefined {
   const provenanceIds = options.provenanceIds?.() ?? new Set<string>();
+  const repoIdentityKeys = options.repoIdentityKeys?.() ?? new Set<string>();
   return (options.teams?.() ?? []).find((team) =>
-    team.id === groupId && isOperatorTeam(team.name, team.id, provenanceIds));
+    team.id === groupId && isOperatorTeam(team.name, team.id, provenanceIds, repoIdentityKeys));
 }
 
 export async function handleTeamColorsRequest(
@@ -184,8 +186,9 @@ export async function handleTeamColorsRequest(
   if (request.method === "GET") {
     if (tail) return requestError(404, "NOT_FOUND", "Read every operator team from /api/team-colors.");
     const provenanceIds = options.provenanceIds?.() ?? new Set<string>();
+    const repoIdentityKeys = options.repoIdentityKeys?.() ?? new Set<string>();
     const teams = (options.teams?.() ?? []).filter((team) =>
-      isOperatorTeam(team.name, team.id, provenanceIds));
+      isOperatorTeam(team.name, team.id, provenanceIds, repoIdentityKeys));
     return json({ teams, settings: store.get() });
   }
   if (request.method !== "PUT") {
@@ -224,7 +227,8 @@ export async function handleTeamColorsRequest(
     await options.setWorkspaceColor?.(workspaceId, hex, reason);
   }
   const provenanceIds = options.provenanceIds?.() ?? new Set<string>();
+  const repoIdentityKeys = options.repoIdentityKeys?.() ?? new Set<string>();
   const teams = (options.teams?.() ?? []).filter((entry) =>
-    isOperatorTeam(entry.name, entry.id, provenanceIds));
+    isOperatorTeam(entry.name, entry.id, provenanceIds, repoIdentityKeys));
   return json({ teams, settings });
 }

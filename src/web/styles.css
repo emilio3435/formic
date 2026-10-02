@@ -4529,8 +4529,6 @@ button.repo-name { text-align: left; color: inherit; }
 .mode svg { width: 22px; height: 22px; }
 .mode b { font: 600 0.72rem/1 var(--font-ui); }
 .mode span { font: 500 0.62rem/1.25 var(--font-ui); color: var(--muted); text-align: center; }
-.repos { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.4rem; }
-.repo { border: 0; background: none; padding: 0; display: grid; justify-items: center; gap: 0.28rem; }
 .swatch {
   width: 1.7rem;
   height: 1.7rem;
@@ -4539,10 +4537,7 @@ button.repo-name { text-align: left; color: inherit; }
   box-shadow: 0 0 0 1px var(--line);
   background: var(--repo-tint, var(--sand));
 }
-.repo.is-yours .swatch { box-shadow: 0 0 0 2px var(--ink); }
-.repo b { font: 500 0.62rem/1.15 var(--font-ui); text-align: center; color: var(--muted); font-weight: 600; }
-.repo.is-absent b { color: var(--faint); }
-.repo:focus-visible { outline: none; box-shadow: var(--color-focus-ring); }
+.repo-tint-picker.swatch.is-yours { box-shadow: 0 0 0 2px var(--ink); }
 .homes h3, .split h3, .horizon h3 {
   margin: 0 0 0.45rem;
   font: 500 0.62rem/1 var(--font-mono);
@@ -6512,19 +6507,12 @@ a.artifact-path:hover { text-decoration: underline; }
    below. Selection and flight still outrank identity: both are things the
    OPERATOR is doing to the row right now, not facts about the session.
 
-   Text never wears repo colour (rule 6). The marks are the spine, the dot, the
+   Text never wears repo colour (rule 6). The marks are the spine, the swatch, the
    tick, the outline and the pill border. No selector below sets `color`. */
 
 /* Whisper — the grouped repo band. */
 .repo-section.has-repo-tint {
   border-left: 2px solid color-mix(in srgb, var(--repo-tint) 45%, transparent);
-}
-.repo-dot {
-  flex: none;
-  width: 0.45rem;
-  height: 0.45rem;
-  border-radius: 50%;
-  background: var(--repo-tint);
 }
 .repo-tint-picker {
   flex: none;
@@ -6752,5 +6740,4 @@ a.artifact-path:hover { text-decoration: underline; }
   border-left: 2px solid color-mix(in srgb, var(--repo-tint) 45%, transparent);
 }
 
-/* Empty colour plate copy. Swatch chrome lives on .repos / .repo / .swatch. */
-.repo-colors-empty { margin: 0; color: var(--faint); font-size: 12px; }
+
